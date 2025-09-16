@@ -1,0 +1,14 @@
+{
+	"nameShort": "Golden Workplace",
+	"nameLong": "Golden Workplace",
+	"applicationName": "golden-workspace",
+	"dataFolderName": ".golden-workspace",
+	"win32MutexName": "golden-workspace",
+	"licenseName": "Golden Workplace License",
+	"licenseUrl": "https://goldenworkplace.example.com/license",
+	"reportIssueUrl": "https://goldenworkplace.example.com/support",
+	"darwinBundleIdentifier": "com.golden.workplace",
+	"linuxIconName": "com.golden.workplace",
+	"urlProtocol": "golden-workplace",
+	"extensionsGallery": null
+}

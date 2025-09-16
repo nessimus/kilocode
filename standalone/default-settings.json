@@ -1,0 +1,15 @@
+{
+	"workbench.activityBar.visible": false,
+	"workbench.statusBar.visible": false,
+	"workbench.layoutControl.enabled": false,
+	"workbench.startupEditor": "none",
+	"window.commandCenter": false,
+	"window.openFilesInNewWindow": "off",
+	"extensions.autoUpdate": false,
+	"extensions.autoCheckUpdates": false,
+	"update.mode": "manual",
+	"telemetry.telemetryLevel": "off",
+	"security.workspace.trust.enabled": false,
+	"workbench.editor.enablePreview": false,
+	"workbench.editor.showTabs": false
+}

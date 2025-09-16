@@ -62,3 +62,6 @@ deps/vscode/*
 
 # Qdrant
 qdrant_storage/
+
+# Standalone build artifacts
+.standalone/
