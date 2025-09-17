@@ -27,6 +27,7 @@ import { McpMarketplaceCatalog } from "../../../src/shared/kilocode/mcp" // kilo
 import { vscode } from "@src/utils/vscode"
 import { convertTextMateToHljs } from "@src/utils/textMateToHljs"
 import { ClineRulesToggles } from "@roo/cline-rules" // kilocode_change
+import type { CreateCompanyPayload, CreateEmployeePayload, WorkplaceState } from "@roo/golden/workplace"
 
 export interface ExtensionStateContextType extends ExtensionState {
 	historyPreviewCollapsed?: boolean // Add the new state property
@@ -176,6 +177,11 @@ export interface ExtensionStateContextType extends ExtensionState {
 	setMaxDiagnosticMessages: (value: number) => void
 	includeTaskHistoryInEnhance?: boolean
 	setIncludeTaskHistoryInEnhance: (value: boolean) => void
+	workplaceState: WorkplaceState
+	createCompany: (payload: CreateCompanyPayload) => void
+	createEmployee: (payload: CreateEmployeePayload) => void
+	selectCompany: (companyId?: string) => void
+	setShowWelcome: (value: boolean) => void
 }
 
 export const ExtensionStateContext = createContext<ExtensionStateContextType | undefined>(undefined)
@@ -290,6 +296,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		openRouterImageApiKey: "",
 		kiloCodeImageApiKey: "",
 		openRouterImageGenerationSelectedModel: "",
+		workplaceState: { companies: [] },
 	})
 
 	const [didHydrateState, setDidHydrateState] = useState(false)
@@ -449,6 +456,8 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 	useEffect(() => {
 		vscode.postMessage({ type: "webviewDidLaunch" })
 	}, [])
+
+	const workplaceState = state.workplaceState ?? { companies: [] }
 
 	const contextValue: ExtensionStateContextType = {
 		...state,
@@ -612,6 +621,11 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		},
 		includeTaskHistoryInEnhance,
 		setIncludeTaskHistoryInEnhance,
+		workplaceState,
+		createCompany: (payload) => vscode.postMessage({ type: "createCompany", workplaceCompanyPayload: payload }),
+		createEmployee: (payload) => vscode.postMessage({ type: "createEmployee", workplaceEmployeePayload: payload }),
+		selectCompany: (companyId) => vscode.postMessage({ type: "selectCompany", workplaceCompanyId: companyId }),
+		setShowWelcome,
 	}
 
 	return <ExtensionStateContext.Provider value={contextValue}>{children}</ExtensionStateContext.Provider>

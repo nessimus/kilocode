@@ -15,6 +15,7 @@ import ApiOptions from "../settings/ApiOptions"
 import { Tab, TabContent } from "../common/Tab"
 
 import RooHero from "./RooHero"
+import WorkplacePanel from "../workplace/WorkplacePanel"
 
 const WelcomeView = () => {
 	const { apiConfiguration, currentApiConfigName, setApiConfiguration, uriScheme, machineId } = useExtensionState()
@@ -131,6 +132,8 @@ const WelcomeView = () => {
 						errorMessage={errorMessage}
 						setErrorMessage={setErrorMessage}
 					/>
+
+					<WorkplacePanel />
 				</div>
 			</TabContent>
 			<div className="sticky bottom-0 bg-vscode-sideBar-background p-4 border-t border-vscode-panel-border">

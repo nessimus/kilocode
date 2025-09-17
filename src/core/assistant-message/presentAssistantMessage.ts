@@ -374,10 +374,6 @@ export async function presentAssistantMessage(cline: Task, recursionDepth: numbe
 				return text.replace(tagRegex, "")
 			}
 
-			if (block.name !== "browser_action") {
-				await cline.browserSession.closeBrowser()
-			}
-
 			if (!block.partial) {
 				cline.recordToolUsage(block.name)
 				TelemetryService.instance.captureToolUsage(cline.taskId, block.name)

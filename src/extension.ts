@@ -45,6 +45,7 @@ import { initializeI18n } from "./i18n"
 import { registerGhostProvider } from "./services/ghost" // kilocode_change
 import { TerminalWelcomeService } from "./services/terminal-welcome/TerminalWelcomeService" // kilocode_change
 import { getKiloCodeWrapperProperties } from "./core/kilocode/wrapper" // kilocode_change
+import { createWorkplaceService } from "./services/workplace/WorkplaceService"
 
 /**
  * Built using https://github.com/microsoft/vscode-webview-ui-toolkit
@@ -135,6 +136,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	// kilocode_change end
 
 	const contextProxy = await ContextProxy.getInstance(context)
+	const workplaceService = await createWorkplaceService(context)
 
 	// Initialize code index managers for all workspace folders.
 	const codeIndexManagers: CodeIndexManager[] = []
@@ -161,6 +163,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// Initialize the provider *before* the Roo Code Cloud service.
 	const provider = new ClineProvider(context, outputChannel, "sidebar", contextProxy, mdmService)
+	provider.attachWorkplaceService(workplaceService)
 
 	// Initialize Roo Code Cloud service.
 	const postStateListener = () => ClineProvider.getVisibleInstance()?.postStateToWebview()
@@ -312,7 +315,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		)
 	}
 
-	registerCommands({ context, outputChannel, provider })
+	registerCommands({ context, outputChannel, provider, workplaceService })
 
 	/**
 	 * We use the text document content provider API to show the left side for diff

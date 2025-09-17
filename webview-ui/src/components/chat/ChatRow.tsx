@@ -86,7 +86,7 @@ const ChatRow = memo(
 			<div
 				// kilocode_change: add highlighted className
 				className={cn(
-					`px-[15px] py-[10px] pr-[6px] relative ${highlighted ? "animate-message-highlight" : ""}`,
+					`golden-chat-row px-[15px] py-[10px] pr-[6px] relative ${highlighted ? "animate-message-highlight" : ""}`,
 				)}>
 				{showTaskTimeline && <KiloChatRowGutterBar message={message} />}
 				<ChatRowContent {...props} />
@@ -143,13 +143,13 @@ export const ChatRowContent = ({
 	}, [onToggleExpand, message.ts])
 
 	// kilocode_change: usageMissing
-	const [cost, usageMissing, apiReqCancelReason, apiReqStreamingFailedMessage] = useMemo(() => {
+	const [cost, usageMissing, apiReqCancelReason, apiReqStreamingFailedMessage, apiRequestPreview] = useMemo(() => {
 		if (message.text !== null && message.text !== undefined && message.say === "api_req_started") {
 			const info = safeJsonParse<ClineApiReqInfo>(message.text)
-			return [info?.cost, info?.usageMissing, info?.cancelReason, info?.streamingFailedMessage]
+			return [info?.cost, info?.usageMissing, info?.cancelReason, info?.streamingFailedMessage, info?.request]
 		}
 
-		return [undefined, undefined, undefined]
+		return [undefined, undefined, undefined, undefined, undefined]
 	}, [message.text, message.say])
 
 	// When resuming task, last wont be api_req_failed but a resume_task
@@ -166,6 +166,14 @@ export const ChatRowContent = ({
 	const isMcpServerResponding = isLast && lastModifiedMessage?.say === "mcp_server_request_started"
 
 	const type = message.type === "ask" ? message.ask : message.say
+
+	const formattedApiRequestPreview = useMemo(() => {
+		if (typeof apiRequestPreview === "string") {
+			const trimmed = apiRequestPreview.trim()
+			return trimmed.length > 0 ? trimmed : undefined
+		}
+		return undefined
+	}, [apiRequestPreview])
 
 	const normalColor = "var(--vscode-foreground)"
 	const errorColor = "var(--vscode-errorForeground)"
@@ -1128,14 +1136,9 @@ export const ChatRowContent = ({
 								</>
 							)}
 
-							{isExpanded && (
-								<div style={{ marginTop: "10px" }}>
-									<CodeAccordian
-										code={safeJsonParse<any>(message.text)?.request}
-										language="markdown"
-										isExpanded={true}
-										onToggleExpand={handleToggleExpand}
-									/>
+							{isExpanded && formattedApiRequestPreview && (
+								<div className="api-request-preview api-request-preview--expanded">
+									<MarkdownBlock markdown={formattedApiRequestPreview} />
 								</div>
 							)}
 						</>

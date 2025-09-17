@@ -101,6 +101,7 @@ import { stringifyError } from "../../shared/kilocode/errorUtils"
 import isWsl from "is-wsl"
 import { getKilocodeDefaultModel } from "../../api/providers/kilocode/getKilocodeDefaultModel"
 import { getKiloCodeWrapperProperties } from "../../core/kilocode/wrapper"
+import type { WorkplaceService } from "../../services/workplace/WorkplaceService"
 
 export type ClineProviderState = Awaited<ReturnType<ClineProvider["getState"]>>
 // kilocode_change end
@@ -147,6 +148,7 @@ export class ClineProvider
 	private taskCreationCallback: (task: Task) => void
 	private taskEventListeners: WeakMap<Task, Array<() => void>> = new WeakMap()
 	private currentWorkspacePath: string | undefined
+	private workplaceService?: WorkplaceService
 
 	private recentTasksCache?: string[]
 	private pendingOperations: Map<string, PendingEditOperation> = new Map()
@@ -266,6 +268,14 @@ export class ClineProvider
 		} else {
 			this.log("CloudService not ready, deferring cloud profile sync")
 		}
+	}
+
+	public attachWorkplaceService(service: WorkplaceService) {
+		this.workplaceService = service
+	}
+
+	public getWorkplaceService(): WorkplaceService | undefined {
+		return this.workplaceService
 	}
 
 	/**
@@ -2021,6 +2031,7 @@ export class ClineProvider
 			kiloCodeImageApiKey,
 			openRouterImageGenerationSelectedModel,
 			openRouterUseMiddleOutTransform,
+			workplaceState: this.workplaceService?.getState() ?? { companies: [] },
 		}
 	}
 

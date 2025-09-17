@@ -1222,92 +1222,104 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		)
 
 		// Helper function to render non-edit mode controls
-		const renderNonEditModeControls = () => (
-			// kilocode_change move thumbnails to bottom
+		const renderNonEditModeControls = () => {
+			if (isEditMode) {
+				return null
+			}
 
-			<div
-				// kilocode_change start
-				style={{
-					marginTop: "-38px",
-					zIndex: 2,
-					paddingLeft: "8px",
-					paddingRight: "8px",
-				}}
-				ref={containerRef}
-				// kilocode_change end
-				className={cn("flex", "justify-between", "items-center", "mt-auto")}>
-				<div className={cn("flex", "items-center", "gap-1", "min-w-0")}>
-					<div className="shrink-0">
-						{/* kilocode_change start: KiloModeSelector instead of ModeSelector */}
-						<KiloModeSelector
-							value={mode}
-							onChange={setMode}
-							modeShortcutText={modeShortcutText}
-							customModes={customModes}
+			const baseButtonClasses = [
+				"relative inline-flex items-center justify-center",
+				"bg-transparent border-none p-1.5",
+				"rounded-md min-w-[28px] min-h-[28px]",
+				"opacity-60 hover:opacity-100 text-vscode-descriptionForeground hover:text-vscode-foreground",
+				"transition-all duration-150",
+				"hover:bg-[rgba(255,255,255,0.03)] hover:border-[rgba(255,255,255,0.15)]",
+				"focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder",
+				"active:bg-[rgba(255,255,255,0.1)]",
+			]
+
+			return (
+				<div className={cn("flex", "items-center", "justify-between", "px-2", "w-full")} style={{ gap: "8px" }}>
+					<div className={cn("flex", "items-center", "gap-1", "min-w-0")} style={{ flexWrap: "nowrap" }}>
+						<div className="shrink-0">
+							<KiloModeSelector
+								value={mode}
+								onChange={setMode}
+								modeShortcutText={modeShortcutText}
+								customModes={customModes}
+							/>
+						</div>
+						<KiloProfileSelector
+							currentConfigId={currentConfigId}
+							currentApiConfigName={currentApiConfigName}
+							displayName={displayName}
+							listApiConfigMeta={listApiConfigMeta}
+							pinnedApiConfigs={pinnedApiConfigs}
+							togglePinnedApiConfig={togglePinnedApiConfig}
+							selectApiConfigDisabled={selectApiConfigDisabled}
 						/>
-						{/* kilocode_change end */}
 					</div>
-
-					<KiloProfileSelector
-						currentConfigId={currentConfigId}
-						currentApiConfigName={currentApiConfigName}
-						displayName={displayName}
-						listApiConfigMeta={listApiConfigMeta}
-						pinnedApiConfigs={pinnedApiConfigs}
-						togglePinnedApiConfig={togglePinnedApiConfig}
-						selectApiConfigDisabled={selectApiConfigDisabled}
-					/>
-				</div>
-
-				{/* kilocode_change: hidden on small containerWidth
-					<div className={cn("flex", "items-center", "gap-0.5", "shrink-0")}>
+					<div className="flex items-center gap-1 shrink-0">
 						{isTtsPlaying && (
 							<StandardTooltip content={t("chat:stopTts")}>
 								<button
 									aria-label={t("chat:stopTts")}
 									onClick={() => vscode.postMessage({ type: "stopTts" })}
-									className={cn(
-										"relative inline-flex items-center justify-center",
-										"bg-transparent border-none p-1.5",
-										"rounded-md min-w-[28px] min-h-[28px]",
-										"text-vscode-foreground opacity-85",
-										"transition-all duration-150",
-										"hover:opacity-100 hover:bg-[rgba(255,255,255,0.03)] hover:border-[rgba(255,255,255,0.15)]",
-										"focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder",
-										"active:bg-[rgba(255,255,255,0.1)]",
-										"cursor-pointer",
-									)}>
+									className={cn(baseButtonClasses, "cursor-pointer")}>
 									<VolumeX className="w-4 h-4" />
 								</button>
 							</StandardTooltip>
 						)}
-						<IndexingStatusBadge />
-						<StandardTooltip content={t("chat:addImages")}>
+						<IndexingStatusBadge className={cn({ hidden: containerWidth < 235 })} />
+						<StandardTooltip content={t("chat:enhancePrompt")}>
 							<button
-								aria-label={t("chat:addImages")}
-								disabled={shouldDisableImages}
-								onClick={!shouldDisableImages ? onSelectImages : undefined}
+								aria-label={t("chat:enhancePrompt")}
+								onClick={handleEnhancePrompt}
+								className={cn(baseButtonClasses, "cursor-pointer")}>
+								<WandSparkles className={cn("w-4 h-4", isEnhancingPrompt && "animate-spin")} />
+							</button>
+						</StandardTooltip>
+						<StandardTooltip content="Add Context (@)">
+							<button
+								aria-label="Add Context (@)"
+								disabled={showContextMenu}
+								onClick={() => {
+									if (showContextMenu || !textAreaRef.current) return
+
+									textAreaRef.current.focus()
+
+									setInputValue(`${inputValue} @`)
+									setShowContextMenu(true)
+									setSearchQuery("")
+									setSelectedMenuIndex(4)
+								}}
 								className={cn(
-									"relative inline-flex items-center justify-center",
-									"bg-transparent border-none p-1.5",
-									"rounded-md min-w-[28px] min-h-[28px]",
-									"text-vscode-foreground opacity-85",
-									"transition-all duration-150",
-									"hover:opacity-100 hover:bg-[rgba(255,255,255,0.03)] hover:border-[rgba(255,255,255,0.15)]",
-									"focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder",
-									"active:bg-[rgba(255,255,255,0.1)]",
-									!shouldDisableImages && "cursor-pointer",
-									shouldDisableImages &&
+									baseButtonClasses,
+									!showContextMenu && "cursor-pointer",
+									showContextMenu &&
 										"opacity-40 cursor-not-allowed grayscale-[30%] hover:bg-transparent hover:border-[rgba(255,255,255,0.08)] active:bg-transparent",
-									"mr-1",
 								)}>
-								<Image className="w-4 h-4" />
+								<Paperclip className={cn("w-4", "h-4", { hidden: containerWidth < 235 })} />
+							</button>
+						</StandardTooltip>
+						<StandardTooltip content={t("chat:sendMessage")}>
+							<button
+								aria-label={t("chat:sendMessage")}
+								disabled={sendingDisabled}
+								onClick={!sendingDisabled ? onSend : undefined}
+								className={cn(
+									baseButtonClasses,
+									!sendingDisabled && "cursor-pointer",
+									sendingDisabled &&
+										"opacity-40 cursor-not-allowed grayscale-[30%] hover:bg-transparent hover:border-[rgba(255,255,255,0.08)] active:bg-transparent",
+								)}>
+								<SendHorizontal className="w-4 h-4 rtl:-scale-x-100" />
 							</button>
 						</StandardTooltip>
 					</div>
-					*/}
-			</div>
-		)
+				</div>
+			)
+		}
 
 		// Helper function to render the text area section
 		const renderTextAreaSection = () => (
@@ -1411,113 +1423,15 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 						"z-[2]",
 						"scrollbar-none",
 						"scrollbar-hide",
-						"pb-16", // kilocode_change: Increased padding to prevent overlap with control bar
+						"pb-6", // kilocode_change: provide breathing room at bottom of textarea
 					)}
 					onScroll={() => updateHighlights()}
 				/>
 				{/* kilocode_change {Transparent overlay at bottom of textArea to avoid text overlap } */}
 				<div
-					className="absolute bottom-[1px] left-2 right-2 h-16 bg-gradient-to-t from-[var(--vscode-input-background)] via-[var(--vscode-input-background)] to-transparent pointer-events-none z-[2]"
+					className="absolute bottom-[1px] left-2 right-2 h-8 bg-gradient-to-t from-[var(--vscode-input-background)] via-[var(--vscode-input-background)] to-transparent pointer-events-none z-[2]"
 					aria-hidden="true"
 				/>
-
-				{isTtsPlaying && (
-					<StandardTooltip content={t("chat:stopTts")}>
-						<Button
-							variant="ghost"
-							size="icon"
-							className="absolute top-0 right-0 opacity-25 hover:opacity-100 z-10"
-							onClick={() => vscode.postMessage({ type: "stopTts" })}>
-							<VolumeX className="size-4" />
-						</Button>
-					</StandardTooltip>
-				)}
-
-				{/* kilocode_change: position tweaked */}
-				<div className="absolute top-2 right-2 z-30">
-					<StandardTooltip content={t("chat:enhancePrompt")}>
-						<button
-							aria-label={t("chat:enhancePrompt")}
-							disabled={false}
-							onClick={handleEnhancePrompt}
-							className={cn(
-								"relative inline-flex items-center justify-center",
-								"bg-transparent border-none p-1.5",
-								"rounded-md min-w-[28px] min-h-[28px]",
-								"opacity-60 hover:opacity-100 text-vscode-descriptionForeground hover:text-vscode-foreground",
-								"transition-all duration-150",
-								"hover:bg-[rgba(255,255,255,0.03)] hover:border-[rgba(255,255,255,0.15)]",
-								"focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder",
-								"active:bg-[rgba(255,255,255,0.1)]",
-								"cursor-pointer",
-							)}>
-							<WandSparkles className={cn("w-4 h-4", isEnhancingPrompt && "animate-spin")} />
-						</button>
-					</StandardTooltip>
-				</div>
-
-				{/* kilocode_change: position tweaked, rtl support */}
-				<div className="absolute bottom-2 end-2 z-30">
-					{/* kilocode_change start */}
-					<IndexingStatusBadge className={cn({ hidden: containerWidth < 235 })} />
-					<StandardTooltip content="Add Context (@)">
-						<button
-							aria-label="Add Context (@)"
-							disabled={showContextMenu}
-							onClick={() => {
-								if (showContextMenu || !textAreaRef.current) return
-
-								textAreaRef.current.focus()
-
-								setInputValue(`${inputValue} @`)
-								setShowContextMenu(true)
-								// Empty search query explicitly to show all options
-								// and set to "File" option by default
-								setSearchQuery("")
-								setSelectedMenuIndex(4)
-							}}
-							className={cn(
-								"relative inline-flex items-center justify-center",
-								"bg-transparent border-none p-1.5",
-								"rounded-md min-w-[28px] min-h-[28px]",
-								"opacity-60 hover:opacity-100 text-vscode-descriptionForeground hover:text-vscode-foreground",
-								"transition-all duration-150",
-								"hover:bg-[rgba(255,255,255,0.03)] hover:border-[rgba(255,255,255,0.15)]",
-								"focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder",
-								"active:bg-[rgba(255,255,255,0.1)]",
-								!showContextMenu && "cursor-pointer",
-								showContextMenu &&
-									"opacity-40 cursor-not-allowed grayscale-[30%] hover:bg-transparent hover:border-[rgba(255,255,255,0.08)] active:bg-transparent",
-							)}>
-							<Paperclip className={cn("w-4", "h-4", { hidden: containerWidth < 235 })} />
-						</button>
-					</StandardTooltip>
-					{!isEditMode && (
-						<StandardTooltip content={t("chat:sendMessage")}>
-							<button
-								aria-label={t("chat:sendMessage")}
-								disabled={sendingDisabled}
-								onClick={!sendingDisabled ? onSend : undefined}
-								className={cn(
-									"relative inline-flex items-center justify-center",
-									"bg-transparent border-none p-1.5",
-									"rounded-md min-w-[28px] min-h-[28px]",
-									"opacity-60 hover:opacity-100 text-vscode-descriptionForeground hover:text-vscode-foreground",
-									"transition-all duration-150",
-									"hover:bg-[rgba(255,255,255,0.03)] hover:border-[rgba(255,255,255,0.15)]",
-									"focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder",
-									"active:bg-[rgba(255,255,255,0.1)]",
-									!sendingDisabled && "cursor-pointer",
-									sendingDisabled &&
-										"opacity-40 cursor-not-allowed grayscale-[30%] hover:bg-transparent hover:border-[rgba(255,255,255,0.08)] active:bg-transparent",
-								)}>
-								{/* kilocode_change: rtl */}
-								<SendHorizontal className="w-4 h-4 rtl:-scale-x-100" />
-							</button>
-						</StandardTooltip>
-					)}
-					{/* kilocode_change end */}
-				</div>
 
 				{!inputValue && (
 					<div
@@ -1536,6 +1450,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 
 		return (
 			<div
+				ref={containerRef}
 				className={cn(
 					"relative",
 					"flex",
@@ -1631,8 +1546,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 						)}
 
 						{renderTextAreaSection()}
-						{/* kilocode_change: renderNonEditModeControls moved */}
-						{!isEditMode && renderNonEditModeControls()}
+						{renderNonEditModeControls()}
 					</div>
 
 					{isEditMode && (

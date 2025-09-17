@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import { CaretDownIcon, CaretUpIcon, CounterClockwiseClockIcon } from "@radix-ui/react-icons"
 import { useTranslation } from "react-i18next"
+import { Brain } from "lucide-react"
 
 import MarkdownBlock from "../common/MarkdownBlock"
 import { useMount } from "react-use"
@@ -70,27 +71,58 @@ export const ReasoningBlock = ({ content, elapsed, isCollapsed = false, onToggle
 		}
 	}, [thought, prevThought])
 
+	const handleHeaderClick = useCallback(() => {
+		onToggleCollapse?.()
+	}, [onToggleCollapse])
+
+	const handleHeaderKeyDown = useCallback(
+		(event: ReactKeyboardEvent<HTMLDivElement>) => {
+			if (!onToggleCollapse) {
+				return
+			}
+
+			if (event.key === "Enter" || event.key === " ") {
+				event.preventDefault()
+				onToggleCollapse()
+			}
+		},
+		[onToggleCollapse],
+	)
+
+	const titleTransitionClass = isTransitioning ? "kilo-reasoning-block__title--transitioning" : ""
+
 	return (
-		<div className="bg-vscode-editor-background border border-vscode-border rounded-xs overflow-hidden">
+		<div className="kilo-reasoning-block">
 			<div
-				className="flex items-center justify-between gap-1 px-3 py-2 cursor-pointer text-muted-foreground"
-				onClick={onToggleCollapse}>
-				<div
-					className={`truncate flex-1 transition-opacity duration-200 ${isTransitioning ? "opacity-0" : "opacity-100"}`}>
+				className="kilo-reasoning-block__header"
+				onClick={handleHeaderClick}
+				onKeyDown={handleHeaderKeyDown}
+				role={onToggleCollapse ? "button" : undefined}
+				tabIndex={onToggleCollapse ? 0 : undefined}
+				aria-expanded={!isCollapsed}
+				data-collapsed={isCollapsed}>
+				<span className="kilo-reasoning-block__brain-icon" aria-hidden="true">
+					<Brain />
+				</span>
+				<div className={`kilo-reasoning-block__title truncate flex-1 ${titleTransitionClass}`}>
 					{prevThought}
 				</div>
-				<div className="flex flex-row items-center gap-1">
+				<div className="kilo-reasoning-block__meta">
 					{elapsedRef.current > 1000 && (
 						<>
-							<CounterClockwiseClockIcon className="scale-80" />
-							<div>{t("reasoning.seconds", { count: Math.round(elapsedRef.current / 1000) })}</div>
+							<CounterClockwiseClockIcon className="kilo-reasoning-block__meta-icon" />
+							<div className="kilo-reasoning-block__elapsed">
+								{t("reasoning.seconds", { count: Math.round(elapsedRef.current / 1000) })}
+							</div>
 						</>
 					)}
-					{isCollapsed ? <CaretDownIcon /> : <CaretUpIcon />}
+					<span className="kilo-reasoning-block__chevron">
+						{isCollapsed ? <CaretDownIcon /> : <CaretUpIcon />}
+					</span>
 				</div>
 			</div>
 			{!isCollapsed && (
-				<div ref={contentRef} className="px-3 max-h-[160px] overflow-y-auto">
+				<div ref={contentRef} className="kilo-reasoning-block__body">
 					<MarkdownBlock markdown={content} />
 				</div>
 			)}

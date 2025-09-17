@@ -14,11 +14,20 @@ interface KiloChatRowUserFeedbackProps {
 
 export const KiloChatRowUserFeedback = ({ message, isStreaming, onChatReset }: KiloChatRowUserFeedbackProps) => {
 	const { t } = useTranslation()
+	const originalText = message.text ?? ""
 	const [isEditing, setIsEditing] = useState(false)
-	const [editedText, setEditedText] = useState(message.text)
+	const [editedText, setEditedText] = useState(originalText)
+	const youLabel = t("kilocode:userFeedback:authorYou", { defaultValue: "You" })
+
+	const renderBadge = (
+		<span className="kilo-user-message__badge">
+			<span className="codicon codicon-account" aria-hidden="true" />
+			{youLabel}
+		</span>
+	)
 
 	const handleCancel = () => {
-		setEditedText(message.text)
+		setEditedText(originalText)
 		setIsEditing(false)
 	}
 
@@ -40,9 +49,10 @@ export const KiloChatRowUserFeedback = ({ message, isStreaming, onChatReset }: K
 
 	if (isEditing) {
 		return (
-			<div className="bg-vscode-editor-background border rounded-xs p-1 overflow-hidden whitespace-pre-wrap">
+			<div className="kilo-user-message kilo-user-message--editing">
+				<div className="kilo-user-message__top">{renderBadge}</div>
 				<textarea
-					className="w-full h-24 p-2 border rounded-xs bg-vscode-input-background text-vscode-input-foreground"
+					className="kilo-user-message__textarea"
 					value={editedText}
 					onChange={(e) => setEditedText(e.target.value)}
 					onKeyDown={(e) => {
@@ -52,14 +62,14 @@ export const KiloChatRowUserFeedback = ({ message, isStreaming, onChatReset }: K
 						}
 					}}
 				/>
-				<div className="flex justify-end gap-2 mt-2">
+				<div className="kilo-user-message__actions kilo-user-message__actions--editing">
 					<Button onClick={handleCancel} variant="ghost">
 						{t("kilocode:userFeedback:editCancel")}
 					</Button>
-					<Button variant="secondary" onClick={handleResend} disabled={editedText === message.text}>
+					<Button variant="secondary" onClick={handleResend} disabled={editedText === originalText}>
 						{t("kilocode:userFeedback:send")}
 					</Button>
-					<Button onClick={handleRevertAndResend} disabled={editedText === message.text}>
+					<Button onClick={handleRevertAndResend} disabled={editedText === originalText}>
 						{t("kilocode:userFeedback:restoreAndSend")}
 					</Button>
 				</div>
@@ -68,12 +78,10 @@ export const KiloChatRowUserFeedback = ({ message, isStreaming, onChatReset }: K
 	}
 
 	return (
-		<div className="bg-vscode-editor-background border rounded-xs p-1 overflow-hidden whitespace-pre-wrap">
-			<div className="flex justify-between">
-				<div className="flex-grow px-2 py-1 wrap-anywhere">
-					<Mention text={message.text} withShadow />
-				</div>
-				<div className="flex">
+		<div className="kilo-user-message">
+			<div className="kilo-user-message__top">
+				{renderBadge}
+				<div className="kilo-user-message__actions">
 					<Button
 						variant="ghost"
 						size="icon"
@@ -98,8 +106,13 @@ export const KiloChatRowUserFeedback = ({ message, isStreaming, onChatReset }: K
 					</Button>
 				</div>
 			</div>
+			<div className="kilo-user-message__body">
+				<Mention text={originalText} withShadow />
+			</div>
 			{message.images && message.images.length > 0 && (
-				<Thumbnails images={message.images} style={{ marginTop: "8px" }} />
+				<div className="kilo-user-message__attachments">
+					<Thumbnails images={message.images} />
+				</div>
 			)}
 		</div>
 	)

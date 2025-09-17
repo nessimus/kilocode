@@ -13,6 +13,7 @@ import {
 } from "@roo-code/types"
 
 import { Mode } from "./modes"
+import type { CreateCompanyPayload, CreateEmployeePayload } from "./golden/workplace"
 
 export type ClineAskResponse =
 	| "yesButtonClicked"
@@ -118,6 +119,9 @@ export interface WebviewMessage {
 		| "restartMcpServer"
 		| "refreshAllMcpServers"
 		| "toggleToolAlwaysAllow"
+		| "createCompany"
+		| "createEmployee"
+		| "selectCompany"
 		| "toggleToolEnabledForPrompt"
 		| "toggleMcpServer"
 		| "updateMcpTimeout"
@@ -332,6 +336,9 @@ export interface WebviewMessage {
 	url?: string // For openExternal
 	mpItem?: MarketplaceItem
 	mpInstallOptions?: InstallMarketplaceItemOptions
+	workplaceCompanyPayload?: CreateCompanyPayload
+	workplaceEmployeePayload?: CreateEmployeePayload
+	workplaceCompanyId?: string
 	config?: Record<string, any> // Add config to the payload
 	visibility?: ShareVisibility // For share visibility
 	hasContent?: boolean // For checkRulesDirectoryResult

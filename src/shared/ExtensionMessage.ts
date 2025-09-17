@@ -19,6 +19,7 @@ import { GitCommit } from "../utils/git"
 
 import { McpServer } from "./mcp"
 import { McpMarketplaceCatalog, McpDownloadResponse } from "./kilocode/mcp"
+import type { WorkplaceState } from "./golden/workplace"
 import { Mode } from "./modes"
 import { ModelRecord, RouterModels } from "./api"
 import { ProfileDataResponsePayload, BalanceDataResponsePayload } from "./WebviewMessage" // kilocode_change
@@ -396,6 +397,7 @@ export type ExtensionState = Pick<
 	marketplaceItems?: MarketplaceItem[]
 	marketplaceInstalledMetadata?: { project: Record<string, any>; global: Record<string, any> }
 	profileThresholds: Record<string, number>
+	workplaceState?: WorkplaceState
 	hasOpenedModeSelector: boolean
 	openRouterImageApiKey?: string
 	kiloCodeImageApiKey?: string

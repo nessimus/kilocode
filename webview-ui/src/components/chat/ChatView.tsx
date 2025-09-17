@@ -6,7 +6,7 @@ import removeMd from "remove-markdown"
 import { VSCodeButton } from "@vscode/webview-ui-toolkit/react"
 import useSound from "use-sound"
 import { LRUCache } from "lru-cache"
-import { Trans, useTranslation } from "react-i18next"
+import { useTranslation } from "react-i18next"
 
 import { useDebounceEffect } from "@src/utils/useDebounceEffect"
 import { appendImages } from "@src/utils/imageUtils"
@@ -62,7 +62,6 @@ import { CheckpointWarning } from "./CheckpointWarning"
 import { IdeaSuggestionsBox } from "../kilocode/chat/IdeaSuggestionsBox" // kilocode_change
 import { KilocodeNotifications } from "../kilocode/KilocodeNotifications" // kilocode_change
 import { QueuedMessages } from "./QueuedMessages"
-import { buildDocLink } from "@/utils/docLinks"
 
 export interface ChatViewProps {
 	isHidden: boolean
@@ -78,6 +77,13 @@ export interface ChatViewRef {
 export const MAX_IMAGES_PER_MESSAGE = 20 // This is the Anthropic limit.
 
 const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0
+
+const formatTimestamp = (date: Date) =>
+	new Intl.DateTimeFormat(undefined, {
+		weekday: "long",
+		hour: "numeric",
+		minute: "2-digit",
+	}).format(date)
 
 const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewProps> = (
 	{ isHidden, showAnnouncement, hideAnnouncement },
@@ -98,7 +104,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		clineMessages: messages,
 		currentTaskItem,
 		currentTaskTodos,
-		taskHistory,
+		taskHistory: _taskHistory,
 		apiConfiguration,
 		organizationAllowList,
 		mcpServers,
@@ -130,6 +136,8 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		soundVolume,
 		// cloudIsAuthenticated, // kilocode_change
 		messageQueue = [],
+		workplaceState,
+		setShowWelcome,
 	} = useExtensionState()
 
 	const messagesRef = useRef(messages)
@@ -139,6 +147,30 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 	}, [messages])
 
 	const { tasks } = useTaskSearch()
+
+	const companies = useMemo(() => workplaceState?.companies ?? [], [workplaceState?.companies])
+	const activeCompanyId = workplaceState?.activeCompanyId
+	const activeCompany = useMemo(() => {
+		if (!companies.length) {
+			return undefined
+		}
+		return companies.find((company) => company.id === activeCompanyId) ?? companies[0]
+	}, [companies, activeCompanyId])
+
+	const executiveManager = useMemo(() => {
+		if (!activeCompany) {
+			return undefined
+		}
+		return activeCompany.employees.find((employee) => employee.isExecutiveManager) ?? activeCompany.employees[0]
+	}, [activeCompany])
+
+	const supportingEmployees = useMemo(
+		() => (activeCompany?.employees ?? []).filter((employee) => !employee.isExecutiveManager),
+		[activeCompany],
+	)
+
+	const brandMark = useMemo(() => activeCompany?.name?.[0]?.toUpperCase() ?? "GW", [activeCompany?.name])
+	const companySummary = activeCompany?.mission ?? activeCompany?.vision ?? t("kilocode:introText1")
 
 	// Initialize expanded state based on the persisted setting (default to expanded if undefined)
 	const [isExpanded, setIsExpanded] = useState(
@@ -151,6 +183,10 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		// Send message to extension to persist the new collapsed state
 		vscode.postMessage({ type: "setHistoryPreviewCollapsed", bool: !newState })
 	}, [isExpanded])
+
+	const triggerCheckIn = useCallback(() => {
+		setShowWelcome(true)
+	}, [setShowWelcome])
 
 	// Leaving this less safe version here since if the first message is not a
 	// task, then the extension is in a bad state and needs to be debugged (see
@@ -202,6 +238,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 	const [showCheckpointWarning, setShowCheckpointWarning] = useState<boolean>(false)
 	const [isCondensing, setIsCondensing] = useState<boolean>(false)
 	const [showAnnouncementModal, setShowAnnouncementModal] = useState(false)
+	const [currentTimestamp, setCurrentTimestamp] = useState(() => formatTimestamp(new Date()))
 	const everVisibleMessagesTsRef = useRef<LRUCache<number, boolean>>(
 		new LRUCache({
 			max: 100,
@@ -227,6 +264,13 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		return () => {
 			isMountedRef.current = false
 		}
+	}, [])
+
+	useEffect(() => {
+		const tick = () => setCurrentTimestamp(formatTimestamp(new Date()))
+		tick()
+		const interval = window.setInterval(tick, 30_000)
+		return () => window.clearInterval(interval)
 	}, [])
 
 	const isProfileDisabled = useMemo(
@@ -1886,11 +1930,27 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 	}
 
 	const areButtonsVisible = showScrollToBottom || primaryButtonText || secondaryButtonText || isStreaming
+	const primaryButtonIsStartNewTask = primaryButtonText === t("chat:startNewTask.title")
+	const secondaryButtonIsStartNewTask = secondaryButtonText === t("chat:startNewTask.title")
+	const primaryButtonClassName = primaryButtonIsStartNewTask
+		? `flex-[2]${secondaryButtonText ? " mr-[6px]" : ""}`
+		: secondaryButtonText
+			? "flex-1 mr-[6px]"
+			: "flex-[2]"
+	const secondaryButtonClassName = secondaryButtonIsStartNewTask
+		? `flex-[2]${primaryButtonText && !isStreaming ? " ml-[6px]" : ""}`
+		: isStreaming
+			? "flex-[2] ml-0"
+			: "flex-1 ml-[6px]"
 
 	return (
 		<div
 			data-testid="chat-view"
-			className={isHidden ? "hidden" : "fixed top-0 left-0 right-0 bottom-0 flex flex-col overflow-hidden"}>
+			className={
+				isHidden
+					? "hidden"
+					: "golden-chat-root fixed top-0 left-0 right-0 bottom-0 flex flex-col overflow-hidden"
+			}>
 			{(showAnnouncement || showAnnouncementModal) && (
 				<Announcement
 					hideAnnouncement={() => {
@@ -1949,68 +2009,86 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 					)}
 				</>
 			) : (
-				<div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-4 relative">
-					{/* Moved Task Bar Header Here */}
-					{tasks.length !== 0 && (
-						<div className="flex text-vscode-descriptionForeground w-full mx-auto px-5 pt-3">
-							<div className="flex items-center gap-1 cursor-pointer" onClick={toggleExpanded}>
-								{tasks.length < 10 && (
-									<span className={`font-medium text-xs `}>{t("history:recentTasks")}</span>
-								)}
-								<span
-									className={`codicon  ${isExpanded ? "codicon-eye" : "codicon-eye-closed"} scale-90`}
-								/>
+				<div className="workspace-welcome flex-1 min-h-0">
+					<div className="workspace-welcome__scroll scrollbar-fade">
+						<section className="workspace-welcome__hero">
+							<div className="workspace-welcome__badge" aria-hidden="true">
+								<span>{brandMark}</span>
 							</div>
-						</div>
-					)}
-					<div>
-						<OrganizationSelector className="absolute top-2 right-3" />
-					</div>
-					{/* kilocode_change start: changed the classes to support notifications */}
-					<div className="w-full h-full flex flex-col gap-4 px-3.5 transition-all duration-300">
-						{/* kilocode_change end */}
-						{/* Version indicator in top-right corner - only on welcome screen */}
-						{/* kilocode_change: do not show */}
-						{/* <VersionIndicator
-							onClick={() => setShowAnnouncementModal(true)}
-							className="absolute top-2 right-3 z-10"
-						/>
-
-						<RooHero /> */}
-
-						{telemetrySetting === "unset" && <TelemetryBanner />}
-						{/* kilocode_change start: KilocodeNotifications + Layout fixes */}
-						{telemetrySetting !== "unset" && (
-							<div className={tasks.length === 0 ? "mt-10" : undefined}>
-								<KilocodeNotifications />
+							<div className="workspace-welcome__hero-copy">
+								<p className="workspace-welcome__timestamp" aria-live="polite">
+									{currentTimestamp}
+								</p>
+								<h1 className="workspace-welcome__headline">Hey there, Arc Lover.</h1>
+								<p className="workspace-welcome__lede">Welcome to your Golden Workplace.</p>
+								{activeCompany && <p className="workspace-welcome__company">{activeCompany.name}</p>}
 							</div>
+						</section>
+
+						<section className="workspace-welcome__section">
+							<div className="workspace-welcome__section-header">
+								<h2>Choose your company</h2>
+							</div>
+							<OrganizationSelector className="workspace-welcome__selector" showLabel />
+							{companySummary && <p className="workspace-welcome__description">{companySummary}</p>}
+						</section>
+
+						{(executiveManager || supportingEmployees.length > 0) && (
+							<section className="workspace-welcome__section">
+								<div className="workspace-welcome__section-header">
+									<h2>Your team</h2>
+								</div>
+								<ul className="workspace-welcome__team">
+									{executiveManager && (
+										<li className="workspace-welcome__team-item" key={executiveManager.id}>
+											<span className="workspace-welcome__team-name">
+												{executiveManager.name}
+											</span>
+											<span className="workspace-welcome__team-role">
+												{t("kilocode:workplace.executiveManagerTag")}
+											</span>
+										</li>
+									)}
+									{supportingEmployees.slice(0, 5).map((employee) => (
+										<li key={employee.id} className="workspace-welcome__team-item">
+											<span className="workspace-welcome__team-name">{employee.name}</span>
+											{employee.role && (
+												<span className="workspace-welcome__team-role">{employee.role}</span>
+											)}
+										</li>
+									))}
+								</ul>
+							</section>
 						)}
-						<div className="flex flex-grow flex-col justify-center gap-4">
-							{/* kilocode_change end */}
-							<p className="text-vscode-editor-foreground leading-tight font-vscode-font-family text-center text-balance max-w-[380px] mx-auto my-0">
-								<Trans
-									i18nKey="chat:about"
-									components={{
-										DocsLink: (
-											<a
-												href={buildDocLink("", "welcome")}
-												target="_blank"
-												rel="noopener noreferrer">
-												the docs
-											</a>
-										),
-									}}
-								/>
-							</p>
-							{taskHistory.length === 0 && <IdeaSuggestionsBox />} {/* kilocode_change */}
-							{/*<div className="mb-2.5">
-								{cloudIsAuthenticated || taskHistory.length < 4 ? <RooTips /> : <RooCloudCTA />}
-							</div> kilocode_change: do not show */}
-							{/* Show the task history preview if expanded and tasks exist */}
-							{taskHistory.length > 0 && isExpanded && <HistoryPreview />}
-							{/* kilocode_change start: KilocodeNotifications + Layout fixes */}
-						</div>
-						{/* kilocode_change end */}
+
+						<section className="workspace-welcome__section workspace-welcome__actions">
+							<div className="workspace-welcome__section-header">
+								<h2>Workspace setup</h2>
+							</div>
+							<VSCodeButton appearance="primary" onClick={triggerCheckIn}>
+								{t("kilocode:workplace.openSetup")}
+							</VSCodeButton>
+						</section>
+
+						<section className="workspace-welcome__section">
+							{telemetrySetting === "unset" ? <TelemetryBanner /> : <KilocodeNotifications />}
+						</section>
+
+						<section className="workspace-welcome__section">
+							<div className="workspace-welcome__section-header">
+								<h2>{t("history:recentTasks")}</h2>
+								{tasks.length > 0 && (
+									<button
+										type="button"
+										className="workspace-welcome__toggle"
+										onClick={toggleExpanded}
+										aria-expanded={isExpanded}>
+										{isExpanded ? t("chat:collapse") : t("chat:expand")}
+									</button>
+								)}
+							</div>
+							{tasks.length === 0 ? <IdeaSuggestionsBox /> : isExpanded && <HistoryPreview />}
+						</section>
 					</div>
 				</div>
 			)}
@@ -2039,11 +2117,11 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 
 			{task && (
 				<>
-					<div className="grow flex" ref={scrollContainerRef}>
+					<div className="grow flex golden-chat-stream-container" ref={scrollContainerRef}>
 						<Virtuoso
 							ref={virtuosoRef}
 							key={task.ts}
-							className="scrollable grow overflow-y-scroll mb-1"
+							className="golden-chat-stream scrollable scrollbar-fade grow overflow-y-scroll mb-1"
 							// increasing top by 3_000 to prevent jumping around when user collapses a row
 							increaseViewportBy={{ top: 400, bottom: 400 }} // kilocode_change: use more modest numbers to see if they reduce gray screen incidence
 							data={groupedMessages}
@@ -2110,9 +2188,9 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 																				: undefined
 											}>
 											<VSCodeButton
-												appearance="primary"
+												appearance={primaryButtonIsStartNewTask ? "secondary" : "primary"}
 												disabled={!enableButtons}
-												className={secondaryButtonText ? "flex-1 mr-[6px]" : "flex-[2] mr-0"}
+												className={primaryButtonClassName}
 												onClick={() => handlePrimaryButtonClick(inputValue, selectedImages)}>
 												{primaryButtonText}
 											</VSCodeButton>
@@ -2134,7 +2212,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 											<VSCodeButton
 												appearance="secondary"
 												disabled={!enableButtons && !(isStreaming && !didClickCancel)}
-												className={isStreaming ? "flex-[2] ml-0" : "flex-1 ml-[6px]"}
+												className={secondaryButtonClassName}
 												onClick={() => handleSecondaryButtonClick(inputValue, selectedImages)}>
 												{isStreaming ? t("chat:cancel.title") : secondaryButtonText}
 											</VSCodeButton>

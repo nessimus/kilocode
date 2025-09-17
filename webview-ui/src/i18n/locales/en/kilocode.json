@@ -1,17 +1,33 @@
 {
 	"welcome": {
-		"greeting": "Welcome to Kilo Code!",
-		"introText1": "Kilo Code is a free, open source AI coding agent.",
-		"introText2": "It works with the latest AI models like Claude 4 Sonnet, Gemini 2.5 Pro, GPT-4.1, and 450+ more.",
-		"introText3": "Create a free account and get up to $25 worth of tokens to use across any AI model.",
-		"ctaButton": "Get Started",
+		"greeting": "Welcome to Golden Workplace!",
+		"introText1": "Golden Workplace runs locally on your computer.",
+		"introText2": "Configure your preferred model provider to start collaborating immediately.",
+		"introText3": "Set up your first company below to unlock your AI workforce.",
+		"ctaButton": "Use your own API key",
 		"manualModeButton": "Use your own API key",
 		"alreadySignedUp": "Already signed up?",
 		"loginText": "Log in here"
 	},
+	"workplace": {
+		"title": "Golden Workplace",
+		"subtitle": "Design your AI company and staff it with specialized employees.",
+		"createCompanyHint": "You're moments away from launching your first AI company. Set a name (and optionally a mission) to get started—an Executive Manager will be created automatically to help you scale.",
+		"companyNamePlaceholder": "Company name",
+		"companyMissionPlaceholder": "Mission or operating focus (optional)",
+		"createCompanyButton": "Create company",
+		"employeesHeader": "Employees at {{company}}",
+		"executiveManagerTag": "Executive Manager",
+		"noEmployees": "No additional employees yet. Add specialists to expand this workplace.",
+		"addEmployeeHeader": "Add new employee",
+		"employeeNamePlaceholder": "Employee name",
+		"employeeRolePlaceholder": "Role or specialty",
+		"addEmployeeButton": "Hire employee",
+		"openSetup": "Open Golden Workplace setup"
+	},
 	"lowCreditWarning": {
 		"addCredit": "Add Credit",
-		"lowBalance": "Your Kilo Code balance is low"
+		"lowBalance": "Your Golden Workplace balance is low"
 	},
 	"invalidModel": {
 		"alphaPeriodEnded": "🎉 The alpha period for {{model}} has ended! Change to a different model to continue.",
@@ -25,13 +41,15 @@
 		"costUnknownDescription": "The API Provider did not provide any cost data or the request was canceled.",
 		"freeModelsDescription": "Free models may have rate limits. Use the link below to optimize your free model usage!",
 		"freeModelsLink": "Discover free and budget model options",
-		"openRouterMarkup": "The Kilo Code provider includes all of the OpenRouter models, with zero markup and 0% commission!",
-		"switchToKiloCode": "Switch to Kilo Code"
+		"openRouterMarkup": "The Golden Workplace provider includes all of the OpenRouter models, with zero markup and 0% commission!",
+		"switchToKiloCode": "Switch to Golden Workplace"
 	},
 	"notifications": {
 		"toolRequest": "Tool request waiting for approval",
 		"browserAction": "Browser action waiting for approval",
-		"command": "Command waiting for approval"
+		"command": "Command waiting for approval",
+		"voiceInputComingSoon": "Voice input is coming soon.",
+		"callModelComingSoon": "Calling the model is coming soon."
 	},
 	"imageWarnings": {
 		"modelNoImageSupport": "Images are not supported by the current model.",
@@ -43,10 +61,10 @@
 			"mcp": "MCP Servers"
 		},
 		"provider": {
-			"account": "Kilo Code Account",
-			"apiKey": "Kilo Code API Key",
-			"login": "Log in at Kilo Code",
-			"logout": "Log out from Kilo Code",
+			"account": "Golden Workplace Account",
+			"apiKey": "Golden Workplace API Key",
+			"login": "Log in at Golden Workplace",
+			"logout": "Log out from Golden Workplace",
 			"providerRouting": {
 				"title": "Provider Routing",
 				"managedByOrganization": "The Provider Routing settings are managed by your organization.",
@@ -62,12 +80,12 @@
 					"deny": "Deny provider data collection"
 				}
 			},
-			"automaticFetch": "The latest models are automatically available in Kilo Code. If you're unsure which model to choose, Kilo Code works best with the recommended models listed at the top in <strong>bold face</strong>."
+			"automaticFetch": "The latest models are automatically available in Golden Workplace. If you're unsure which model to choose, Golden Workplace works best with the recommended models listed at the top in <strong>bold face</strong>."
 		},
 		"modelInfo": {
 			"contextWindow": "Context window",
 			"providerBreakdown": "Provider Price and Capability Breakdown",
-			"averageKiloCodeCost": "This is the average actual spent for Kilo Code using this model over the last week. It may be lower than the listed price due to prompt cache utilization.",
+			"averageKiloCodeCost": "This is the average actual spent for Golden Workplace using this model over the last week. It may be lower than the listed price due to prompt cache utilization.",
 			"table": {
 				"provider": "Provider",
 				"context": "The endpoint can process this number of tokens (input + output).",
@@ -80,15 +98,15 @@
 		"contextManagement": {
 			"allowVeryLargeReads": {
 				"label": "Allow very large file reads",
-				"description": "When enabled, Kilo Code will perform very large file or MCP output reads even if there is a high chance of overflowing the context window (content size >80% of context window)."
+				"description": "When enabled, Golden Workplace will perform very large file or MCP output reads even if there is a high chance of overflowing the context window (content size >80% of context window)."
 			}
 		},
 		"systemNotifications": {
 			"label": "Enable System Notifications",
-			"description": "When enabled, Kilo Code will send system notifications for important events like task completion or errors.",
+			"description": "When enabled, Golden Workplace will send system notifications for important events like task completion or errors.",
 			"testButton": "Test Notification",
-			"testTitle": "Kilo Code",
-			"testMessage": "This is a test notification from Kilo Code."
+			"testTitle": "Golden Workplace",
+			"testMessage": "This is a test notification from Golden Workplace."
 		},
 		"terminal": {
 			"commandGenerator": {
@@ -103,7 +121,7 @@
 	},
 	"chat": {
 		"condense": {
-			"wantsToCondense": "Kilo Code wants to condense your conversation",
+			"wantsToCondense": "Golden Workplace wants to condense your conversation",
 			"condenseConversation": "Condense Conversation"
 		},
 		"seeNewChanges": "See New Changes"
@@ -129,15 +147,15 @@
 	},
 	"docs": "Docs",
 	"rules": {
-		"tooltip": "Manage Kilo Code Rules & Workflows",
-		"ariaLabel": "Kilo Code Rules",
+		"tooltip": "Manage Golden Workplace Rules & Workflows",
+		"ariaLabel": "Golden Workplace Rules",
 		"tabs": {
 			"rules": "Rules",
 			"workflows": "Workflows"
 		},
 		"description": {
-			"rules": "Rules allow you to provide Kilo Code with instructions it should follow in all modes and for all prompts. They are a persistent way to include context and preferences for all conversations in your workspace or globally.",
-			"workflows": "Workflows are a prepared template for a conversation. Workflows can allow you to define prompts you use frequently, and can include a series of steps to guide Kilo Code through repetitive tasks, such as deploying a service or submitting a PR. To invoke a workflow, type",
+			"rules": "Rules allow you to provide Golden Workplace with instructions it should follow in all modes and for all prompts. They are a persistent way to include context and preferences for all conversations in your workspace or globally.",
+			"workflows": "Workflows are a prepared template for a conversation. Workflows can allow you to define prompts you use frequently, and can include a series of steps to guide Golden Workplace through repetitive tasks, such as deploying a service or submitting a PR. To invoke a workflow, type",
 			"workflowsInChat": "in the chat."
 		},
 		"sections": {
@@ -208,11 +226,11 @@
 			"keybindingDescription": "Autocomplete features can be triggered by commands. You can configure the <DocsLink>Keyboard Shortcuts here</DocsLink>.",
 			"enableAutoTrigger": {
 				"label": "Enable Autocomplete",
-				"description": "When enabled, Kilo Code will automatically trigger Autocomplete when you stop typing. This can be useful for quick fixes and suggestions."
+				"description": "When enabled, Golden Workplace will automatically trigger Autocomplete when you stop typing. This can be useful for quick fixes and suggestions."
 			},
 			"autoTriggerDelay": {
 				"label": "Auto Trigger Delay",
-				"description": "The delay in seconds before Kilo Code triggers Autocomplete after you stop typing. A shorter delay means quicker suggestions, but may be more resource-intensive."
+				"description": "The delay in seconds before Golden Workplace triggers Autocomplete after you stop typing. A shorter delay means quicker suggestions, but may be more resource-intensive."
 			},
 			"enableQuickInlineTaskKeybinding": {
 				"label": "Quick Task",

@@ -62,6 +62,7 @@ import { getCommand } from "../../utils/commands"
 import { toggleWorkflow, toggleRule, createRuleFile, deleteRuleFile } from "./kilorules"
 import { mermaidFixPrompt } from "../prompts/utilities/mermaid" // kilocode_change
 import { editMessageHandler, fetchKilocodeNotificationsHandler } from "../kilocode/webview/webviewMessageHandlerUtils" // kilocode_change
+import { CreateCompanyPayload, CreateEmployeePayload } from "../../shared/golden/workplace"
 
 const ALLOWED_VSCODE_SETTINGS = new Set(["terminal.integrated.inheritEnv"])
 
@@ -386,6 +387,57 @@ export const webviewMessageHandler = async (
 	}
 
 	switch (message.type) {
+		case "createCompany": {
+			const payload = message.workplaceCompanyPayload as CreateCompanyPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing company payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.createCompany(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to create company: ${messageText}`)
+			}
+			break
+		}
+		case "selectCompany": {
+			const companyId = message.workplaceCompanyId
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			await service.setActiveCompany(companyId)
+			await provider.postStateToWebview()
+			break
+		}
+		case "createEmployee": {
+			const payload = message.workplaceEmployeePayload as CreateEmployeePayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing employee payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.createEmployee(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to add employee: ${messageText}`)
+			}
+			break
+		}
 		case "webviewDidLaunch":
 			// Load custom modes first
 			const customModes = await provider.customModesManager.getCustomModes()
