@@ -2,22 +2,13 @@
 
 import { ClineRulesToggles } from "../../shared/cline-rules"
 import fs from "fs/promises"
-import path from "path"
 import {
 	newTaskToolResponse,
 	newRuleToolResponse,
 	reportBugToolResponse,
 	condenseToolResponse,
 } from "../prompts/commands"
-
-function enabledWorkflowToggles(workflowToggles: ClineRulesToggles) {
-	return Object.entries(workflowToggles)
-		.filter(([_, enabled]) => enabled)
-		.map(([filePath, _]) => ({
-			fullPath: filePath,
-			fileName: path.basename(filePath),
-		}))
-}
+import { collectEnabledWorkflowSops, findWorkflowSop } from "./sopWorkflowUtils"
 
 /**
  * This file is a duplicate of parseSlashCommands, but it adds a check for the newrule command
@@ -34,6 +25,8 @@ export async function parseKiloSlashCommands(
 		reportbug: reportBugToolResponse,
 		smol: condenseToolResponse,
 	}
+
+	const workflowEntries = collectEnabledWorkflowSops(localWorkflowToggles, globalWorkflowToggles)
 
 	// this currently allows matching prepended whitespace prior to /slash-command
 	const tagPatterns = [
@@ -74,10 +67,7 @@ export async function parseKiloSlashCommands(
 				return { processedText, needsRulesFileCheck: commandName === "newrule" }
 			}
 
-			const matchingWorkflow = [
-				...enabledWorkflowToggles(localWorkflowToggles),
-				...enabledWorkflowToggles(globalWorkflowToggles),
-			].find((workflow) => workflow.fileName === commandName)
+			const matchingWorkflow = findWorkflowSop(workflowEntries, commandName)
 
 			if (matchingWorkflow) {
 				try {

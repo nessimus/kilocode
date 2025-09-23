@@ -10,8 +10,9 @@ vi.mock("react-i18next", () => ({
 	useTranslation: () => ({
 		t: (key: string) => {
 			const translations: Record<string, string> = {
-				"chat:slashCommand.wantsToRun": "Roo wants to run slash command:",
-				"chat:slashCommand.didRun": "Roo ran slash command:",
+				"chat:slashCommand.wantsToRun": "Roo wants to load an SOP:",
+				"chat:slashCommand.didRun": "Roo loaded an SOP:",
+				"common:description": "Description",
 			}
 			return translations[key] || key
 		},
@@ -62,7 +63,7 @@ describe("ChatRow - runSlashCommand tool", () => {
 		vi.clearAllMocks()
 	})
 
-	it("should display runSlashCommand ask message with command only", () => {
+	it("should display runSlashCommand ask message with SOP metadata", () => {
 		const message: any = {
 			type: "ask",
 			ask: "tool",
@@ -70,14 +71,19 @@ describe("ChatRow - runSlashCommand tool", () => {
 			text: JSON.stringify({
 				tool: "runSlashCommand",
 				command: "init",
+				displayName: "init",
+				sop_variant: "document",
+				source: "built-in",
 			}),
 			partial: false,
 		}
 
 		const { getByText } = renderChatRowWithProviders(message)
 
-		expect(getByText("Roo wants to run slash command:")).toBeInTheDocument()
-		expect(getByText("/init")).toBeInTheDocument()
+		expect(getByText("Roo wants to load an SOP:")).toBeInTheDocument()
+		expect(getByText("init")).toBeInTheDocument()
+		expect(getByText("Document SOP")).toBeInTheDocument()
+		expect(getByText("built-in")).toBeInTheDocument()
 	})
 
 	it("should display runSlashCommand ask message with command and args", () => {
@@ -91,18 +97,29 @@ describe("ChatRow - runSlashCommand tool", () => {
 				args: "focus on unit tests",
 				description: "Run project tests",
 				source: "project",
+				displayName: "test",
+				argumentHint: "test type or focus area",
+				sop_variant: "document",
+				filePath: ".roo/commands/test.md",
 			}),
 			partial: false,
 		}
 
 		const { getByText } = renderChatRowWithProviders(message, true) // Pass true to expand
 
-		expect(getByText("Roo wants to run slash command:")).toBeInTheDocument()
-		expect(getByText("/test")).toBeInTheDocument()
-		expect(getByText("Arguments:")).toBeInTheDocument()
-		expect(getByText("focus on unit tests")).toBeInTheDocument()
-		expect(getByText("Run project tests")).toBeInTheDocument()
+		expect(getByText("Roo wants to load an SOP:")).toBeInTheDocument()
+		expect(getByText("test")).toBeInTheDocument()
+		expect(getByText("Document SOP")).toBeInTheDocument()
 		expect(getByText("project")).toBeInTheDocument()
+		expect(getByText("/test")).toBeInTheDocument()
+		expect(getByText("Usage hint:")).toBeInTheDocument()
+		expect(getByText("test type or focus area")).toBeInTheDocument()
+		expect(getByText("Context:")).toBeInTheDocument()
+		expect(getByText("focus on unit tests")).toBeInTheDocument()
+		expect(getByText("Description:")).toBeInTheDocument()
+		expect(getByText("Run project tests")).toBeInTheDocument()
+		expect(getByText("Path:")).toBeInTheDocument()
+		expect(getByText(".roo/commands/test.md")).toBeInTheDocument()
 	})
 
 	it("should display runSlashCommand say message", () => {
@@ -114,14 +131,41 @@ describe("ChatRow - runSlashCommand tool", () => {
 				tool: "runSlashCommand",
 				command: "deploy",
 				source: "global",
+				displayName: "deploy",
+				sop_variant: "document",
 			}),
 			partial: false,
 		}
 
 		const { getByText } = renderChatRowWithProviders(message)
 
-		expect(getByText("Roo ran slash command:")).toBeInTheDocument()
-		expect(getByText("/deploy")).toBeInTheDocument()
+		expect(getByText("Roo loaded an SOP:")).toBeInTheDocument()
+		expect(getByText("deploy")).toBeInTheDocument()
+		expect(getByText("Document SOP")).toBeInTheDocument()
 		expect(getByText("global")).toBeInTheDocument()
+	})
+
+	it("should display upsertSop summary", () => {
+		const message: any = {
+			type: "say",
+			say: "tool",
+			ts: Date.now(),
+			text: JSON.stringify({
+				tool: "upsertSop",
+				sop_name: "Release Checklist",
+				sop_variant: "document",
+				sop_scope: "project",
+				target_path: "/workspace/.kilocode/sops/release-checklist.md",
+			}),
+			partial: false,
+		}
+
+		const { getByText } = renderChatRowWithProviders(message)
+
+		expect(getByText("Created SOP")).toBeInTheDocument()
+		expect(getByText("Release Checklist")).toBeInTheDocument()
+		expect(getByText("Document")).toBeInTheDocument()
+		expect(getByText("project")).toBeInTheDocument()
+		expect(getByText("/workspace/.kilocode/sops/release-checklist.md")).toBeInTheDocument()
 	})
 })

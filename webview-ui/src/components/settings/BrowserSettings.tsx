@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { useAppTranslation } from "@/i18n/TranslationContext"
 import { vscode } from "@/utils/vscode"
 import { buildDocLink } from "@src/utils/docLinks"
+import { BrowserInteractionStrategy } from "@roo/browser"
 
 import { Section } from "./Section"
 import { SectionHeader } from "./SectionHeader"
@@ -18,12 +19,14 @@ type BrowserSettingsProps = HTMLAttributes<HTMLDivElement> & {
 	screenshotQuality?: number
 	remoteBrowserHost?: string
 	remoteBrowserEnabled?: boolean
+	browserInteractionStrategy?: BrowserInteractionStrategy
 	setCachedStateField: SetCachedStateField<
 		| "browserToolEnabled"
 		| "browserViewportSize"
 		| "screenshotQuality"
 		| "remoteBrowserHost"
 		| "remoteBrowserEnabled"
+		| "browserInteractionStrategy"
 	>
 }
 
@@ -33,6 +36,7 @@ export const BrowserSettings = ({
 	screenshotQuality,
 	remoteBrowserHost,
 	remoteBrowserEnabled,
+	browserInteractionStrategy,
 	setCachedStateField,
 	...props
 }: BrowserSettingsProps) => {
@@ -97,6 +101,24 @@ export const BrowserSettings = ({
 		[t],
 	)
 
+	const interactionOptions = useMemo(
+		() => [
+			{
+				value: "legacy",
+				label: t("settings:browser.interaction.options.legacy", "Legacy (internal planner)"),
+			},
+			{
+				value: "venus_navi",
+				label: t("settings:browser.interaction.options.venusNavi", "UI Venus Navi (guided policy)"),
+			},
+			{
+				value: "venus_ground",
+				label: t("settings:browser.interaction.options.venusGround", "UI Venus Ground (autonomous policy)"),
+			},
+		],
+		[t],
+	)
+
 	return (
 		<div {...props}>
 			<SectionHeader>
@@ -126,6 +148,38 @@ export const BrowserSettings = ({
 
 				{browserToolEnabled && (
 					<div className="flex flex-col gap-3 pl-3 border-l-2 border-vscode-button-background">
+						<div>
+							<label className="block font-medium mb-1">
+								{t("settings:browser.interaction.label", "Interaction method")}
+							</label>
+							<Select
+								value={browserInteractionStrategy ?? "legacy"}
+								onValueChange={(value) =>
+									setCachedStateField(
+										"browserInteractionStrategy",
+										value as BrowserInteractionStrategy,
+									)
+								}>
+								<SelectTrigger className="w-full">
+									<SelectValue placeholder={t("settings:common.select")} />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectGroup>
+										{interactionOptions.map(({ value, label }) => (
+											<SelectItem key={value} value={value}>
+												{label}
+											</SelectItem>
+										))}
+									</SelectGroup>
+								</SelectContent>
+							</Select>
+							<div className="text-vscode-descriptionForeground text-sm mt-1">
+								{t(
+									"settings:browser.interaction.description",
+									"Choose the planner that decides browser interactions. Venus models require the realtime stream and provide advanced UI policies.",
+								)}
+							</div>
+						</div>
 						<div>
 							<label className="block font-medium mb-1">{t("settings:browser.viewport.label")}</label>
 							<Select

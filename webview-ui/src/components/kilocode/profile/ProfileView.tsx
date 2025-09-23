@@ -11,10 +11,11 @@ import { VSCodeButton, VSCodeDivider } from "@vscode/webview-ui-toolkit/react"
 import CountUp from "react-countup"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { useAppTranslation } from "@/i18n/TranslationContext"
-import { Tab, TabContent, TabHeader } from "@src/components/common/Tab"
-import { Button } from "@src/components/ui"
+import { Tab, TabContent, TabHeader } from "@/components/common/Tab"
+import { Button } from "@/components/ui"
 import KiloCodeAuth from "../common/KiloCodeAuth"
 import { OrganizationSelector } from "../common/OrganizationSelector"
+import IdentityDesigner from "./IdentityDesigner"
 
 interface ProfileViewProps {
 	onDone: () => void
@@ -29,17 +30,14 @@ const ProfileView: React.FC<ProfileViewProps> = ({ onDone }) => {
 	const [isLoadingUser, setIsLoadingUser] = React.useState(true)
 
 	useEffect(() => {
-		vscode.postMessage({
-			type: "fetchProfileDataRequest",
-		})
-		vscode.postMessage({
-			type: "fetchBalanceDataRequest",
-		})
+		vscode.postMessage({ type: "fetchProfileDataRequest" })
+		vscode.postMessage({ type: "fetchBalanceDataRequest" })
 	}, [apiConfiguration?.kilocodeToken, apiConfiguration?.kilocodeOrganizationId])
 
 	useEffect(() => {
 		const handleMessage = (event: MessageEvent<WebviewMessage>) => {
 			const message = event.data
+
 			if (message.type === "profileDataResponse") {
 				const payload = message.payload as ProfileDataResponsePayload
 				if (payload.success) {
@@ -52,32 +50,26 @@ const ProfileView: React.FC<ProfileViewProps> = ({ onDone }) => {
 			} else if (message.type === "balanceDataResponse") {
 				const payload = message.payload as BalanceDataResponsePayload
 				if (payload.success) {
-					setBalance(payload.data?.balance || 0)
+					setBalance(payload.data?.balance ?? 0)
 				} else {
 					console.error("Error fetching balance data:", payload.error)
 					setBalance(null)
 				}
 				setIsLoadingBalance(false)
 			} else if (message.type === "updateProfileData") {
-				vscode.postMessage({
-					type: "fetchProfileDataRequest",
-				})
-				vscode.postMessage({
-					type: "fetchBalanceDataRequest",
-				})
+				vscode.postMessage({ type: "fetchProfileDataRequest" })
+				vscode.postMessage({ type: "fetchBalanceDataRequest" })
 			}
 		}
 
 		window.addEventListener("message", handleMessage)
-		return () => {
-			window.removeEventListener("message", handleMessage)
-		}
+		return () => window.removeEventListener("message", handleMessage)
 	}, [profileData])
 
 	const user = profileData?.user
+	const isAuthenticated = Boolean(user)
 
 	function handleLogout(): void {
-		console.info("Logging out...", apiConfiguration)
 		vscode.postMessage({
 			type: "upsertApiConfiguration",
 			text: currentApiConfigName,
@@ -90,31 +82,19 @@ const ProfileView: React.FC<ProfileViewProps> = ({ onDone }) => {
 	}
 
 	const creditPackages = [
-		{
-			credits: 20,
-			popular: false,
-		},
-		{
-			credits: 50,
-			popular: true,
-		},
-		{
-			credits: 100,
-			popular: false,
-		},
-		{
-			credits: 200,
-			popular: false,
-		},
+		{ credits: 20, popular: false },
+		{ credits: 50, popular: true },
+		{ credits: 100, popular: false },
+		{ credits: 200, popular: false },
 	]
 
 	const handleBuyCredits = (credits: number) => () => {
 		vscode.postMessage({
 			type: "shopBuyCredits",
 			values: {
-				credits: credits,
-				uriScheme: uriScheme,
-				uiKind: uiKind,
+				credits,
+				uriScheme,
+				uiKind,
 			},
 		})
 	}
@@ -125,52 +105,86 @@ const ProfileView: React.FC<ProfileViewProps> = ({ onDone }) => {
 
 	return (
 		<Tab>
-			<TabHeader className="flex justify-between items-center">
-				<h3 className="text-vscode-foreground m-0">{t("kilocode:profile.title")}</h3>
+			<TabHeader className="flex items-center justify-between">
+				<h3 className="m-0 text-vscode-foreground">{t("kilocode:profile.title")}</h3>
 				<Button onClick={onDone}>{t("settings:common.done")}</Button>
 			</TabHeader>
 			<TabContent>
-				<div className="h-full flex flex-col">
-					<div className="flex-1">
-						{user ? (
-							<div className="flex flex-col pr-3 h-full">
-								<div className="flex flex-col w-full">
-									<div className="flex items-center mb-6 flex-wrap gap-y-4">
-										{user.image ? (
-											<img src={user.image} alt="Profile" className="size-16 rounded-full mr-4" />
+				<div className="h-full overflow-y-auto pr-3">
+					<div className="flex flex-col gap-8 max-w-4xl">
+						<section className="rounded-md border border-[var(--vscode-panel-border)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_94%,transparent)] p-6 shadow-sm">
+							{isAuthenticated ? (
+								<div className="flex flex-col gap-4">
+									<div className="flex items-center gap-4">
+										{user?.image ? (
+											<img src={user.image} alt="Profile" className="size-16 rounded-full" />
 										) : (
-											<div className="size-16 rounded-full bg-[var(--vscode-button-background)] flex items-center justify-center text-2xl text-[var(--vscode-button-foreground)] mr-4">
-												{user.name?.[0] || user.email?.[0] || "?"}
+											<div className="size-16 rounded-full bg-[var(--vscode-button-background)] flex items-center justify-center text-2xl text-[var(--vscode-button-foreground)]">
+												{user?.name?.[0] || user?.email?.[0] || "?"}
 											</div>
 										)}
-
-										<div className="flex flex-col flex-1">
-											{user.name && (
-												<h2 className="text-[var(--vscode-foreground)] m-0 mb-1 text-lg font-medium">
+										<div className="flex flex-col min-w-0">
+											{user?.name && (
+												<h2 className="m-0 text-lg font-medium text-[var(--vscode-foreground)] truncate">
 													{user.name}
 												</h2>
 											)}
-
-											{user.email && (
-												<div className="text-sm text-[var(--vscode-descriptionForeground)]">
+											{user?.email && (
+												<div className="text-sm text-[var(--vscode-descriptionForeground)] break-words">
 													{user.email}
 												</div>
 											)}
 										</div>
 									</div>
 
-									<OrganizationSelector className="mb-6" />
+									<OrganizationSelector className="max-w-xl" />
 								</div>
+							) : (
+								<div className="max-w-xl">
+									<KiloCodeAuth className="w-full" />
+								</div>
+							)}
+						</section>
 
-								<div className="w-full flex gap-2 flex-col min-[225px]:flex-row">
-									<div className="w-full min-[225px]:w-1/2">
-										<VSCodeButtonLink
-											href="https://kilocode.ai/profile"
-											appearance="primary"
-											className="w-full">
-											{t("kilocode:profile.dashboard")}
-										</VSCodeButtonLink>
-									</div>
+						<section className="rounded-md border border-[var(--vscode-panel-border)] bg-[var(--vscode-editor-background)] p-6 shadow-sm">
+							<div className="flex flex-col gap-2">
+								<h2 className="m-0 text-lg font-semibold text-[var(--vscode-foreground)]">
+									{t("kilocode:profile.identityDesignerHeading", {
+										defaultValue: "Identity Designer",
+									})}
+								</h2>
+								<p className="m-0 text-sm text-[var(--vscode-descriptionForeground)]">
+									{t("kilocode:profile.identityDesignerSubheading", {
+										defaultValue:
+											"Define the founder, company story, and employee personas that Golden Workplace should bring into every interaction.",
+									})}
+								</p>
+								<IdentityDesigner />
+							</div>
+						</section>
+
+						<section className="rounded-md border border-[var(--vscode-panel-border)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_96%,transparent)] p-6 shadow-sm flex flex-col gap-3">
+							<h2 className="m-0 text-lg font-semibold text-[var(--vscode-foreground)]">
+								Project Management
+							</h2>
+							<p className="m-0 text-sm text-[var(--vscode-descriptionForeground)]">
+								Launch the Action Workspace to map goals, projects, and tasks across your company, and
+								keep AI employees aligned with human teammates.
+							</p>
+							<Button onClick={() => vscode.postMessage({ type: "switchTab", tab: "workspace" })}>
+								Open Action Workspace
+							</Button>
+						</section>
+
+						{isAuthenticated && (
+							<section className="rounded-md border border-[var(--vscode-panel-border)] bg-[var(--vscode-editor-background)] p-6 shadow-sm flex flex-col gap-6">
+								<div className="flex flex-col gap-2 min-[225px]:flex-row min-[225px]:items-center min-[225px]:justify-between">
+									<VSCodeButtonLink
+										href="https://kilocode.ai/profile"
+										appearance="primary"
+										className="w-full min-[225px]:w-1/2">
+										{t("kilocode:profile.dashboard")}
+									</VSCodeButtonLink>
 									<VSCodeButton
 										appearance="secondary"
 										onClick={handleLogout}
@@ -179,66 +193,61 @@ const ProfileView: React.FC<ProfileViewProps> = ({ onDone }) => {
 									</VSCodeButton>
 								</div>
 
-								<VSCodeDivider className="w-full my-6" />
+								<VSCodeDivider className="w-full" />
 
-								<div className="w-full flex flex-col items-center">
-									<div className="text-sm text-[var(--vscode-descriptionForeground)] mb-3">
+								<div className="flex flex-col items-center gap-4">
+									<div className="text-sm text-[var(--vscode-descriptionForeground)]">
 										{t("kilocode:profile.currentBalance")}
 									</div>
-
-									<div className="text-4xl font-bold text-[var(--vscode-foreground)] mb-6 flex items-center gap-2">
+									<div className="flex items-center gap-2 text-4xl font-bold text-[var(--vscode-foreground)]">
 										{isLoadingBalance ? (
 											<div className="text-[var(--vscode-descriptionForeground)]">
 												{t("kilocode:profile.loading")}
 											</div>
-										) : (
-											balance && (
-												<>
-													<span>$</span>
-													<CountUp end={balance} duration={0.66} decimals={2} />
-													<VSCodeButton
-														appearance="icon"
-														className="mt-1"
-														onClick={() => {
-															setIsLoadingBalance(true)
-															vscode.postMessage({ type: "fetchBalanceDataRequest" })
-														}}>
-														<span className="codicon codicon-refresh"></span>
-													</VSCodeButton>
-												</>
-											)
-										)}
+										) : balance !== null ? (
+											<>
+												<span>$</span>
+												<CountUp end={balance} duration={0.66} decimals={2} />
+												<VSCodeButton
+													appearance="icon"
+													className="mt-[2px]"
+													onClick={() => {
+														setIsLoadingBalance(true)
+														vscode.postMessage({ type: "fetchBalanceDataRequest" })
+													}}>
+													<span className="codicon codicon-refresh" />
+												</VSCodeButton>
+											</>
+										) : null}
 									</div>
 
-									{/* Buy Credits Section - Only show for personal accounts */}
 									{!apiConfiguration?.kilocodeOrganizationId && (
-										<div className="w-full mt-8">
-											<div className="text-lg font-semibold text-[var(--vscode-foreground)] mb-4 text-center">
+										<div className="w-full">
+											<div className="mb-4 text-center text-lg font-semibold text-[var(--vscode-foreground)]">
 												{t("kilocode:profile.shop.title")}
 											</div>
-
-											<div className="grid grid-cols-1 min-[300px]:grid-cols-2 gap-3 mb-6">
+											<div className="grid gap-3 min-[300px]:grid-cols-2">
 												{creditPackages.map((pkg) => (
 													<div
 														key={pkg.credits}
-														className={`relative border rounded-lg p-4 bg-[var(--vscode-editor-background)] transition-all hover:shadow-md ${
+														className={`relative rounded-lg border p-4 transition-all hover:shadow-md ${
 															pkg.popular
 																? "border-[var(--vscode-button-background)] ring-1 ring-[var(--vscode-button-background)]"
 																: "border-[var(--vscode-input-border)]"
 														}`}>
 														{pkg.popular && (
-															<div className="absolute -top-2 left-1/2 transform -translate-x-1/2">
-																<span className="bg-[var(--vscode-button-background)] text-[var(--vscode-button-foreground)] text-xs px-2 py-1 rounded-full font-medium">
+															<div className="absolute -top-2 left-1/2 -translate-x-1/2">
+																<span className="rounded-full bg-[var(--vscode-button-background)] px-2 py-1 text-xs font-medium text-[var(--vscode-button-foreground)]">
 																	{t("kilocode:profile.shop.popular")}
 																</span>
 															</div>
 														)}
 
 														<div className="text-center">
-															<div className="text-2xl font-bold text-[var(--vscode-foreground)] mb-1">
+															<div className="mb-1 text-2xl font-bold text-[var(--vscode-foreground)]">
 																${pkg.credits}
 															</div>
-															<div className="text-sm text-[var(--vscode-descriptionForeground)] mb-2">
+															<div className="mb-2 text-sm text-[var(--vscode-descriptionForeground)]">
 																{t("kilocode:profile.shop.credits")}
 															</div>
 															<VSCodeButton
@@ -263,11 +272,7 @@ const ProfileView: React.FC<ProfileViewProps> = ({ onDone }) => {
 										</div>
 									)}
 								</div>
-							</div>
-						) : (
-							<div className="flex flex-col items-center pr-3">
-								<KiloCodeAuth className="w-full" />
-							</div>
+							</section>
 						)}
 					</div>
 				</div>

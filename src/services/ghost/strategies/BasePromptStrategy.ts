@@ -44,7 +44,13 @@ export abstract class BasePromptStrategy implements PromptStrategy {
 	 * Gets the base system instructions that apply to all strategies
 	 */
 	protected getBaseSystemInstructions(): string {
-		return `CRITICAL OUTPUT FORMAT:
+		const { formattedTimestamp, greetingLabel } = this.getCurrentTimeContext()
+		return `CURRENT USER CONTEXT:
+- Local time: ${formattedTimestamp}
+- Time-of-day greeting: ${greetingLabel}
+- Use this information for any greeting or time-sensitive reasoning.
+
+CRITICAL OUTPUT FORMAT:
 You must respond with XML-formatted changes ONLY. No explanations or text outside XML tags.
 
 Format: <change><search><![CDATA[exact_code]]></search><replace><![CDATA[new_code]]></replace></change>
@@ -78,6 +84,31 @@ EXAMPLE:
 }]]></search><replace><![CDATA[function example() {
 	 // new code
 }]]></replace></change>`
+	}
+
+	private getCurrentTimeContext(): { formattedTimestamp: string; greetingLabel: string } {
+		const now = new Date()
+		const formatter = new Intl.DateTimeFormat("en-US", {
+			weekday: "long",
+			year: "numeric",
+			month: "long",
+			day: "numeric",
+			hour: "numeric",
+			minute: "2-digit",
+			timeZoneName: "short",
+			hour12: true,
+		})
+		const formattedTimestamp = formatter.format(now)
+		const hour = now.getHours()
+		let greetingLabel = "night"
+		if (hour >= 5 && hour < 12) {
+			greetingLabel = "morning"
+		} else if (hour >= 12 && hour < 17) {
+			greetingLabel = "afternoon"
+		} else if (hour >= 17 && hour < 21) {
+			greetingLabel = "evening"
+		}
+		return { formattedTimestamp, greetingLabel: `Good ${greetingLabel}` }
 	}
 
 	/**

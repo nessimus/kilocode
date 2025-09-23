@@ -1,6 +1,6 @@
 import { HTMLAttributes } from "react" // kilocode_change
 import { useAppTranslation } from "@/i18n/TranslationContext"
-import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
+import { VSCodeCheckbox, VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
 import { Bell } from "lucide-react"
 
 import { SetCachedStateField } from "./types"
@@ -18,8 +18,24 @@ type NotificationSettingsProps = HTMLAttributes<HTMLDivElement> & {
 	systemNotificationsEnabled?: boolean // kilocode_change
 	areSettingsCommitted?: boolean // kilocode_change
 	setCachedStateField: SetCachedStateField<
-		"ttsEnabled" | "ttsSpeed" | "soundEnabled" | "soundVolume" | "systemNotificationsEnabled"
+		| "ttsEnabled"
+		| "ttsSpeed"
+		| "soundEnabled"
+		| "soundVolume"
+		| "systemNotificationsEnabled"
+		| "notificationEmail"
+		| "notificationEmailAppPassword"
+		| "notificationSmsNumber"
+		| "notificationSmsGateway"
+		| "notificationTelegramBotToken"
+		| "notificationTelegramChatId"
 	>
+	notificationEmail?: string
+	notificationEmailAppPassword?: string
+	notificationSmsNumber?: string
+	notificationSmsGateway?: string
+	notificationTelegramBotToken?: string
+	notificationTelegramChatId?: string
 }
 
 export const NotificationSettings = ({
@@ -29,6 +45,12 @@ export const NotificationSettings = ({
 	soundVolume,
 	systemNotificationsEnabled, // kilocode_change
 	areSettingsCommitted, // kilocode_change
+	notificationEmail,
+	notificationEmailAppPassword,
+	notificationSmsNumber,
+	notificationSmsGateway,
+	notificationTelegramBotToken,
+	notificationTelegramChatId,
 	setCachedStateField,
 	...props
 }: NotificationSettingsProps) => {
@@ -46,6 +68,24 @@ export const NotificationSettings = ({
 		})
 	}
 	// kilocode_change end
+
+	const hasEmailCredentials = Boolean(notificationEmail && notificationEmailAppPassword)
+	const hasTelegram = Boolean(notificationTelegramBotToken && notificationTelegramChatId)
+	const testButtonDisabled = !(hasEmailCredentials || hasTelegram)
+
+	const handleTestSmsClick = () => {
+		vscode.postMessage({
+			type: "testOutboundNotifications",
+			values: {
+				notificationEmail,
+				notificationEmailAppPassword,
+				notificationSmsNumber,
+				notificationSmsGateway,
+				notificationTelegramBotToken,
+				notificationTelegramChatId,
+			},
+		})
+	}
 
 	return (
 		<div {...props}>
@@ -144,6 +184,118 @@ export const NotificationSettings = ({
 						</Button>
 					</div>
 				)}
+
+				<div className="mt-6 flex flex-col gap-3">
+					<div>
+						<div className="font-medium flex items-center gap-2">
+							{t("settings:notifications.outbound.title")}
+						</div>
+						<div className="text-vscode-descriptionForeground text-sm mt-1">
+							{t("settings:notifications.outbound.description")}
+						</div>
+					</div>
+
+					<div className="flex flex-col gap-2">
+						<label className="block font-medium">{t("settings:notifications.outbound.emailLabel")}</label>
+						<VSCodeTextField
+							value={notificationEmail ?? ""}
+							onInput={(e: any) => setCachedStateField("notificationEmail", e.target.value as string)}
+							placeholder={t("settings:notifications.outbound.emailPlaceholder")}
+							className="w-full"
+						/>
+						<div className="text-vscode-descriptionForeground text-xs">
+							{t("settings:notifications.outbound.emailHelp")}
+						</div>
+					</div>
+
+					<div className="flex flex-col gap-2">
+						<label className="block font-medium">
+							{t("settings:notifications.outbound.appPasswordLabel")}
+						</label>
+						<VSCodeTextField
+							value={notificationEmailAppPassword ?? ""}
+							onInput={(e: any) =>
+								setCachedStateField("notificationEmailAppPassword", e.target.value as string)
+							}
+							placeholder="••••••••••••••••"
+							type="password"
+							className="w-full"
+						/>
+						<div className="text-vscode-descriptionForeground text-xs">
+							{t("settings:notifications.outbound.appPasswordHelp")}
+						</div>
+					</div>
+
+					<div className="grid gap-3 md:grid-cols-2">
+						<div className="flex flex-col gap-2">
+							<label className="block font-medium">{t("settings:notifications.outbound.smsLabel")}</label>
+							<VSCodeTextField
+								value={notificationSmsNumber ?? ""}
+								onInput={(e: any) =>
+									setCachedStateField("notificationSmsNumber", e.target.value as string)
+								}
+								placeholder={t("settings:notifications.outbound.smsPlaceholder")}
+								className="w-full"
+							/>
+						</div>
+						<div className="flex flex-col gap-2">
+							<label className="block font-medium">
+								{t("settings:notifications.outbound.gatewayLabel")}
+							</label>
+							<VSCodeTextField
+								value={notificationSmsGateway ?? ""}
+								onInput={(e: any) =>
+									setCachedStateField("notificationSmsGateway", e.target.value as string)
+								}
+								placeholder={t("settings:notifications.outbound.gatewayPlaceholder")}
+								className="w-full"
+							/>
+						</div>
+					</div>
+					<div className="text-vscode-descriptionForeground text-xs">
+						{t("settings:notifications.outbound.smsHelp")}
+					</div>
+
+					<Button
+						onClick={handleTestSmsClick}
+						disabled={testButtonDisabled}
+						className="w-fit text-vscode-button-background hover:text-vscode-button-hoverBackground">
+						{t("settings:notifications.outbound.testButton")}
+					</Button>
+					{testButtonDisabled && (
+						<div className="text-vscode-descriptionForeground text-xs">
+							{t("settings:notifications.outbound.testHint")}
+						</div>
+					)}
+
+					<div className="h-px bg-vscode-settings-focusedRowBorder" />
+
+					<div className="flex flex-col gap-2">
+						<label className="block font-medium">
+							{t("settings:notifications.outbound.telegramLabel")}
+						</label>
+						<div className="text-vscode-descriptionForeground text-xs">
+							{t("settings:notifications.outbound.telegramDescription")}
+						</div>
+						<VSCodeTextField
+							value={notificationTelegramBotToken ?? ""}
+							onInput={(e: any) =>
+								setCachedStateField("notificationTelegramBotToken", e.target.value as string)
+							}
+							placeholder={t("settings:notifications.outbound.telegramTokenPlaceholder")}
+							type="password"
+							className="w-full"
+						/>
+						<VSCodeTextField
+							value={notificationTelegramChatId ?? ""}
+							onInput={(e: any) =>
+								setCachedStateField("notificationTelegramChatId", e.target.value as string)
+							}
+							placeholder={t("settings:notifications.outbound.telegramChatPlaceholder")}
+							className="w-full"
+						/>
+					</div>
+				</div>
 				{/* kilocode_change end */}
 			</Section>
 		</div>

@@ -40,7 +40,7 @@ describe("getToolUseGuidelinesSection", () => {
 			expect(guidelines).toContain("4. If multiple actions are needed")
 			expect(guidelines).toContain("5. Formulate your tool use")
 			expect(guidelines).toContain("6. After each tool use")
-			expect(guidelines).toContain("7. ALWAYS wait for user confirmation")
+			expect(guidelines).toContain("7. Move work forward autonomously.")
 		})
 	})
 
@@ -64,7 +64,7 @@ describe("getToolUseGuidelinesSection", () => {
 			expect(guidelines).toContain("3. If multiple actions are needed")
 			expect(guidelines).toContain("4. Formulate your tool use")
 			expect(guidelines).toContain("5. After each tool use")
-			expect(guidelines).toContain("6. ALWAYS wait for user confirmation")
+			expect(guidelines).toContain("6. Move work forward autonomously.")
 		})
 	})
 

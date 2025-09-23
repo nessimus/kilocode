@@ -6,8 +6,6 @@ import { SEO } from "@/lib/seo"
 
 import { Providers } from "@/components/providers"
 
-import Shell from "./shell"
-
 import "./globals.css"
 
 const inter = Inter({ subsets: ["latin"] })
@@ -107,9 +105,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 					<link itemProp="url" href={SEO.url} />
 					<meta itemProp="name" content={SEO.name} />
 				</div>
-				<Providers>
-					<Shell>{children}</Shell>
-				</Providers>
+				<Providers>{children}</Providers>
 			</body>
 		</html>
 	)

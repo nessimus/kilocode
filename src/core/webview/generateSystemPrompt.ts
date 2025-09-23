@@ -1,5 +1,6 @@
 import * as vscode from "vscode"
 import { WebviewMessage } from "../../shared/WebviewMessage"
+import type { BrowserInteractionStrategy } from "../../shared/browser"
 import { defaultModeSlug, getModeBySlug, getGroupName } from "../../shared/modes"
 import { buildApiHandler } from "../../api"
 import { experiments as experimentsModule, EXPERIMENT_IDS } from "../../shared/experiments"
@@ -67,6 +68,14 @@ export const generateSystemPrompt = async (provider: ClineProvider, message: Web
 	// and browser tools are enabled in settings
 	const canUseBrowserTool = modelSupportsComputerUse && modeSupportsBrowser && (browserToolEnabled ?? true)
 
+	console.log("[generateSystemPrompt] invoking SYSTEM_PROMPT", {
+		mode,
+		activeCompanyId: state.workplaceState?.activeCompanyId,
+		activeEmployeeId: state.workplaceState?.activeEmployeeId,
+		companyCount: state.workplaceState?.companies?.length ?? 0,
+		companyNames: state.workplaceState?.companies?.map((company) => company.name) ?? [],
+	})
+
 	const systemPrompt = await SYSTEM_PROMPT(
 		provider.context,
 		cwd,
@@ -99,5 +108,18 @@ export const generateSystemPrompt = async (provider: ClineProvider, message: Web
 		// kilocode_change end
 	)
 
-	return systemPrompt
+	const interactionStrategy: BrowserInteractionStrategy =
+		(state.browserInteractionStrategy as BrowserInteractionStrategy | undefined) ?? "legacy"
+
+	const strategyDescriptions: Record<BrowserInteractionStrategy, string> = {
+		legacy: "Use the built-in planner to decide each browser action step-by-step.",
+		venus_navi: "Delegate element selection and sequencing to UI Venus Navi for efficient guided navigation.",
+		venus_ground: "Allow UI Venus Ground to execute autonomous multi-step UI policies when appropriate.",
+	}
+
+	const strategyPrompt = `## browser_interaction_strategy\n- Active strategy: ${interactionStrategy}\n- ${
+		strategyDescriptions[interactionStrategy]
+	} \n- Continuous screencast streaming is available; maintain long-horizon plans without waiting for individual screenshots.`
+
+	return `${systemPrompt}\n\n${strategyPrompt}`
 }

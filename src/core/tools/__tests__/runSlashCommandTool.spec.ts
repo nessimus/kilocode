@@ -3,11 +3,21 @@ import { runSlashCommandTool } from "../runSlashCommandTool"
 import { Task } from "../../task/Task"
 import { formatResponse } from "../../prompts/responses"
 import { getCommand, getCommandNames } from "../../../services/command/commands"
+import { refreshWorkflowToggles } from "../../context/instructions/workflows"
+import { readFile } from "fs/promises"
 
 // Mock dependencies
 vi.mock("../../../services/command/commands", () => ({
 	getCommand: vi.fn(),
 	getCommandNames: vi.fn(),
+}))
+
+vi.mock("../../context/instructions/workflows", () => ({
+	refreshWorkflowToggles: vi.fn(),
+}))
+
+vi.mock("fs/promises", () => ({
+	readFile: vi.fn(),
 }))
 
 describe("runSlashCommandTool", () => {
@@ -90,7 +100,9 @@ describe("runSlashCommandTool", () => {
 
 		expect(mockTask.recordToolError).toHaveBeenCalledWith("run_slash_command")
 		expect(mockPushToolResult).toHaveBeenCalledWith(
-			formatResponse.toolError("Command 'nonexistent' not found. Available commands: init, test, deploy"),
+			formatResponse.toolError(
+				"Standard Operating Procedure 'nonexistent' not found. Document SOPs: init, test, deploy. Workflow SOPs: (none).",
+			),
 		)
 	})
 
@@ -125,6 +137,18 @@ describe("runSlashCommandTool", () => {
 		)
 
 		expect(mockAskApproval).toHaveBeenCalled()
+		const askArgs = mockAskApproval.mock.calls[0]
+		expect(askArgs[0]).toBe("tool")
+		expect(() => JSON.parse(askArgs[1])).not.toThrow()
+		const parsed = JSON.parse(askArgs[1])
+		expect(parsed).toMatchObject({
+			tool: "runSlashCommand",
+			command: "init",
+			sop: "init",
+			sop_variant: "document",
+			source: "built-in",
+			description: "Initialize the project",
+		})
 		expect(mockPushToolResult).not.toHaveBeenCalled()
 	})
 
@@ -157,25 +181,30 @@ describe("runSlashCommandTool", () => {
 			mockRemoveClosingTag,
 		)
 
-		expect(mockAskApproval).toHaveBeenCalledWith(
-			"tool",
-			JSON.stringify({
-				tool: "runSlashCommand",
-				command: "init",
-				args: undefined,
-				source: "built-in",
-				description: "Analyze codebase and create AGENTS.md",
-			}),
-		)
+		expect(mockAskApproval).toHaveBeenCalled()
+		const askCall = mockAskApproval.mock.calls[0]
+		expect(askCall[0]).toBe("tool")
+		const askPayload = JSON.parse(askCall[1])
+		expect(askPayload).toMatchObject({
+			tool: "runSlashCommand",
+			command: "init",
+			sop_variant: "document",
+			source: "built-in",
+			description: "Analyze codebase and create AGENTS.md",
+			filePath: "<built-in:init>",
+		})
 
 		expect(mockPushToolResult).toHaveBeenCalledWith(
-			`Command: /init
-Description: Analyze codebase and create AGENTS.md
+			`Standard Operating Procedure: init
+Type: Loose document guidance
 Source: built-in
+Summary: Analyze codebase and create AGENTS.md
 
---- Command Content ---
+--- Document Guidance ---
 
-Initialize project content here`,
+Initialize project content here
+
+Use this document as a reference and narrate how each step applies to the current task.`,
 		)
 	})
 
@@ -210,16 +239,29 @@ Initialize project content here`,
 			mockRemoveClosingTag,
 		)
 
+		expect(mockAskApproval).toHaveBeenCalled()
+		const approvalArgs = mockAskApproval.mock.calls[0]
+		const approvalJson = JSON.parse(approvalArgs[1])
+		expect(approvalJson).toMatchObject({
+			command: "test",
+			sop_variant: "document",
+			args: "focus on unit tests",
+			argumentHint: "test type or focus area",
+		})
+
 		expect(mockPushToolResult).toHaveBeenCalledWith(
-			`Command: /test
-Description: Run project tests
-Argument hint: test type or focus area
-Provided arguments: focus on unit tests
+			`Standard Operating Procedure: test
+Type: Loose document guidance
 Source: project
+Summary: Run project tests
+Usage hint: test type or focus area
+Context provided: focus on unit tests
 
---- Command Content ---
+--- Document Guidance ---
 
-Run tests with specific focus`,
+Run tests with specific focus
+
+Use this document as a reference and narrate how each step applies to the current task.`,
 		)
 	})
 
@@ -252,12 +294,66 @@ Run tests with specific focus`,
 		)
 
 		expect(mockPushToolResult).toHaveBeenCalledWith(
-			`Command: /deploy
+			`Standard Operating Procedure: deploy
+Type: Loose document guidance
 Source: global
 
---- Command Content ---
+--- Document Guidance ---
 
-Deploy application to production`,
+Deploy application to production
+
+Use this document as a reference and narrate how each step applies to the current task.`,
+		)
+	})
+
+	it("should resolve workflow SOP when document is missing", async () => {
+		const block = {
+			type: "tool_use" as const,
+			name: "run_slash_command" as const,
+			params: {
+				command: "publish",
+				args: "release v1.0",
+			},
+			partial: false,
+		}
+
+		vi.mocked(getCommand).mockResolvedValue(undefined)
+		vi.mocked(getCommandNames).mockResolvedValue([])
+		const workflowPath = "/tmp/.kilocode/workflows/publish.workflow.json"
+		vi.mocked(refreshWorkflowToggles).mockResolvedValue({
+			localWorkflowToggles: { [workflowPath]: true },
+			globalWorkflowToggles: {},
+		})
+		vi.mocked(readFile).mockResolvedValue("node1 -> node2")
+		mockTask.providerRef.deref.mockReturnValue({
+			getState: vi.fn().mockResolvedValue({
+				experiments: {
+					runSlashCommand: true,
+				},
+			}),
+			context: {} as any,
+		})
+
+		await runSlashCommandTool(
+			mockTask as Task,
+			block,
+			mockAskApproval,
+			mockHandleError,
+			mockPushToolResult,
+			mockRemoveClosingTag,
+		)
+
+		expect(mockPushToolResult).toHaveBeenCalledWith(
+			`Standard Operating Procedure: publish.workflow.json
+Type: Strict workflow SOP
+Source: project workflow
+Context provided: release v1.0
+
+--- Workflow Definition ---
+
+node1 -> node2
+
+Follow this workflow sequentially, honoring each node's inputs and outputs before advancing.`,
 		)
 	})
 
@@ -280,15 +376,17 @@ Deploy application to production`,
 			mockRemoveClosingTag,
 		)
 
-		expect(mockTask.ask).toHaveBeenCalledWith(
-			"tool",
-			JSON.stringify({
-				tool: "runSlashCommand",
-				command: "init",
-				args: "",
-			}),
-			true,
-		)
+		expect(mockTask.ask).toHaveBeenCalled()
+		const partialArgs = mockTask.ask.mock.calls[0]
+		expect(partialArgs[0]).toBe("tool")
+		const partialPayload = JSON.parse(partialArgs[1])
+		expect(partialPayload).toMatchObject({
+			tool: "runSlashCommand",
+			command: "init",
+			sop: "init",
+			args: "",
+		})
+		expect(partialArgs[2]).toBe(true)
 
 		expect(mockPushToolResult).not.toHaveBeenCalled()
 	})

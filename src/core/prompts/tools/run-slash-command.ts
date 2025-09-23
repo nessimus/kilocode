@@ -3,30 +3,30 @@
  */
 export function getRunSlashCommandDescription(): string {
 	return `## run_slash_command
-Description: Execute a slash command to get specific instructions or content. Slash commands are predefined templates that provide detailed guidance for common tasks.
+Description: Retrieve a Standard Operating Procedure (SOP) for the current task. SOPs come in two styles: loose document guidance and strict workflow runbooks. Use this before starting any substantial or repeatable action to check for existing playbooks.
 
 Parameters:
-- command: (required) The name of the slash command to execute (e.g., "init", "test", "deploy")
-- args: (optional) Additional arguments or context to pass to the command
+- command: (required) The SOP name or slug (e.g., "init", "publish-release", "deploy.workflow")
+- args: (optional) Scenario-specific context the SOP should account for
 
 Usage:
 <run_slash_command>
-<command>command_name</command>
-<args>optional arguments</args>
+<command>sop_name</command>
+<args>optional scenario details</args>
 </run_slash_command>
 
 Examples:
 
-1. Running the init command to analyze a codebase:
+1. Loading a document SOP to analyze a codebase:
 <run_slash_command>
 <command>init</command>
 </run_slash_command>
 
-2. Running a command with additional context:
+2. Loading a strict workflow SOP with extra context:
 <run_slash_command>
-<command>test</command>
-<args>focus on integration tests</args>
+<command>deploy</command>
+<args>target environment: staging</args>
 </run_slash_command>
 
-The command content will be returned for you to execute or follow as instructions.`
+The SOP content will be returned with its type, source, and guidance so you can follow or narrate each step.`
 }

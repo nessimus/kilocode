@@ -27,12 +27,16 @@ export async function getCommands(cwd: string): Promise<Command[]> {
 	}
 
 	// Scan global commands (override built-in)
-	const globalDir = path.join(getGlobalRooDirectory(), "commands")
-	await scanCommandDirectory(globalDir, "global", commands)
+	const globalCommandsDir = path.join(getGlobalRooDirectory(), "commands")
+	await scanCommandDirectory(globalCommandsDir, "global", commands)
+	const globalSopsDir = path.join(getGlobalRooDirectory(), "sops")
+	await scanCommandDirectory(globalSopsDir, "global", commands)
 
 	// Scan project commands (highest priority - override both global and built-in)
-	const projectDir = path.join(getProjectRooDirectoryForCwd(cwd), "commands")
-	await scanCommandDirectory(projectDir, "project", commands)
+	const projectCommandsDir = path.join(getProjectRooDirectoryForCwd(cwd), "commands")
+	await scanCommandDirectory(projectCommandsDir, "project", commands)
+	const projectSopsDir = path.join(getProjectRooDirectoryForCwd(cwd), "sops")
+	await scanCommandDirectory(projectSopsDir, "project", commands)
 
 	return Array.from(commands.values())
 }
@@ -43,17 +47,22 @@ export async function getCommands(cwd: string): Promise<Command[]> {
  */
 export async function getCommand(cwd: string, name: string): Promise<Command | undefined> {
 	// Try to find the command directly without scanning all commands
-	const projectDir = path.join(getProjectRooDirectoryForCwd(cwd), "commands")
+	const projectCommandsDir = path.join(getProjectRooDirectoryForCwd(cwd), "commands")
+	const projectSopsDir = path.join(getProjectRooDirectoryForCwd(cwd), "sops")
 	const globalDir = path.join(getGlobalRooDirectory(), "commands")
+	const globalSopsDir = path.join(getGlobalRooDirectory(), "sops")
 
 	// Check project directory first (highest priority)
-	const projectCommand = await tryLoadCommand(projectDir, name, "project")
+	const projectCommand =
+		(await tryLoadCommand(projectSopsDir, name, "project")) ??
+		(await tryLoadCommand(projectCommandsDir, name, "project"))
 	if (projectCommand) {
 		return projectCommand
 	}
 
 	// Check global directory if not found in project
-	const globalCommand = await tryLoadCommand(globalDir, name, "global")
+	const globalCommand =
+		(await tryLoadCommand(globalSopsDir, name, "global")) ?? (await tryLoadCommand(globalDir, name, "global"))
 	if (globalCommand) {
 		return globalCommand
 	}

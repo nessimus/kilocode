@@ -1,0 +1,27 @@
+{
+	"version": "7",
+	"dialect": "postgresql",
+	"entries": [
+		{
+			"idx": 0,
+			"version": "7",
+			"when": 1758653348144,
+			"tag": "0000_flippant_meggan",
+			"breakpoints": true
+		},
+		{
+			"idx": 1,
+			"version": "7",
+			"when": 1758653348145,
+			"tag": "0001_calm_digest_keeper",
+			"breakpoints": true
+		},
+		{
+			"idx": 2,
+			"version": "7",
+			"when": 1758656877876,
+			"tag": "0002_misty_piledriver",
+			"breakpoints": true
+		}
+	]
+}

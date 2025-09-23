@@ -48,11 +48,16 @@ import * as vscode from "vscode"
 import { ModeConfig } from "@roo-code/types"
 
 import { SYSTEM_PROMPT } from "../system"
+import * as systemModule from "../system"
+import * as customSystemPrompt from "../sections/custom-system-prompt"
 import { McpHub } from "../../../services/mcp/McpHub"
 import { defaultModeSlug, modes, Mode } from "../../../shared/modes"
 import "../../../utils/path"
 import { addCustomInstructions } from "../sections/custom-instructions"
 import { MultiSearchReplaceDiffStrategy } from "../../diff/strategies/multi-search-replace"
+import type { ClineProviderState } from "../../webview/ClineProvider"
+import { createDefaultActionStatuses } from "../../../shared/golden/workplace"
+import type { WorkplaceCompany, WorkplaceEmployee, WorkplaceState } from "../../../shared/golden/workplace"
 
 // Mock the sections
 vi.mock("../sections/modes", () => ({
@@ -670,6 +675,188 @@ describe("SYSTEM_PROMPT", () => {
 
 		expect(prompt).toContain("update_todo_list")
 		expect(prompt).toContain("## update_todo_list")
+	})
+
+	it("should use active workplace company when interpolating companyName for file prompts", async () => {
+		const timestamp = "2025-01-01T00:00:00.000Z"
+		const employee: WorkplaceEmployee = {
+			id: "employee-1",
+			name: "Jamie Example",
+			role: "CEO",
+			createdAt: timestamp,
+			updatedAt: timestamp,
+		}
+		const companyName = "Workspace Corp"
+		const company: WorkplaceCompany = {
+			id: "company-1",
+			name: companyName,
+			mission: undefined,
+			vision: undefined,
+			createdAt: timestamp,
+			updatedAt: timestamp,
+			executiveManagerId: employee.id,
+			activeEmployeeId: employee.id,
+			employees: [employee],
+			departments: [],
+			teams: [],
+			actionStatuses: createDefaultActionStatuses(),
+			actionItems: [],
+			actionRelations: [],
+			ownerProfile: { name: "", role: "Owner & CEO" },
+		}
+		const workplaceState: WorkplaceState = {
+			companies: [company],
+			activeCompanyId: company.id,
+			activeEmployeeId: employee.id,
+		}
+		const clineProviderState = { workplaceState } as unknown as ClineProviderState
+		const loadSystemPromptFileSpy = vi
+			.spyOn(customSystemPrompt, "loadSystemPromptFile")
+			.mockImplementation(async (_cwd, _mode, variables) => `Company: ${variables.companyName}`)
+
+		try {
+			const prompt = await SYSTEM_PROMPT(
+				mockContext,
+				"/test/path",
+				false, // supportsComputerUse
+				undefined, // mcpHub
+				undefined, // diffStrategy
+				undefined, // browserViewportSize
+				defaultModeSlug, // mode
+				undefined, // customModePrompts
+				undefined, // customModes
+				undefined, // globalCustomInstructions
+				undefined, // diffEnabled
+				experiments,
+				true, // enableMcpServerCreation
+				undefined, // language
+				undefined, // rooIgnoreInstructions
+				undefined, // partialReadsEnabled
+				undefined, // settings
+				undefined, // todoList
+				undefined, // modelId
+				clineProviderState,
+			)
+
+			expect(loadSystemPromptFileSpy).toHaveBeenCalledOnce()
+			const variables = loadSystemPromptFileSpy.mock.calls[0][2]
+			expect(variables.companyName).toBe(companyName)
+			expect(prompt).toContain(`Company: ${companyName}`)
+		} finally {
+			loadSystemPromptFileSpy.mockRestore()
+		}
+	})
+
+	it("should handle missing workplace state when interpolating companyName", async () => {
+		const loadSystemPromptFileSpy = vi
+			.spyOn(customSystemPrompt, "loadSystemPromptFile")
+			.mockImplementation(async (_cwd, _mode, variables) => `Company: ${variables.companyName ?? "none"}`)
+
+		try {
+			const prompt = await SYSTEM_PROMPT(
+				mockContext,
+				"/test/path",
+				false, // supportsComputerUse
+				undefined, // mcpHub
+				undefined, // diffStrategy
+				undefined, // browserViewportSize
+				defaultModeSlug, // mode
+				undefined, // customModePrompts
+				undefined, // customModes
+				undefined, // globalCustomInstructions
+				undefined, // diffEnabled
+				experiments,
+				true, // enableMcpServerCreation
+				undefined, // language
+				undefined, // rooIgnoreInstructions
+				undefined, // partialReadsEnabled
+				undefined, // settings
+				undefined, // todoList
+				undefined, // modelId
+				undefined, // clineProviderState
+			)
+
+			expect(loadSystemPromptFileSpy).toHaveBeenCalledOnce()
+			const variables = loadSystemPromptFileSpy.mock.calls[0][2]
+			expect(variables.companyName).toBeUndefined()
+			expect(prompt).toContain("Company: none")
+		} finally {
+			loadSystemPromptFileSpy.mockRestore()
+		}
+	})
+
+	it("should fall back to persona company name when workplace state lacks active company", async () => {
+		const timestamp = "2025-01-01T00:00:00.000Z"
+		const personaEmployee: WorkplaceEmployee = {
+			id: "persona-employee",
+			name: "Taylor Persona",
+			role: "Operator",
+			createdAt: timestamp,
+			updatedAt: timestamp,
+		}
+		const personaCompanyName = "Persona Fallback Inc"
+		const personaCompany: WorkplaceCompany = {
+			id: "persona-company",
+			name: personaCompanyName,
+			mission: undefined,
+			vision: undefined,
+			createdAt: timestamp,
+			updatedAt: timestamp,
+			executiveManagerId: personaEmployee.id,
+			activeEmployeeId: personaEmployee.id,
+			employees: [personaEmployee],
+			departments: [],
+			teams: [],
+			actionStatuses: createDefaultActionStatuses(),
+			actionItems: [],
+			actionRelations: [],
+			ownerProfile: { name: "", role: "Owner & CEO" },
+		}
+		const loadSystemPromptFileSpy = vi
+			.spyOn(customSystemPrompt, "loadSystemPromptFile")
+			.mockImplementation(async (_cwd, _mode, variables) => `Company: ${variables.companyName}`)
+		systemModule.__setResolveActiveCompanyNameForTests(() => undefined)
+		systemModule.__setResolveWorkplacePersonaForTests(
+			() =>
+				({
+					company: personaCompany,
+					employee: personaEmployee,
+				}) as any,
+		)
+
+		try {
+			const prompt = await SYSTEM_PROMPT(
+				mockContext,
+				"/test/path",
+				false, // supportsComputerUse
+				undefined, // mcpHub
+				undefined, // diffStrategy
+				undefined, // browserViewportSize
+				defaultModeSlug, // mode
+				undefined, // customModePrompts
+				undefined, // customModes
+				undefined, // globalCustomInstructions
+				undefined, // diffEnabled
+				experiments,
+				true, // enableMcpServerCreation
+				undefined, // language
+				undefined, // rooIgnoreInstructions
+				undefined, // partialReadsEnabled
+				undefined, // settings
+				undefined, // todoList
+				undefined, // modelId
+				undefined, // clineProviderState
+			)
+
+			expect(loadSystemPromptFileSpy).toHaveBeenCalledOnce()
+			const variables = loadSystemPromptFileSpy.mock.calls[0][2]
+			expect(variables.companyName).toBe(personaCompanyName)
+			expect(prompt).toContain(`Company: ${personaCompanyName}`)
+		} finally {
+			loadSystemPromptFileSpy.mockRestore()
+			systemModule.__setResolveActiveCompanyNameForTests()
+			systemModule.__setResolveWorkplacePersonaForTests()
+		}
 	})
 
 	afterAll(() => {

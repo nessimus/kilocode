@@ -1,0 +1,195 @@
+.avatar {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 1.75rem;
+	height: 1.75rem;
+	border-radius: 9999px;
+	font-size: 0.75rem;
+	font-weight: 600;
+	color: var(--vscode-foreground);
+	background-color: var(--vscode-editorInfo-foreground);
+}
+
+.message {
+	border-left-width: 3px;
+	border-left-style: solid;
+	padding: 0.75rem 0.85rem;
+	border-radius: 0.25rem;
+	background-color: color-mix(
+		in srgb,
+		var(--vscode-editor-background) 90%,
+		var(--vscode-editor-selectionHighlightBackground)
+	);
+	color: var(--vscode-editor-foreground);
+	white-space: pre-wrap;
+	word-break: break-word;
+	font-size: 0.875rem;
+	line-height: 1.4;
+}
+
+.messageError {
+	background-color: color-mix(in srgb, var(--vscode-inputValidation-errorBackground) 65%, transparent);
+	color: var(--vscode-inputValidation-errorForeground);
+	border-left-color: var(--vscode-inputValidation-errorBorder) !important;
+}
+
+.integrationsRoot {
+	display: flex;
+	flex-direction: column;
+	gap: 1.25rem;
+	padding: 1.25rem;
+	height: 100%;
+	box-sizing: border-box;
+	overflow-y: auto;
+}
+
+.integrationsBackBar {
+	display: flex;
+	justify-content: flex-end;
+	gap: 0.5rem;
+}
+
+.integrationsTitle {
+	margin: 0;
+	font-size: 1.1rem;
+	font-weight: 600;
+	color: var(--vscode-editor-foreground);
+}
+
+.integrationsDescription {
+	margin: 0.25rem 0 0;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 70%, transparent);
+	font-size: 0.85rem;
+	line-height: 1.4;
+}
+
+.integrationGrid {
+	display: grid;
+	gap: 1rem;
+	grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.integrationCard {
+	display: flex;
+	flex-direction: column;
+	gap: 0.75rem;
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 0.5rem;
+	padding: 1rem;
+	background: color-mix(
+		in srgb,
+		var(--vscode-editor-background) 92%,
+		var(--vscode-editor-selectionHighlightBackground) 8%
+	);
+	box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
+}
+
+.integrationHeader {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 0.75rem;
+}
+
+.integrationTitle {
+	margin: 0;
+	font-size: 1rem;
+	font-weight: 600;
+	color: var(--vscode-editor-foreground);
+}
+
+.integrationSubtitle {
+	margin: 0.25rem 0 0;
+	font-size: 0.85rem;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 68%, transparent);
+	line-height: 1.45;
+}
+
+.integrationStatus {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0.25rem 0.6rem;
+	border-radius: 9999px;
+	text-transform: uppercase;
+	font-size: 0.65rem;
+	font-weight: 600;
+	letter-spacing: 0.08em;
+}
+
+.integrationStatusConnected {
+	background: color-mix(in srgb, var(--vscode-testing-iconPassed) 28%, transparent);
+	color: var(--vscode-testing-iconPassed);
+	border: 1px solid color-mix(in srgb, var(--vscode-testing-iconPassed) 55%, transparent);
+}
+
+.integrationStatusPending {
+	background: color-mix(in srgb, var(--vscode-editor-foreground) 12%, transparent);
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 75%, transparent);
+	border: 1px solid color-mix(in srgb, var(--vscode-editor-foreground) 20%, transparent);
+}
+
+.integrationStatusError {
+	background: color-mix(in srgb, var(--vscode-inputValidation-errorBackground) 80%, transparent);
+	color: var(--vscode-inputValidation-errorForeground);
+	border: 1px solid var(--vscode-inputValidation-errorBorder);
+}
+
+.integrationActions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+}
+
+.integrationForm {
+	display: flex;
+	flex-direction: column;
+	gap: 0.75rem;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 70%, transparent);
+	border-radius: 0.5rem;
+	padding: 0.75rem;
+	background: color-mix(
+		in srgb,
+		var(--vscode-editor-background) 88%,
+		var(--vscode-editor-selectionHighlightBackground) 12%
+	);
+}
+
+.integrationFormRow {
+	display: flex;
+	flex-direction: column;
+	gap: 0.35rem;
+}
+
+.integrationFormRow label {
+	font-size: 0.8rem;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 78%, transparent);
+}
+
+.integrationFormRowInline {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+	gap: 0.6rem;
+}
+
+.integrationFormButtons {
+	display: flex;
+	gap: 0.5rem;
+	justify-content: flex-start;
+}
+
+.integrationError {
+	margin: 0;
+	padding: 0.5rem 0.65rem;
+	border-radius: 0.4rem;
+	font-size: 0.8rem;
+	background: color-mix(in srgb, var(--vscode-inputValidation-errorBackground) 70%, transparent);
+	color: var(--vscode-inputValidation-errorForeground);
+}
+
+.sectionToggle {
+	display: flex;
+	gap: 0.5rem;
+	padding: 0.75rem 1rem 0;
+}

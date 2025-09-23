@@ -142,15 +142,40 @@ export const ChatRowContent = ({
 		onToggleExpand(message.ts)
 	}, [onToggleExpand, message.ts])
 
+	const [copiedSection, setCopiedSection] = useState<string | null>(null)
+
 	// kilocode_change: usageMissing
-	const [cost, usageMissing, apiReqCancelReason, apiReqStreamingFailedMessage, apiRequestPreview] = useMemo(() => {
+	const [
+		cost,
+		usageMissing,
+		apiReqCancelReason,
+		apiReqStreamingFailedMessage,
+		apiRequestPreview,
+		apiRequestSystemPrompt,
+	] = useMemo(() => {
 		if (message.text !== null && message.text !== undefined && message.say === "api_req_started") {
 			const info = safeJsonParse<ClineApiReqInfo>(message.text)
-			return [info?.cost, info?.usageMissing, info?.cancelReason, info?.streamingFailedMessage, info?.request]
+			return [
+				info?.cost,
+				info?.usageMissing,
+				info?.cancelReason,
+				info?.streamingFailedMessage,
+				info?.request,
+				info?.systemPrompt,
+			]
 		}
 
-		return [undefined, undefined, undefined, undefined, undefined]
+		return [undefined, undefined, undefined, undefined, undefined, undefined]
 	}, [message.text, message.say])
+
+	useEffect(() => {
+		if (!copiedSection) {
+			return
+		}
+
+		const timeout = setTimeout(() => setCopiedSection(null), 1200)
+		return () => clearTimeout(timeout)
+	}, [copiedSection])
 
 	// When resuming task, last wont be api_req_failed but a resume_task
 	// message, so api_req_started will show loading spinner. That's why we just
@@ -167,13 +192,50 @@ export const ChatRowContent = ({
 
 	const type = message.type === "ask" ? message.ask : message.say
 
-	const formattedApiRequestPreview = useMemo(() => {
-		if (typeof apiRequestPreview === "string") {
-			const trimmed = apiRequestPreview.trim()
-			return trimmed.length > 0 ? trimmed : undefined
+	const apiRequestSections = useMemo(() => {
+		const sections: Array<{
+			title: string
+			content: string
+			key: string
+		}> = []
+
+		const appendSection = (key: string, title: string, content?: string | null) => {
+			if (typeof content !== "string") {
+				return
+			}
+
+			const trimmed = content.trim()
+			if (!trimmed) {
+				return
+			}
+
+			sections.push({ key, title, content: trimmed })
 		}
-		return undefined
-	}, [apiRequestPreview])
+
+		appendSection(
+			"systemPrompt",
+			t("chat:apiRequest.systemPromptLabel", { defaultValue: "System Prompt" }),
+			apiRequestSystemPrompt,
+		)
+		appendSection(
+			"requestPayload",
+			t("chat:apiRequest.requestPayloadLabel", { defaultValue: "Request Payload" }),
+			apiRequestPreview,
+		)
+
+		return sections
+	}, [apiRequestPreview, apiRequestSystemPrompt, t])
+
+	const handleCopySection = useCallback(
+		(content: string, key: string) => (event: React.MouseEvent) => {
+			copyWithFeedback(content, event).then((success) => {
+				if (success) {
+					setCopiedSection(key)
+				}
+			})
+		},
+		[copyWithFeedback],
+	)
 
 	const normalColor = "var(--vscode-foreground)"
 	const errorColor = "var(--vscode-errorForeground)"
@@ -829,7 +891,16 @@ export const ChatRowContent = ({
 					</>
 				)
 			case "runSlashCommand": {
-				const slashCommandInfo = tool
+				const sopInfo = tool as Record<string, any>
+				const displayName =
+					sopInfo.displayName || sopInfo.command || sopInfo.sop || "standard-operating-procedure"
+				const slug = sopInfo.command || sopInfo.sop
+				const variant = (sopInfo.variant || sopInfo.sopVariant || sopInfo.sop_variant) as
+					| "document"
+					| "workflow"
+					| undefined
+				const variantLabel = variant === "workflow" ? "Strict workflow SOP" : "Document SOP"
+
 				return (
 					<>
 						<div style={headerStyle}>
@@ -857,19 +928,24 @@ export const ChatRowContent = ({
 									justifyContent: "space-between",
 									padding: "10px 12px",
 								}}>
-								<div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+								<div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
 									<span style={{ fontWeight: "500", fontSize: "var(--vscode-font-size)" }}>
-										/{slashCommandInfo.command}
+										{displayName}
 									</span>
-									{slashCommandInfo.source && (
+									{variantLabel && (
 										<VSCodeBadge style={{ fontSize: "calc(var(--vscode-font-size) - 2px)" }}>
-											{slashCommandInfo.source}
+											{variantLabel}
+										</VSCodeBadge>
+									)}
+									{sopInfo.source && (
+										<VSCodeBadge style={{ fontSize: "calc(var(--vscode-font-size) - 2px)" }}>
+											{sopInfo.source}
 										</VSCodeBadge>
 									)}
 								</div>
 								<span className={`codicon codicon-chevron-${isExpanded ? "up" : "down"}`}></span>
 							</ToolUseBlockHeader>
-							{isExpanded && (slashCommandInfo.args || slashCommandInfo.description) && (
+							{isExpanded && (
 								<div
 									style={{
 										padding: "12px 16px",
@@ -878,21 +954,97 @@ export const ChatRowContent = ({
 										flexDirection: "column",
 										gap: "8px",
 									}}>
-									{slashCommandInfo.args && (
+									{slug && (
 										<div>
-											<span style={{ fontWeight: "500" }}>Arguments: </span>
+											<span style={{ fontWeight: "500" }}>SOP slug:</span> <code>/{slug}</code>
+										</div>
+									)}
+									{sopInfo.description && (
+										<div>
+											<span style={{ fontWeight: "500" }}>{t("common:description")}:</span>{" "}
 											<span style={{ color: "var(--vscode-descriptionForeground)" }}>
-												{slashCommandInfo.args}
+												{sopInfo.description}
 											</span>
 										</div>
 									)}
-									{slashCommandInfo.description && (
-										<div style={{ color: "var(--vscode-descriptionForeground)" }}>
-											{slashCommandInfo.description}
+									{sopInfo.argumentHint && (
+										<div>
+											<span style={{ fontWeight: "500" }}>Usage hint:</span>{" "}
+											<span style={{ color: "var(--vscode-descriptionForeground)" }}>
+												{sopInfo.argumentHint}
+											</span>
+										</div>
+									)}
+									{sopInfo.args && (
+										<div>
+											<span style={{ fontWeight: "500" }}>Context:</span>{" "}
+											<span style={{ color: "var(--vscode-descriptionForeground)" }}>
+												{sopInfo.args}
+											</span>
+										</div>
+									)}
+									{sopInfo.filePath && (
+										<div>
+											<span style={{ fontWeight: "500" }}>Path:</span>{" "}
+											<span style={{ color: "var(--vscode-descriptionForeground)" }}>
+												{sopInfo.filePath}
+											</span>
 										</div>
 									)}
 								</div>
 							)}
+						</div>
+					</>
+				)
+			}
+			case "upsert_sop": {
+				const sopInfo = tool as Record<string, any>
+				const displayName =
+					sopInfo.sop_name || sopInfo.displayName || sopInfo.command || "standard-operating-procedure"
+				const variant = (sopInfo.sop_variant || sopInfo.variant) as "document" | "workflow" | undefined
+				const scope = sopInfo.sop_scope || sopInfo.scope
+				const isUpdate = Boolean(sopInfo.is_update)
+				return (
+					<>
+						<div style={headerStyle}>
+							{toolIcon("edit")}
+							<span style={{ fontWeight: "bold" }}>
+								{message.type === "ask"
+									? t("chat:slashCommand.wantsToRun")
+									: isUpdate
+										? "Updated SOP"
+										: "Created SOP"}
+							</span>
+						</div>
+						<div
+							style={{
+								marginTop: "4px",
+								backgroundColor: "var(--vscode-editor-background)",
+								border: "1px solid var(--vscode-editorGroup-border)",
+								borderRadius: "4px",
+								overflow: "hidden",
+							}}>
+							<div style={{ padding: "12px 16px", display: "flex", flexDirection: "column", gap: "6px" }}>
+								<div>
+									<span style={{ fontWeight: "500" }}>Title:</span> {displayName}
+								</div>
+								{variant && (
+									<div>
+										<span style={{ fontWeight: "500" }}>Type:</span>{" "}
+										{variant === "workflow" ? "Workflow" : "Document"}
+									</div>
+								)}
+								{scope && (
+									<div>
+										<span style={{ fontWeight: "500" }}>Scope:</span> {scope}
+									</div>
+								)}
+								{sopInfo.target_path && (
+									<div>
+										<span style={{ fontWeight: "500" }}>Path:</span> {sopInfo.target_path}
+									</div>
+								)}
+							</div>
 						</div>
 					</>
 				)
@@ -1136,9 +1288,30 @@ export const ChatRowContent = ({
 								</>
 							)}
 
-							{isExpanded && formattedApiRequestPreview && (
+							{isExpanded && apiRequestSections.length > 0 && (
 								<div className="api-request-preview api-request-preview--expanded">
-									<MarkdownBlock markdown={formattedApiRequestPreview} />
+									{apiRequestSections.map((section) => (
+										<div key={section.key} className="api-request-preview__section">
+											<div className="api-request-preview__section-header">
+												<span className="api-request-preview__section-title">
+													{section.title}
+												</span>
+												<VSCodeButton
+													appearance="icon"
+													onClick={handleCopySection(section.content, section.key)}
+													title={t("chat:apiRequest.copySection", {
+														section: section.title,
+														defaultValue: `Copy ${section.title}`,
+													})}>
+													<span
+														className={`codicon codicon-${copiedSection === section.key ? "check" : "copy"}`}></span>
+												</VSCodeButton>
+											</div>
+											<pre className="api-request-preview__code">
+												<code>{section.content}</code>
+											</pre>
+										</div>
+									))}
 								</div>
 							)}
 						</>

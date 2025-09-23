@@ -44,6 +44,8 @@ export interface SelectDropdownProps {
 	renderItem?: (option: DropdownOption) => React.ReactNode
 	disableSearch?: boolean
 	triggerIcon?: React.ForwardRefExoticComponent<IconProps & React.RefAttributes<SVGSVGElement>> | boolean | undefined // kilocode_change
+	onCreateOption?: (value: string) => void
+	createOptionLabel?: (value: string) => string
 }
 
 export const SelectDropdown = React.memo(
@@ -66,6 +68,8 @@ export const SelectDropdown = React.memo(
 				renderItem,
 				disableSearch = false,
 				triggerIcon = CaretUpIcon, // kilocode_change
+				onCreateOption,
+				createOptionLabel,
 			},
 			ref,
 		) => {
@@ -197,6 +201,19 @@ export const SelectDropdown = React.memo(
 				[onChange, options],
 			)
 
+			const handleCreateOption = React.useCallback(
+				(valueToCreate: string) => {
+					if (!onCreateOption) return
+					const trimmed = valueToCreate.trim()
+					if (!trimmed) return
+					Promise.resolve(onCreateOption(trimmed)).finally(() => {
+						setSearchValue("")
+						setOpen(false)
+					})
+				},
+				[onCreateOption],
+			)
+
 			const triggerContent = (
 				<PopoverTrigger
 					ref={ref}
@@ -263,7 +280,19 @@ export const SelectDropdown = React.memo(
 							{/* kilocode_change: different max height: max-h-82 */}
 							<div className="max-h-82 overflow-y-auto">
 								{groupedOptions.length === 0 && searchValue ? (
-									<div className="py-2 px-3 text-sm text-vscode-foreground/70">No results found</div>
+									<div className="py-2 px-3 text-sm text-vscode-foreground/70">
+										{onCreateOption ? (
+											<button
+												type="button"
+												className="w-full rounded border border-transparent bg-transparent px-2 py-1 text-left text-sm text-vscode-foreground hover:bg-vscode-list-hoverBackground hover:border-vscode-input-border"
+												onMouseDown={(event) => event.preventDefault()}
+												onClick={() => handleCreateOption(searchValue)}>
+												{createOptionLabel?.(searchValue) ?? `Create "${searchValue}"`}
+											</button>
+										) : (
+											<span>No results found</span>
+										)}
+									</div>
 								) : (
 									<div className="py-1">
 										{groupedOptions.map((option, index) => {

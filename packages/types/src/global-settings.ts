@@ -92,6 +92,7 @@ export const globalSettingsSchema = z.object({
 	maxDiagnosticMessages: z.number().optional(),
 
 	browserToolEnabled: z.boolean().optional(),
+	browserInteractionStrategy: z.string().optional(),
 	browserViewportSize: z.string().optional(),
 	showAutoApproveMenu: z.boolean().optional(), // kilocode_change
 	showTaskTimeline: z.boolean().optional(), // kilocode_change
@@ -111,6 +112,12 @@ export const globalSettingsSchema = z.object({
 	soundEnabled: z.boolean().optional(),
 	soundVolume: z.number().optional(),
 	systemNotificationsEnabled: z.boolean().optional(), // kilocode_change
+	notificationEmail: z.string().optional(),
+	notificationEmailAppPassword: z.string().optional(),
+	notificationSmsNumber: z.string().optional(),
+	notificationSmsGateway: z.string().optional(),
+	notificationTelegramBotToken: z.string().optional(),
+	notificationTelegramChatId: z.string().optional(),
 
 	maxOpenTabsContext: z.number().optional(),
 	maxWorkspaceFiles: z.number().optional(),
@@ -226,12 +233,16 @@ export const SECRET_STATE_KEYS = [
 	"featherlessApiKey",
 	"ioIntelligenceApiKey",
 	"vercelAiGatewayApiKey",
+	"outerGateNotionToken",
+	"outerGateMiroToken",
 ] as const
 
 // Global secrets that are part of GlobalSettings (not ProviderSettings)
 export const GLOBAL_SECRET_KEYS = [
 	"openRouterImageApiKey", // For image generation
 	"kiloCodeImageApiKey",
+	"notificationEmailAppPassword",
+	"notificationTelegramBotToken",
 ] as const
 
 // Type for the actual secret storage keys
@@ -305,6 +316,10 @@ export const EVALS_SETTINGS: RooCodeSettings = {
 	soundVolume: 0.5,
 	dismissedNotificationIds: [], // kilocode_change
 	systemNotificationsEnabled: true, // kilocode_change
+	notificationEmail: "",
+	notificationSmsNumber: "",
+	notificationSmsGateway: "tmomail.net",
+	notificationTelegramChatId: "",
 	ghostServiceSettings: {}, // kilocode_change
 
 	terminalOutputLineLimit: 500,

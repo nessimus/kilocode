@@ -1,8 +1,17 @@
+import fs from "fs/promises"
+
 import { Task } from "../task/Task"
 import { ToolUse, AskApproval, HandleError, PushToolResult, RemoveClosingTag } from "../../shared/tools"
 import { formatResponse } from "../prompts/responses"
 import { getCommand, getCommandNames } from "../../services/command/commands"
 import { EXPERIMENT_IDS, experiments } from "../../shared/experiments"
+import { refreshWorkflowToggles } from "../context/instructions/workflows"
+import {
+	collectEnabledWorkflowSops,
+	findWorkflowSop,
+	formatWorkflowSourceLabel,
+	getPrimaryWorkflowSlug,
+} from "../slash-commands/sopWorkflowUtils"
 
 export async function runSlashCommandTool(
 	task: Task,
@@ -20,7 +29,7 @@ export async function runSlashCommandTool(
 	if (!isRunSlashCommandEnabled) {
 		pushToolResult(
 			formatResponse.toolError(
-				"Run slash command is an experimental feature that must be enabled in settings. Please enable 'Run Slash Command' in the Experimental Settings section.",
+				"Standard Operating Procedures are an experimental feature. Please enable 'Run Slash Command' under Experimental Settings to unlock SOP guidance.",
 			),
 		)
 		return
@@ -31,9 +40,12 @@ export async function runSlashCommandTool(
 
 	try {
 		if (block.partial) {
+			const normalizedCommand = removeClosingTag("command", commandName)
 			const partialMessage = JSON.stringify({
 				tool: "runSlashCommand",
-				command: removeClosingTag("command", commandName),
+				command: normalizedCommand,
+				sop: normalizedCommand,
+				sop_variant: undefined,
 				args: removeClosingTag("args", args),
 			})
 
@@ -49,27 +61,62 @@ export async function runSlashCommandTool(
 
 			task.consecutiveMistakeCount = 0
 
-			// Get the command from the commands service
-			const command = await getCommand(task.cwd, commandName)
+			const documentCommand = await getCommand(task.cwd, commandName)
 
-			if (!command) {
-				// Get available commands for error message
+			const providerContext = provider?.context
+			const workflowToggleState = providerContext
+				? await refreshWorkflowToggles(providerContext, task.cwd)
+				: undefined
+			const workflowEntries = workflowToggleState
+				? collectEnabledWorkflowSops(
+						workflowToggleState.localWorkflowToggles,
+						workflowToggleState.globalWorkflowToggles,
+					)
+				: []
+			const workflowMatch = documentCommand ? undefined : findWorkflowSop(workflowEntries, commandName)
+
+			if (!documentCommand && !workflowMatch) {
 				const availableCommands = await getCommandNames(task.cwd)
+				const workflowNames = workflowEntries.map((entry) => getPrimaryWorkflowSlug(entry))
 				task.recordToolError("run_slash_command")
+				const documentList = availableCommands.length ? availableCommands.join(", ") : "(none)"
+				const workflowList = workflowNames.length ? workflowNames.join(", ") : "(none)"
 				pushToolResult(
 					formatResponse.toolError(
-						`Command '${commandName}' not found. Available commands: ${availableCommands.join(", ") || "(none)"}`,
+						`Standard Operating Procedure '${commandName}' not found. Document SOPs: ${documentList}. Workflow SOPs: ${workflowList}.`,
 					),
 				)
 				return
 			}
 
+			const sopVariant = documentCommand ? "document" : "workflow"
+			const sopContent = documentCommand
+				? documentCommand.content.trim()
+				: (await fs.readFile(workflowMatch!.fullPath, "utf8")).trim()
+			const sopPath = documentCommand ? documentCommand.filePath : workflowMatch!.fullPath
+			const sopSource = documentCommand
+				? documentCommand.source
+				: formatWorkflowSourceLabel(workflowMatch!.source)
+			const sopName = documentCommand ? documentCommand.name : getPrimaryWorkflowSlug(workflowMatch!)
+			const sopDisplayName = documentCommand ? documentCommand.name : workflowMatch!.fileName
+			const sopDescription = documentCommand?.description
+			const sopArgumentHint = documentCommand?.argumentHint
+
 			const toolMessage = JSON.stringify({
 				tool: "runSlashCommand",
-				command: commandName,
-				args: args,
-				source: command.source,
-				description: command.description,
+				command: sopName,
+				sop: sopName,
+				sop_variant: sopVariant,
+				sopVariant,
+				variant: sopVariant,
+				displayName: sopDisplayName,
+				args,
+				source: sopSource,
+				description: sopDescription,
+				argument_hint: sopArgumentHint,
+				argumentHint: sopArgumentHint,
+				path: sopPath,
+				filePath: sopPath,
 			})
 
 			const didApprove = await askApproval("tool", toolMessage)
@@ -78,25 +125,31 @@ export async function runSlashCommandTool(
 				return
 			}
 
-			// Build the result message
-			let result = `Command: /${commandName}`
+			let result = `Standard Operating Procedure: ${sopDisplayName}`
+			result += `\nType: ${sopVariant === "document" ? "Loose document guidance" : "Strict workflow"}`
+			result += `\nSource: ${sopSource}`
 
-			if (command.description) {
-				result += `\nDescription: ${command.description}`
+			if (sopDescription) {
+				result += `\nSummary: ${sopDescription}`
 			}
 
-			if (command.argumentHint) {
-				result += `\nArgument hint: ${command.argumentHint}`
+			if (sopVariant === "document" && sopArgumentHint) {
+				result += `\nUsage hint: ${sopArgumentHint}`
 			}
 
 			if (args) {
-				result += `\nProvided arguments: ${args}`
+				result += `\nContext provided: ${args}`
 			}
 
-			result += `\nSource: ${command.source}`
-			result += `\n\n--- Command Content ---\n\n${command.content}`
+			const sectionLabel = sopVariant === "document" ? "Document Guidance" : "Workflow Definition"
+			result += `\n\n--- ${sectionLabel} ---\n\n${sopContent}`
 
-			// Return the command content as the tool result
+			if (sopVariant === "workflow") {
+				result += `\n\nFollow this workflow sequentially, honoring each node's inputs and outputs before advancing.`
+			} else {
+				result += `\n\nUse this document as a reference and narrate how each step applies to the current task.`
+			}
+
 			pushToolResult(result)
 
 			return

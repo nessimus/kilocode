@@ -257,6 +257,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 	// Computer User
 	browserSession: BrowserSession
+	browserStreamUnsubscribe?: () => void
 
 	// Editing
 	diffViewProvider: DiffViewProvider
@@ -378,6 +379,23 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		this.fuzzyMatchThreshold = fuzzyMatchThreshold
 		this.consecutiveMistakeLimit = consecutiveMistakeLimit ?? DEFAULT_CONSECUTIVE_MISTAKE_LIMIT
 		this.providerRef = new WeakRef(provider)
+		this.browserStreamUnsubscribe = this.browserSession.onStreamFrame((frame) => {
+			const providerInstance = this.providerRef.deref()
+			if (!providerInstance) {
+				return
+			}
+			try {
+				providerInstance.postMessageToWebview({
+					type: "browserStreamFrame",
+					frame: {
+						...frame,
+						taskId: this.taskId,
+					},
+				})
+			} catch (error) {
+				console.error("Failed to forward browser stream frame:", error)
+			}
+		})
 		this.globalStoragePath = provider.context.globalStorageUri.fsPath
 		this.diffViewProvider = new DiffViewProvider(this.cwd, this)
 		this.enableCheckpoints = enableCheckpoints
@@ -1012,6 +1030,15 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 		// Get condensing configuration
 		const state = await this.providerRef.deref()?.getState()
+		console.log("[Task.getSystemPrompt] provider state", {
+			activeCompanyId: state?.workplaceState?.activeCompanyId,
+			activeEmployeeId: state?.workplaceState?.activeEmployeeId,
+			companyCount: state?.workplaceState?.companies?.length ?? 0,
+			companyNames: state?.workplaceState?.companies?.map((company) => company.name) ?? [],
+		})
+		if (!state?.workplaceState?.companies?.length) {
+			console.log("[Task.getSystemPrompt] WARNING no workplace companies in provider state")
+		}
 		// These properties may not exist in the state type yet, but are used for condensing configuration
 		const customCondensingPrompt = state?.customCondensingPrompt
 		const condensingApiConfigId = state?.condensingApiConfigId
@@ -1545,6 +1572,15 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	public dispose(): void {
 		console.log(`[Task#dispose] disposing task ${this.taskId}.${this.instanceId}`)
 
+		if (this.browserStreamUnsubscribe) {
+			try {
+				this.browserStreamUnsubscribe()
+			} catch (error) {
+				console.error("Error unsubscribing browser stream:", error)
+			}
+			this.browserStreamUnsubscribe = undefined
+		}
+
 		// Dispose message queue and remove event listeners.
 		try {
 			if (this.messageQueueStateChangedHandler) {
@@ -1809,6 +1845,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			// Determine API protocol based on provider and model
 			const modelId = getModelId(this.apiConfiguration)
 			const apiProtocol = getApiProtocol(this.apiConfiguration.apiProvider, modelId)
+			const systemPrompt = await this.getSystemPrompt()
 
 			await this.say(
 				"api_req_started",
@@ -1816,6 +1853,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					request:
 						currentUserContent.map((block) => formatContentBlockToMarkdown(block)).join("\n\n") +
 						"\n\nLoading...",
+					systemPrompt,
 					apiProtocol,
 				}),
 			)
@@ -1866,6 +1904,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 			this.clineMessages[lastApiReqIndex].text = JSON.stringify({
 				request: finalUserContent.map((block) => formatContentBlockToMarkdown(block)).join("\n\n"),
+				systemPrompt,
 				apiProtocol,
 			} satisfies ClineApiReqInfo)
 

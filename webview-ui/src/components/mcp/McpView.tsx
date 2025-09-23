@@ -183,7 +183,7 @@ const McpView = ({ onDone, hideHeader = false }: McpViewProps) => {
 						</div>
 						{/* kilocode_change start */}
 						<div className="mt-5">
-							You can find the MCP Marketplace under Settings &gt; MCP Servers &gt; Marketplace
+							You can find the Tool Library under Settings &gt; MCP Servers &gt; Marketplace
 						</div>
 						{/* kilocode_change end */}
 						<div

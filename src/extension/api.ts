@@ -18,25 +18,49 @@ import {
 	isSecretStateKey,
 	IpcOrigin,
 	IpcMessageType,
+	EndlessSurfaceRecord,
+	EndlessSurfaceSummary,
+	EndlessSurfaceNode,
+	EndlessSurfaceEdge,
 } from "@roo-code/types"
 import { IpcServer } from "@roo-code/ipc"
 
 import { Package } from "../shared/package"
 import { ClineProvider } from "../core/webview/ClineProvider"
 import { openClineInNewTab } from "../activate/registerCommands"
+import { EndlessSurfaceService } from "../core/surfaces/EndlessSurfaceService"
+import { CloverSessionService } from "../services/outerGate/CloverSessionService"
 
 export class API extends EventEmitter<RooCodeEvents> implements RooCodeAPI {
 	private readonly outputChannel: vscode.OutputChannel
 	private readonly sidebarProvider: ClineProvider
 	private readonly context: vscode.ExtensionContext
+	private readonly endlessSurfaceService?: EndlessSurfaceService
 	private readonly ipc?: IpcServer
 	private readonly taskMap = new Map<string, ClineProvider>()
 	private readonly log: (...args: unknown[]) => void
 	private logfile?: string
 
+	private getEndlessSurfaceServiceInstance(): EndlessSurfaceService | undefined {
+		return this.endlessSurfaceService ?? this.sidebarProvider.getEndlessSurfaceService()
+	}
+
+	private getCloverSessionServiceInstance(): CloverSessionService | undefined {
+		return this.sidebarProvider.getCloverSessionService()
+	}
+
+	private ensureEndlessSurfaceService(): EndlessSurfaceService {
+		const service = this.getEndlessSurfaceServiceInstance()
+		if (!service) {
+			throw new Error("Endless surface service is not initialized")
+		}
+		return service
+	}
+
 	constructor(
 		outputChannel: vscode.OutputChannel,
 		provider: ClineProvider,
+		endlessSurfaceService?: EndlessSurfaceService,
 		socketPath?: string,
 		enableLogging = false,
 	) {
@@ -45,6 +69,11 @@ export class API extends EventEmitter<RooCodeEvents> implements RooCodeAPI {
 		this.outputChannel = outputChannel
 		this.sidebarProvider = provider
 		this.context = provider.context
+		this.endlessSurfaceService = endlessSurfaceService
+
+		if (endlessSurfaceService) {
+			provider.attachEndlessSurfaceService(endlessSurfaceService)
+		}
 
 		if (enableLogging) {
 			this.log = (...args: unknown[]) => {
@@ -126,6 +155,8 @@ export class API extends EventEmitter<RooCodeEvents> implements RooCodeAPI {
 				context: this.context,
 				outputChannel: this.outputChannel,
 				workplaceService: this.sidebarProvider.getWorkplaceService(),
+				endlessSurfaceService: this.getEndlessSurfaceServiceInstance(),
+				cloverSessionService: this.getCloverSessionServiceInstance(),
 			})
 			this.registerListeners(provider)
 		} else {
@@ -199,6 +230,76 @@ export class API extends EventEmitter<RooCodeEvents> implements RooCodeAPI {
 
 	public async pressSecondaryButton() {
 		await this.sidebarProvider.postMessageToWebview({ type: "invoke", invoke: "secondaryButtonClick" })
+	}
+
+	public async listSurfaces(): Promise<EndlessSurfaceSummary[]> {
+		const service = this.ensureEndlessSurfaceService()
+		return service.listSummaries()
+	}
+
+	public async createSurface(title?: string): Promise<EndlessSurfaceRecord> {
+		const service = this.ensureEndlessSurfaceService()
+		const record = await service.createSurface(title)
+		await service.setActiveSurface(record.meta.id)
+		await this.sidebarProvider.postMessageToWebview({ type: "action", action: "switchTab", tab: "brainstorm" })
+		await this.sidebarProvider.postMessageToWebview({ type: "openSurface", surfaceId: record.meta.id })
+		return record
+	}
+
+	public async deleteSurface(surfaceId: string): Promise<boolean> {
+		const service = this.ensureEndlessSurfaceService()
+		return service.deleteSurface(surfaceId)
+	}
+
+	public async openSurface(surfaceId: string): Promise<void> {
+		const service = this.ensureEndlessSurfaceService()
+		const record = await service.getSurface(surfaceId)
+		if (!record) {
+			throw new Error(`Surface not found: ${surfaceId}`)
+		}
+		await service.setActiveSurface(surfaceId)
+		await this.sidebarProvider.postMessageToWebview({ type: "action", action: "switchTab", tab: "brainstorm" })
+		await this.sidebarProvider.postMessageToWebview({ type: "openSurface", surfaceId })
+	}
+
+	public async getSurfaceData(surfaceId: string): Promise<EndlessSurfaceRecord | undefined> {
+		const service = this.ensureEndlessSurfaceService()
+		return service.getSurfaceData(surfaceId)
+	}
+
+	public async saveSurfaceRecord(record: EndlessSurfaceRecord): Promise<void> {
+		const service = this.ensureEndlessSurfaceService()
+		await service.updateSurface(record)
+	}
+
+	public async createSurfaceNode(surfaceId: string, node: EndlessSurfaceNode): Promise<EndlessSurfaceRecord> {
+		const service = this.ensureEndlessSurfaceService()
+		return service.createNode(surfaceId, node)
+	}
+
+	public async updateSurfaceNode(surfaceId: string, node: EndlessSurfaceNode): Promise<EndlessSurfaceRecord> {
+		const service = this.ensureEndlessSurfaceService()
+		return service.updateNode(surfaceId, node)
+	}
+
+	public async deleteSurfaceNode(surfaceId: string, nodeId: string): Promise<EndlessSurfaceRecord> {
+		const service = this.ensureEndlessSurfaceService()
+		return service.deleteNode(surfaceId, nodeId)
+	}
+
+	public async createSurfaceEdge(surfaceId: string, edge: EndlessSurfaceEdge): Promise<EndlessSurfaceRecord> {
+		const service = this.ensureEndlessSurfaceService()
+		return service.createEdge(surfaceId, edge)
+	}
+
+	public async updateSurfaceEdge(surfaceId: string, edge: EndlessSurfaceEdge): Promise<EndlessSurfaceRecord> {
+		const service = this.ensureEndlessSurfaceService()
+		return service.updateEdge(surfaceId, edge)
+	}
+
+	public async deleteSurfaceEdge(surfaceId: string, edgeId: string): Promise<EndlessSurfaceRecord> {
+		const service = this.ensureEndlessSurfaceService()
+		return service.deleteEdge(surfaceId, edgeId)
 	}
 
 	public isReady() {

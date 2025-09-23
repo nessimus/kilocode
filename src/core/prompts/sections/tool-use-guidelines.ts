@@ -30,6 +30,10 @@ export function getToolUseGuidelinesSection(codeIndexManager?: CodeIndexManager)
 		)
 	}
 
+	guidelinesList.push(
+		`${itemNumber++}. Before starting any multi-step or high-risk action, call \`run_slash_command\` to load a relevant SOP (workflow or document). If no SOP exists, explicitly note that you checked before proceeding.`,
+	)
+
 	// Remaining guidelines
 	guidelinesList.push(
 		`${itemNumber++}. If multiple actions are needed, use one tool at a time per message to accomplish the task iteratively, with each tool use being informed by the result of the previous tool use. Do not assume the outcome of any tool use. Each step must be informed by the previous step's result.`,
@@ -41,7 +45,10 @@ export function getToolUseGuidelinesSection(codeIndexManager?: CodeIndexManager)
   - New terminal output in reaction to the changes, which you may need to consider or act upon.
   - Any other relevant feedback or information related to the tool use.`)
 	guidelinesList.push(
-		`${itemNumber++}. ALWAYS wait for user confirmation after each tool use before proceeding. Never assume the success of a tool use without explicit confirmation of the result from the user.`,
+		`${itemNumber++}. Move work forward autonomously. State the tool you are invoking and run it immediately unless the user has explicitly paused you. Only stop to ask for confirmation when the action is unusually risky, irreversible, or the system rejects the request.`,
+	)
+	guidelinesList.push(
+		`${itemNumber++}. When the user confirms a successful outcome without an existing SOP, offer to capture it with \`upsert_sop\` so the workflow or document can be reused later.`,
 	)
 
 	// Join guidelines and add the footer
@@ -49,11 +56,11 @@ export function getToolUseGuidelinesSection(codeIndexManager?: CodeIndexManager)
 
 ${guidelinesList.join("\n")}
 
-It is crucial to proceed step-by-step, waiting for the user's message after each tool use before moving forward with the task. This approach allows you to:
+It is crucial to proceed step-by-step, using the output of each tool call to decide your next move. This approach allows you to:
 1. Confirm the success of each step before proceeding.
 2. Address any issues or errors that arise immediately.
 3. Adapt your approach based on new information or unexpected results.
 4. Ensure that each action builds correctly on the previous ones.
 
-By waiting for and carefully considering the user's response after each tool use, you can react accordingly and make informed decisions about how to proceed with the task. This iterative process helps ensure the overall success and accuracy of your work.`
+By carefully reviewing tool results and system feedback, you can react accordingly and make informed decisions about how to proceed with the task while minimizing unnecessary interruptions for the user.`
 }

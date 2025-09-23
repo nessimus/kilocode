@@ -1,6 +1,7 @@
-import { useState, useEffect, useMemo, useContext } from "react"
+import { useState, useEffect, useMemo, useContext, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Tab, TabContent, TabHeader } from "../common/Tab"
+import { VSCodeButton, VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
 import { MarketplaceViewStateManager } from "./MarketplaceViewStateManager"
 import { useStateManager } from "./useStateManager"
 import { useAppTranslation } from "@/i18n/TranslationContext"
@@ -9,11 +10,12 @@ import { MarketplaceListView } from "./MarketplaceListView"
 import { cn } from "@/lib/utils"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { ExtensionStateContext } from "@/context/ExtensionStateContext"
+import McpMarketplaceView from "../kilocodeMcp/marketplace/McpMarketplaceView"
 
 interface MarketplaceViewProps {
 	onDone?: () => void
 	stateManager: MarketplaceViewStateManager
-	targetTab?: "mcp" | "mode"
+	targetTab?: "mcp" | "mode" | "tool"
 	hideHeader?: boolean // kilocode_change
 }
 export function MarketplaceView({ stateManager, onDone, targetTab, hideHeader = false }: MarketplaceViewProps) {
@@ -24,6 +26,23 @@ export function MarketplaceView({ stateManager, onDone, targetTab, hideHeader = 
 	const [lastOrganizationSettingsVersion, setLastOrganizationSettingsVersion] = useState<number>(
 		extensionState?.organizationSettingsVersion ?? -1,
 	)
+	const [uiTab, setUiTab] = useState<"mcp" | "tool" | "mode">(
+		targetTab === "tool" ? "tool" : targetTab === "mode" ? "mode" : "mcp",
+	)
+	const [toolIdea, setToolIdea] = useState("")
+
+	const handleTabChange = useCallback((nextTab: "mcp" | "tool" | "mode") => {
+		setUiTab(nextTab)
+	}, [])
+
+	const handleCreateTool = useCallback(() => {
+		const trimmed = toolIdea.trim()
+		if (!trimmed) return
+		const prompt = `Create a new MCP tool that ${trimmed}. Include tool schema, required environment variables, setup instructions, and any dependencies.`
+		window.postMessage({ type: "action", action: "chatButtonClicked" }, "*")
+		window.postMessage({ type: "insertTextToChatArea", text: prompt }, "*")
+		setToolIdea("")
+	}, [toolIdea])
 
 	useEffect(() => {
 		const currentVersion = extensionState?.organizationSettingsVersion ?? -1
@@ -44,10 +63,22 @@ export function MarketplaceView({ stateManager, onDone, targetTab, hideHeader = 
 	}, [state.allItems, hasReceivedInitialState])
 
 	useEffect(() => {
-		if (targetTab && (targetTab === "mcp" || targetTab === "mode")) {
-			manager.transition({ type: "SET_ACTIVE_TAB", payload: { tab: targetTab } })
+		if (!targetTab) {
+			return
 		}
-	}, [targetTab, manager])
+
+		if (targetTab === "tool") {
+			setUiTab("tool")
+		} else {
+			setUiTab(targetTab)
+		}
+	}, [targetTab])
+
+	useEffect(() => {
+		if (uiTab === "mcp" || uiTab === "mode") {
+			manager.transition({ type: "SET_ACTIVE_TAB", payload: { tab: uiTab } })
+		}
+	}, [uiTab, manager])
 
 	// Ensure marketplace state manager processes messages when component mounts
 	useEffect(() => {
@@ -96,6 +127,10 @@ export function MarketplaceView({ stateManager, onDone, targetTab, hideHeader = 
 	// Memoize filtered tags
 	const filteredTags = useMemo(() => allTags, [allTags])
 
+	const tabOrder: Array<"mcp" | "tool" | "mode"> = ["mcp", "tool", "mode"]
+	const sliderIndex = tabOrder.indexOf(uiTab)
+	const sliderWidth = 100 / tabOrder.length
+
 	return (
 		<TooltipProvider delayDuration={300}>
 			{/* kilocode_change: add className relative */}
@@ -121,25 +156,32 @@ export function MarketplaceView({ stateManager, onDone, targetTab, hideHeader = 
 						<div className="flex relative py-1">
 							<div className="absolute w-full h-[2px] -bottom-[2px] bg-vscode-input-border">
 								<div
-									className={cn(
-										"absolute w-1/2 h-[2px] bottom-0 bg-vscode-button-background transition-all duration-300 ease-in-out",
-										{
-											"left-0": state.activeTab === "mcp",
-											"left-1/2": state.activeTab === "mode",
-										},
-									)}
+									className="absolute h-[2px] bottom-0 bg-vscode-button-background transition-all duration-300 ease-in-out"
+									style={{ width: `${sliderWidth}%`, left: `${sliderWidth * sliderIndex}%` }}
 								/>
 							</div>
 							<button
-								className="flex items-center justify-center gap-2 flex-1 text-sm font-medium rounded-sm transition-colors duration-300 relative z-10 text-vscode-foreground"
-								onClick={() => manager.transition({ type: "SET_ACTIVE_TAB", payload: { tab: "mcp" } })}>
+								className={cn(
+									"flex items-center justify-center gap-2 flex-1 text-sm font-medium rounded-sm transition-colors duration-300 relative z-10",
+									uiTab === "mcp" ? "text-vscode-foreground" : "text-vscode-descriptionForeground",
+								)}
+								onClick={() => handleTabChange("mcp")}>
 								MCP
 							</button>
 							<button
-								className="flex items-center justify-center gap-2 flex-1 text-sm font-medium rounded-sm transition-colors duration-300 relative z-10 text-vscode-foreground"
-								onClick={() =>
-									manager.transition({ type: "SET_ACTIVE_TAB", payload: { tab: "mode" } })
-								}>
+								className={cn(
+									"flex items-center justify-center gap-2 flex-1 text-sm font-medium rounded-sm transition-colors duration-300 relative z-10",
+									uiTab === "tool" ? "text-vscode-foreground" : "text-vscode-descriptionForeground",
+								)}
+								onClick={() => handleTabChange("tool")}>
+								Tools
+							</button>
+							<button
+								className={cn(
+									"flex items-center justify-center gap-2 flex-1 text-sm font-medium rounded-sm transition-colors duration-300 relative z-10",
+									uiTab === "mode" ? "text-vscode-foreground" : "text-vscode-descriptionForeground",
+								)}
+								onClick={() => handleTabChange("mode")}>
 								Modes
 							</button>
 						</div>
@@ -147,7 +189,7 @@ export function MarketplaceView({ stateManager, onDone, targetTab, hideHeader = 
 				</TabHeader>
 
 				<TabContent className="p-3 pt-2">
-					{state.activeTab === "mcp" && (
+					{uiTab === "mcp" && (
 						<MarketplaceListView
 							stateManager={stateManager}
 							allTags={allTags}
@@ -155,13 +197,50 @@ export function MarketplaceView({ stateManager, onDone, targetTab, hideHeader = 
 							filterByType="mcp"
 						/>
 					)}
-					{state.activeTab === "mode" && (
+					{uiTab === "mode" && (
 						<MarketplaceListView
 							stateManager={stateManager}
 							allTags={allTags}
 							filteredTags={filteredTags}
 							filterByType="mode"
 						/>
+					)}
+					{uiTab === "tool" && (
+						<div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+							<div
+								style={{
+									padding: 16,
+									borderRadius: 8,
+									backgroundColor: "var(--vscode-editorWidget-background)",
+									border: "1px solid var(--vscode-input-border)",
+									display: "flex",
+									flexDirection: "column",
+									gap: 12,
+								}}>
+								<div style={{ fontWeight: 600, fontSize: 14, color: "var(--vscode-foreground)" }}>
+									Describe the tool you need and let Roo build it
+								</div>
+								<p style={{ margin: 0, fontSize: 12, color: "var(--vscode-descriptionForeground)" }}>
+									Type a natural-language request and we’ll draft the MCP server, methods, and setup
+									instructions for your AI employees.
+								</p>
+								<div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+									<VSCodeTextField
+										style={{ flex: 1, minWidth: 220 }}
+										placeholder="e.g., monitor Product Hunt launches and email summaries"
+										value={toolIdea}
+										onInput={(event) => setToolIdea((event.target as HTMLInputElement).value)}
+									/>
+									<VSCodeButton onClick={handleCreateTool} disabled={!toolIdea.trim()}>
+										Ask Roo to create it
+									</VSCodeButton>
+								</div>
+							</div>
+
+							<div className="min-h-[400px]">
+								<McpMarketplaceView allowedSources={["curated"]} />
+							</div>
+						</div>
 					)}
 				</TabContent>
 			</Tab>

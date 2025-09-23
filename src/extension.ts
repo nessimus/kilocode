@@ -1,12 +1,15 @@
 import * as vscode from "vscode"
 import * as dotenvx from "@dotenvx/dotenvx"
+import { existsSync } from "fs"
 import * as path from "path"
 
 // Load environment variables from .env file
 try {
 	// Specify path to .env file in the project root directory
 	const envPath = path.join(__dirname, "..", ".env")
-	dotenvx.config({ path: envPath })
+	if (existsSync(envPath)) {
+		dotenvx.config({ path: envPath })
+	}
 } catch (e) {
 	// Silently handle environment loading errors
 	console.warn("Failed to load environment variables:", e)
@@ -23,6 +26,7 @@ import { Package } from "./shared/package"
 import { formatLanguage } from "./shared/language"
 import { ContextProxy } from "./core/config/ContextProxy"
 import { ClineProvider } from "./core/webview/ClineProvider"
+import { EndlessSurfaceService } from "./core/surfaces/EndlessSurfaceService"
 import { DIFF_VIEW_URI_SCHEME } from "./integrations/editor/DiffViewProvider"
 import { TerminalRegistry } from "./integrations/terminal/TerminalRegistry"
 import { McpServerManager } from "./services/mcp/McpServerManager"
@@ -46,6 +50,7 @@ import { registerGhostProvider } from "./services/ghost" // kilocode_change
 import { TerminalWelcomeService } from "./services/terminal-welcome/TerminalWelcomeService" // kilocode_change
 import { getKiloCodeWrapperProperties } from "./core/kilocode/wrapper" // kilocode_change
 import { createWorkplaceService } from "./services/workplace/WorkplaceService"
+import { CloverSessionService } from "./services/outerGate/CloverSessionService"
 
 /**
  * Built using https://github.com/microsoft/vscode-webview-ui-toolkit
@@ -77,10 +82,15 @@ export async function activate(context: vscode.ExtensionContext) {
 	// Initialize telemetry service.
 	const telemetryService = TelemetryService.createInstance()
 
-	try {
-		telemetryService.register(new PostHogTelemetryClient())
-	} catch (error) {
-		console.warn("Failed to register PostHogTelemetryClient:", error)
+	const posthogApiKey = process.env.KILOCODE_POSTHOG_API_KEY?.trim()
+	if (posthogApiKey) {
+		try {
+			telemetryService.register(new PostHogTelemetryClient())
+		} catch (error) {
+			console.warn("Failed to register PostHogTelemetryClient:", error)
+		}
+	} else {
+		console.info("Skipping PostHog telemetry registration: KILOCODE_POSTHOG_API_KEY not set")
 	}
 
 	// Create logger for cloud services.
@@ -137,6 +147,22 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	const contextProxy = await ContextProxy.getInstance(context)
 	const workplaceService = await createWorkplaceService(context)
+	const cloverSessionService = new CloverSessionService(context, () => workplaceService)
+	const endlessSurfaceService = new EndlessSurfaceService(context, (message, ...rest) => {
+		const serializedRest = rest.map((entry) =>
+			typeof entry === "string"
+				? entry
+				: (() => {
+						try {
+							return JSON.stringify(entry)
+						} catch {
+							return String(entry)
+						}
+					})(),
+		)
+		outputChannel.appendLine([message, ...serializedRest].join(" "))
+	})
+	await endlessSurfaceService.initialize()
 
 	// Initialize code index managers for all workspace folders.
 	const codeIndexManagers: CodeIndexManager[] = []
@@ -164,6 +190,8 @@ export async function activate(context: vscode.ExtensionContext) {
 	// Initialize the provider *before* the Roo Code Cloud service.
 	const provider = new ClineProvider(context, outputChannel, "sidebar", contextProxy, mdmService)
 	provider.attachWorkplaceService(workplaceService)
+	provider.attachEndlessSurfaceService(endlessSurfaceService)
+	provider.attachCloverSessionService(cloverSessionService)
 
 	// Initialize Roo Code Cloud service.
 	const postStateListener = () => ClineProvider.getVisibleInstance()?.postStateToWebview()
@@ -315,7 +343,38 @@ export async function activate(context: vscode.ExtensionContext) {
 		)
 	}
 
-	registerCommands({ context, outputChannel, provider, workplaceService })
+	registerCommands({
+		context,
+		outputChannel,
+		provider,
+		workplaceService,
+		endlessSurfaceService,
+		cloverSessionService,
+	})
+
+	const dumpCodexInfoDisposable = vscode.commands.registerCommand("golden-workplace.dev.dumpCodexInfo", async () => {
+		const codex = vscode.extensions.getExtension("openai.chatgpt")
+
+		if (!codex) {
+			outputChannel.appendLine("[Codex] Extension not found")
+			return
+		}
+
+		outputChannel.appendLine(`[Codex] ID=${codex.id}, active=${codex.isActive}`)
+
+		const api = await codex.activate()
+		const apiKeys = api ? Object.keys(api) : []
+
+		outputChannel.appendLine(`[Codex] Exported keys: ${apiKeys.length ? apiKeys.join(", ") : "[none]"}`)
+
+		const commands = await vscode.commands.getCommands(true)
+		const codexCommands = commands.filter(
+			(command) => command.startsWith("chatgpt.") || command.includes("codex") || command.includes("openai"),
+		)
+
+		outputChannel.appendLine(`[Codex] Commands: ${codexCommands.join(", ")}`)
+	})
+	context.subscriptions.push(dumpCodexInfoDisposable)
 
 	/**
 	 * We use the text document content provider API to show the left side for diff
@@ -423,7 +482,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	await checkAndRunAutoLaunchingTask(context) // kilocode_change
 
-	return new API(outputChannel, provider, socketPath, enableLogging)
+	return new API(outputChannel, provider, endlessSurfaceService, socketPath, enableLogging)
 }
 
 // This method is called when your extension is deactivated.

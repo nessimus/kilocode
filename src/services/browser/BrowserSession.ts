@@ -2,6 +2,7 @@ import * as vscode from "vscode"
 import * as fs from "fs/promises"
 import * as path from "path"
 import { Browser, Page, ScreenshotOptions, TimeoutError, launch, connect } from "puppeteer-core"
+import type { CDPSession } from "puppeteer-core"
 // @ts-ignore
 import PCR from "puppeteer-chromium-resolver"
 import pWaitFor from "p-wait-for"
@@ -9,6 +10,8 @@ import delay from "delay"
 import { fileExistsAtPath } from "../../utils/fs"
 import { BrowserActionResult } from "../../shared/ExtensionMessage"
 import { discoverChromeHostUrl, tryChromeHostUrl } from "./browserDiscovery"
+import { BrowserStreamFrame } from "../../shared/browser"
+import { randomUUID } from "crypto"
 
 // Timeout constants
 const BROWSER_NAVIGATION_TIMEOUT = 15_000 // 15 seconds
@@ -25,9 +28,133 @@ export class BrowserSession {
 	private currentMousePosition?: string
 	private lastConnectionAttempt?: number
 	private isUsingRemoteBrowser: boolean = false
+	private screencastSession?: CDPSession
+	private isStreaming: boolean = false
+	private streamSubscribers = new Set<(frame: BrowserStreamFrame) => void>()
+	private sessionId?: string
+	private lastStreamFrameTs = 0
 
 	constructor(context: vscode.ExtensionContext) {
 		this.context = context
+	}
+
+	public onStreamFrame(callback: (frame: BrowserStreamFrame) => void): () => void {
+		this.streamSubscribers.add(callback)
+		return () => {
+			this.streamSubscribers.delete(callback)
+		}
+	}
+
+	private emitStreamFrame(frame: BrowserStreamFrame) {
+		for (const subscriber of this.streamSubscribers) {
+			try {
+				subscriber(frame)
+			} catch (error) {
+				console.error("Error emitting browser stream frame:", error)
+			}
+		}
+	}
+
+	private ensureSessionId(): string {
+		if (!this.sessionId) {
+			this.sessionId = randomUUID()
+		}
+		return this.sessionId
+	}
+
+	private async startStreaming(page: Page): Promise<void> {
+		try {
+			if (this.isStreaming && this.page === page) {
+				return
+			}
+
+			await this.stopStreaming({ notify: false })
+
+			this.lastStreamFrameTs = 0
+
+			const client = await page.target().createCDPSession()
+			this.screencastSession = client
+
+			const { width, height } = this.getViewport()
+			const quality = ((await this.context.globalState.get("screenshotQuality")) as number | undefined) ?? 75
+			const format = "jpeg"
+			const sessionId = this.ensureSessionId()
+
+			client.on("Page.screencastFrame", async (event: any) => {
+				const now = Date.now()
+				try {
+					if (now - this.lastStreamFrameTs >= 200) {
+						this.lastStreamFrameTs = now
+						const screenshot = `data:image/${format};base64,${event.data}`
+						this.emitStreamFrame({
+							sessionId,
+							screenshot,
+							url: this.page?.url(),
+							mousePosition: this.currentMousePosition,
+							timestamp: now,
+						})
+					}
+				} finally {
+					try {
+						await client.send("Page.screencastFrameAck", { sessionId: event.sessionId })
+					} catch (ackError) {
+						console.error("Failed to ack screencast frame:", ackError)
+					}
+				}
+			})
+
+			await client.send("Page.startScreencast", {
+				format,
+				quality,
+				maxWidth: width,
+				maxHeight: height,
+				everyNthFrame: 1,
+			})
+
+			this.isStreaming = true
+		} catch (error) {
+			console.error("Failed to start browser screencast:", error)
+		}
+	}
+
+	private async stopStreaming(options: { notify?: boolean } = { notify: true }): Promise<void> {
+		if (!this.isStreaming && !this.screencastSession) {
+			return
+		}
+
+		try {
+			await this.screencastSession?.send("Page.stopScreencast")
+		} catch (error) {
+			console.error("Failed to stop browser screencast:", error)
+		}
+
+		try {
+			await this.screencastSession?.detach?.()
+		} catch (error) {
+			console.error("Failed to detach screencast session:", error)
+		}
+
+		this.screencastSession = undefined
+		this.isStreaming = false
+		this.lastStreamFrameTs = 0
+
+		if (options.notify !== false) {
+			const sessionId = this.sessionId
+			if (sessionId) {
+				this.emitStreamFrame({ sessionId, timestamp: Date.now(), ended: true })
+			}
+		}
+	}
+
+	private async setActivePage(page: Page): Promise<void> {
+		this.page = page
+		try {
+			const viewport = this.getViewport()
+			await page.setViewport(viewport)
+		} catch (error) {
+			console.warn("Failed to set viewport on page:", error)
+		}
+		await this.startStreaming(page)
 	}
 
 	private async ensureChromiumExists(): Promise<PCRStats> {
@@ -195,8 +322,10 @@ export class BrowserSession {
 	 * Closes the browser and resets browser state
 	 */
 	async closeBrowser(): Promise<BrowserActionResult> {
+		const sessionId = this.sessionId
 		if (this.browser || this.page) {
 			console.log("closing browser...")
+			await this.stopStreaming()
 
 			if (this.isUsingRemoteBrowser && this.browser) {
 				await this.browser.disconnect().catch(() => {})
@@ -205,17 +334,21 @@ export class BrowserSession {
 			}
 			this.resetBrowserState()
 		}
-		return {}
+		return { sessionId }
 	}
 
 	/**
 	 * Resets all browser state variables
 	 */
 	private resetBrowserState(): void {
+		this.stopStreaming({ notify: false }).catch(() => {})
 		this.browser = undefined
 		this.page = undefined
 		this.currentMousePosition = undefined
 		this.isUsingRemoteBrowser = false
+		this.screencastSession = undefined
+		this.isStreaming = false
+		this.sessionId = undefined
 	}
 
 	async doAction(action: (page: Page) => Promise<void>): Promise<BrowserActionResult> {
@@ -300,6 +433,7 @@ export class BrowserSession {
 			logs: logs.join("\n"),
 			currentUrl: this.page.url(),
 			currentMousePosition: this.currentMousePosition,
+			sessionId: this.ensureSessionId(),
 		}
 	}
 
@@ -339,7 +473,7 @@ export class BrowserSession {
 		const newPage = await this.browser.newPage()
 
 		// Set the new page as the active page
-		this.page = newPage
+		await this.setActivePage(newPage)
 
 		// Navigate to the URL
 		const result = await this.doAction(async (page) => {
@@ -384,7 +518,7 @@ export class BrowserSession {
 			console.log(`Tab with domain ${rootDomain} already exists, switching to it`)
 
 			// Update the active page
-			this.page = existingPage
+			await this.setActivePage(existingPage)
 			existingPage.bringToFront()
 
 			// Navigate to the new URL if it's different]

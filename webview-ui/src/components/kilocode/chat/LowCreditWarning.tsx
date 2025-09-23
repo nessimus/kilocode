@@ -77,7 +77,7 @@ export const LowCreditWarning = ({ message }: LowCreditWarningProps) => {
 					}}>
 					{t("kilocode:lowCreditWarning.addCredit")}
 				</VSCodeButton>
-				<FreeModelsLink className="p-1 w-full rounded mt-1" origin="chat" />
+				<FreeModelsLink className="p-1 w-full rounded mt-1" origin="lobby" />
 			</div>
 		</>
 	)

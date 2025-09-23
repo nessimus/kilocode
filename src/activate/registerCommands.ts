@@ -18,6 +18,8 @@ import { MdmService } from "../services/mdm/MdmService"
 import { t } from "../i18n"
 import { generateTerminalCommand } from "../utils/terminalCommandGenerator" // kilocode_change
 import type { WorkplaceService } from "../services/workplace/WorkplaceService"
+import type { CloverSessionService } from "../services/outerGate/CloverSessionService"
+import type { EndlessSurfaceService } from "../core/surfaces/EndlessSurfaceService"
 
 /**
  * Helper to get the visible ClineProvider instance or log if not found.
@@ -64,6 +66,8 @@ export type RegisterCommandOptions = {
 	outputChannel: vscode.OutputChannel
 	provider: ClineProvider
 	workplaceService?: WorkplaceService
+	endlessSurfaceService?: EndlessSurfaceService
+	cloverSessionService?: CloverSessionService
 }
 
 export const registerCommands = (options: RegisterCommandOptions) => {
@@ -79,6 +83,8 @@ const getCommandsMap = ({
 	context,
 	outputChannel,
 	workplaceService,
+	endlessSurfaceService,
+	cloverSessionService,
 }: RegisterCommandOptions): Record<CommandId, any> => ({
 	activationCompleted: () => {},
 	cloudButtonClicked: () => {
@@ -133,9 +139,22 @@ const getCommandsMap = ({
 	popoutButtonClicked: () => {
 		TelemetryService.instance.captureTitleButtonClicked("popout")
 
-		return openClineInNewTab({ context, outputChannel, workplaceService })
+		return openClineInNewTab({
+			context,
+			outputChannel,
+			workplaceService,
+			endlessSurfaceService,
+			cloverSessionService,
+		})
 	},
-	openInNewTab: () => openClineInNewTab({ context, outputChannel, workplaceService }),
+	openInNewTab: () =>
+		openClineInNewTab({
+			context,
+			outputChannel,
+			workplaceService,
+			endlessSurfaceService,
+			cloverSessionService,
+		}),
 	settingsButtonClicked: () => {
 		const visibleProvider = getVisibleProviderOrLog(outputChannel)
 
@@ -239,7 +258,13 @@ const getCommandsMap = ({
 
 			if (!visibleProvider) {
 				// If still no visible provider, try opening in a new tab
-				const tabProvider = await openClineInNewTab({ context, outputChannel, workplaceService })
+				const tabProvider = await openClineInNewTab({
+					context,
+					outputChannel,
+					workplaceService,
+					endlessSurfaceService,
+					cloverSessionService,
+				})
 				await delay(100)
 				visibleProvider = tabProvider
 			}
@@ -289,7 +314,13 @@ export const openClineInNewTab = async ({
 	context,
 	outputChannel,
 	workplaceService,
-}: Omit<RegisterCommandOptions, "provider"> & { workplaceService?: WorkplaceService }) => {
+	endlessSurfaceService,
+	cloverSessionService,
+}: Omit<RegisterCommandOptions, "provider"> & {
+	workplaceService?: WorkplaceService
+	endlessSurfaceService?: EndlessSurfaceService
+	cloverSessionService?: CloverSessionService
+}) => {
 	// (This example uses webviewProvider activation event which is necessary to
 	// deserialize cached webview, but since we use retainContextWhenHidden, we
 	// don't need to use that event).
@@ -309,6 +340,12 @@ export const openClineInNewTab = async ({
 	const tabProvider = new ClineProvider(context, outputChannel, "editor", contextProxy, mdmService)
 	if (workplaceService) {
 		tabProvider.attachWorkplaceService(workplaceService)
+	}
+	if (endlessSurfaceService) {
+		tabProvider.attachEndlessSurfaceService(endlessSurfaceService)
+	}
+	if (cloverSessionService) {
+		tabProvider.attachCloverSessionService(cloverSessionService)
 	}
 	const lastCol = Math.max(...vscode.window.visibleTextEditors.map((editor) => editor.viewColumn || 0))
 

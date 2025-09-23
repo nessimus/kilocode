@@ -1,0 +1,156 @@
+.outer-gate-backdrop {
+	position: absolute;
+	inset: 0;
+	overflow: hidden;
+	background:
+		radial-gradient(circle at 12% 18%, rgba(250, 232, 200, 0.22), transparent 55%),
+		radial-gradient(circle at 86% 12%, rgba(255, 211, 120, 0.18), transparent 58%),
+		radial-gradient(120% 110% at 50% 100%, rgba(33, 22, 8, 0.72), transparent 78%);
+	pointer-events: none;
+	z-index: 0;
+}
+
+body.vscode-dark .outer-gate-backdrop {
+	background:
+		radial-gradient(circle at 12% 18%, rgba(255, 214, 129, 0.18), transparent 58%),
+		radial-gradient(circle at 86% 12%, rgba(212, 168, 70, 0.12), transparent 65%),
+		radial-gradient(120% 120% at 50% 100%, rgba(13, 9, 4, 0.78), transparent 82%);
+}
+
+.outer-gate-gateways::before,
+.outer-gate-gateways::after {
+	content: "";
+	position: absolute;
+	top: 8%;
+	bottom: -16%;
+	width: 28%;
+	border-radius: 999px;
+	border: 1px solid color-mix(in srgb, var(--primary) 32%, rgba(255, 255, 255, 0.16));
+	background: linear-gradient(
+		180deg,
+		color-mix(in srgb, var(--vscode-editor-background) 90%, rgba(255, 238, 204, 0.55)),
+		color-mix(in srgb, var(--vscode-editor-background) 40%, rgba(64, 47, 17, 0.85)) 78%
+	);
+	opacity: 0.24;
+	filter: blur(0.5px);
+	pointer-events: none;
+	z-index: 1;
+}
+
+.outer-gate-gateways::before {
+	left: 18%;
+}
+
+.outer-gate-gateways::after {
+	right: 18%;
+}
+
+body.vscode-dark .outer-gate-gateways::before,
+body.vscode-dark .outer-gate-gateways::after {
+	opacity: 0.18;
+	border-color: color-mix(in srgb, var(--primary) 28%, rgba(255, 255, 255, 0.18));
+	background: linear-gradient(
+		180deg,
+		color-mix(in srgb, rgba(35, 26, 12, 0.8) 60%, rgba(255, 214, 129, 0.15)),
+		color-mix(in srgb, rgba(18, 12, 5, 0.88) 78%, rgba(212, 175, 55, 0.12)) 100%
+	);
+}
+
+.outer-gate-glow-ring {
+	position: absolute;
+	inset: -15% -18% 42%;
+	background:
+		radial-gradient(circle at 50% 20%, rgba(255, 228, 165, 0.28), transparent 58%),
+		radial-gradient(circle at 24% 35%, rgba(212, 175, 55, 0.2), transparent 62%),
+		radial-gradient(circle at 76% 38%, rgba(255, 198, 119, 0.18), transparent 66%);
+	filter: blur(40px);
+	opacity: 0.6;
+	pointer-events: none;
+	z-index: 1;
+}
+
+body.vscode-dark .outer-gate-glow-ring {
+	background:
+		radial-gradient(circle at 50% 20%, rgba(212, 175, 55, 0.22), transparent 62%),
+		radial-gradient(circle at 24% 35%, rgba(156, 114, 32, 0.18), transparent 68%),
+		radial-gradient(circle at 76% 38%, rgba(240, 190, 98, 0.16), transparent 70%);
+	filter: blur(52px);
+	opacity: 0.48;
+}
+
+.outer-gate-grid {
+	background:
+		repeating-linear-gradient(
+			0deg,
+			rgba(255, 255, 255, 0.03),
+			rgba(255, 255, 255, 0.03) 1px,
+			transparent 1px,
+			transparent 32px
+		),
+		repeating-linear-gradient(
+			90deg,
+			rgba(255, 255, 255, 0.02),
+			rgba(255, 255, 255, 0.02) 1px,
+			transparent 1px,
+			transparent 36px
+		);
+	opacity: 0.35;
+	mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.08), rgba(0, 0, 0, 0.55));
+}
+
+body.vscode-dark .outer-gate-grid {
+	background:
+		repeating-linear-gradient(
+			0deg,
+			rgba(255, 255, 255, 0.04),
+			rgba(255, 255, 255, 0.04) 1px,
+			transparent 1px,
+			transparent 32px
+		),
+		repeating-linear-gradient(
+			90deg,
+			rgba(255, 255, 255, 0.035),
+			rgba(255, 255, 255, 0.035) 1px,
+			transparent 1px,
+			transparent 36px
+		);
+	mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.12), rgba(0, 0, 0, 0.65));
+	opacity: 0.42;
+}
+
+.outer-gate-orbit {
+	position: absolute;
+	bottom: 12%;
+	left: 50%;
+	transform: translateX(-50%);
+	width: min(82%, 780px);
+	height: 1px;
+	background: linear-gradient(
+		90deg,
+		transparent,
+		color-mix(in srgb, var(--primary) 65%, rgba(255, 255, 255, 0.15)),
+		transparent
+	);
+	opacity: 0.6;
+}
+
+.outer-gate-orbit::before,
+.outer-gate-orbit::after {
+	content: "";
+	position: absolute;
+	top: -12px;
+	width: 12px;
+	height: 12px;
+	border-radius: 999px;
+	border: 1px solid color-mix(in srgb, var(--primary) 70%, rgba(255, 255, 255, 0.32));
+	background: color-mix(in srgb, var(--vscode-editor-background) 45%, rgba(255, 245, 220, 0.55));
+	box-shadow: 0 0 14px rgba(212, 175, 55, 0.45);
+}
+
+.outer-gate-orbit::before {
+	left: 8%;
+}
+
+.outer-gate-orbit::after {
+	right: 8%;
+}

@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from "react"
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react"
 
 import {
 	type ProviderSettings,
@@ -12,9 +12,18 @@ import {
 	type TelemetrySetting,
 	type OrganizationAllowList,
 	ORGANIZATION_ALLOW_ALL,
+	EndlessSurfaceRecord,
+	EndlessSurfaceAgentAccess,
 } from "@roo-code/types"
 
-import { ExtensionMessage, ExtensionState, MarketplaceInstalledMetadata, Command } from "@roo/ExtensionMessage"
+import {
+	ExtensionMessage,
+	ExtensionState,
+	MarketplaceInstalledMetadata,
+	Command,
+	EndlessSurfaceClientState,
+} from "@roo/ExtensionMessage"
+import { BrowserInteractionStrategy, BrowserStreamFrame } from "@roo/browser"
 import { findLastIndex } from "@roo/array"
 import { McpServer } from "@roo/mcp"
 import { checkExistKey } from "@roo/checkExistApiConfig"
@@ -23,21 +32,59 @@ import { CustomSupportPrompts } from "@roo/support-prompt"
 import { experimentDefault } from "@roo/experiments"
 import { RouterModels } from "@roo/api"
 import { McpMarketplaceCatalog } from "../../../src/shared/kilocode/mcp" // kilocode_change
+import type { HubSnapshot, HubAgentBlueprint, HubSettingsUpdate } from "@roo/hub"
+import { defaultOuterGateState } from "@roo/golden/outerGate"
 
 import { vscode } from "@src/utils/vscode"
 import { convertTextMateToHljs } from "@src/utils/textMateToHljs"
 import { ClineRulesToggles } from "@roo/cline-rules" // kilocode_change
-import type { CreateCompanyPayload, CreateEmployeePayload, WorkplaceState } from "@roo/golden/workplace"
+import type {
+	ArchiveDepartmentPayload,
+	ArchiveEmployeePayload,
+	ArchiveTeamPayload,
+	AssignEmployeeToTeamPayload,
+	AssignTeamToDepartmentPayload,
+	CreateActionItemPayload,
+	CreateActionStatusPayload,
+	CreateCompanyPayload,
+	CreateDepartmentPayload,
+	CreateEmployeePayload,
+	CreateTeamPayload,
+	DeleteActionItemPayload,
+	RemoveEmployeeFromTeamPayload,
+	RemoveTeamFromDepartmentPayload,
+	StartActionItemsPayload,
+	UpdateActionItemPayload,
+	UpdateCompanyPayload,
+	UpdateEmployeePayload,
+	UpdateDepartmentPayload,
+	UpdateTeamPayload,
+	UpsertActionStatusPayload,
+	WorkplaceState,
+} from "@roo/golden/workplace"
 
 export interface ExtensionStateContextType extends ExtensionState {
 	historyPreviewCollapsed?: boolean // Add the new state property
 	showTaskTimeline?: boolean // kilocode_change
 	setShowTaskTimeline: (value: boolean) => void // kilocode_change
+	browserInteractionStrategy?: BrowserInteractionStrategy
+	setBrowserInteractionStrategy: (value: BrowserInteractionStrategy) => void
+	browserStreamFrames: Record<string, BrowserStreamFrame>
+	endlessSurface?: EndlessSurfaceClientState
 	hoveringTaskTimeline?: boolean // kilocode_change
 	setHoveringTaskTimeline: (value: boolean) => void // kilocode_change
 	systemNotificationsEnabled?: boolean // kilocode_change
 	setSystemNotificationsEnabled: (value: boolean) => void // kilocode_change
+	createSurface: (title?: string) => Promise<void>
+	setActiveSurface: (surfaceId: string | undefined) => Promise<void>
+	renameSurface: (surfaceId: string, title: string) => Promise<void>
+	setSurfaceAgentAccess: (surfaceId: string, access: EndlessSurfaceAgentAccess) => Promise<void>
+	saveSurfaceRecord: (record: EndlessSurfaceRecord) => Promise<void>
+	deleteSurface: (surfaceId: string) => Promise<void>
+	requestSurfaceSnapshot: (options: { surfaceId: string }) => Promise<void>
 	dismissedNotificationIds: string[] // kilocode_change
+	notificationTelegramChatId?: string
+	notificationTelegramBotToken?: string
 	didHydrateState: boolean
 	showWelcome: boolean
 	theme: any
@@ -179,9 +226,62 @@ export interface ExtensionStateContextType extends ExtensionState {
 	setIncludeTaskHistoryInEnhance: (value: boolean) => void
 	workplaceState: WorkplaceState
 	createCompany: (payload: CreateCompanyPayload) => void
+	updateCompany: (payload: UpdateCompanyPayload) => void
+	createDepartment: (payload: CreateDepartmentPayload) => void
+	updateDepartment: (payload: UpdateDepartmentPayload) => void
+	createTeam: (payload: CreateTeamPayload) => void
+	updateTeam: (payload: UpdateTeamPayload) => void
+	archiveDepartment: (payload: ArchiveDepartmentPayload) => void
+	archiveTeam: (payload: ArchiveTeamPayload) => void
+	removeTeamFromDepartment: (payload: RemoveTeamFromDepartmentPayload) => void
+	assignTeamToDepartment: (payload: AssignTeamToDepartmentPayload) => void
+	assignEmployeeToTeam: (payload: AssignEmployeeToTeamPayload) => void
+	removeEmployeeFromTeam: (payload: RemoveEmployeeFromTeamPayload) => void
 	createEmployee: (payload: CreateEmployeePayload) => void
+	updateEmployee: (payload: UpdateEmployeePayload) => void
+	archiveEmployee: (payload: ArchiveEmployeePayload) => void
 	selectCompany: (companyId?: string) => void
+	setActiveEmployee: (companyId: string, employeeId: string) => void
+	createActionItem: (payload: CreateActionItemPayload) => void
+	updateActionItem: (payload: UpdateActionItemPayload) => void
+	deleteActionItem: (payload: DeleteActionItemPayload) => void
+	createActionStatus: (payload: CreateActionStatusPayload) => void
+	updateActionStatus: (payload: UpsertActionStatusPayload) => void
+	startActionItems: (payload: StartActionItemsPayload) => void
 	setShowWelcome: (value: boolean) => void
+	hubSnapshot?: HubSnapshot
+	createHubRoom: (title?: string, options?: { autonomous?: boolean; participants?: HubAgentBlueprint[] }) => void
+	setActiveHubRoom: (roomId: string) => void
+	sendHubMessage: (roomId: string, text: string) => void
+	addHubAgent: (roomId: string, agent: HubAgentBlueprint) => void
+	removeHubParticipant: (roomId: string, participantId: string) => void
+	updateHubSettings: (roomId: string, settings: HubSettingsUpdate) => void
+	sendOuterGateMessage: (text: string) => void
+	triggerOuterGateAction: (slug: string) => void
+	outerGateConnectNotion: (payload: {
+		token?: string
+		databaseId?: string
+		dataSourceId?: string
+		pageSize?: number
+		maxPages?: number
+	}) => void
+	outerGateSyncNotion: (payload?: {
+		databaseId?: string
+		dataSourceId?: string
+		pageSize?: number
+		maxPages?: number
+	}) => void
+	outerGateConnectMiro: (payload: {
+		token?: string
+		boardId?: string
+		itemTypes?: string[]
+		maxItems?: number
+	}) => void
+	outerGateSyncMiro: (payload?: { boardId?: string; itemTypes?: string[]; maxItems?: number }) => void
+	outerGateImportZip: () => void
+	createCloverSession: (options?: { companyId?: string; companyName?: string }) => void
+	activateCloverSession: (sessionId: string) => void
+	loadMoreCloverSessions: (cursor?: string) => void
 }
 
 export const ExtensionStateContext = createContext<ExtensionStateContextType | undefined>(undefined)
@@ -244,6 +344,10 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		experiments: experimentDefault,
 		enhancementApiConfigId: "",
 		dismissedNotificationIds: [], // kilocode_change
+		notificationEmail: "",
+		notificationSmsNumber: "",
+		notificationSmsGateway: "tmomail.net",
+		notificationTelegramChatId: "",
 		commitMessageApiConfigId: "", // kilocode_change
 		ghostServiceSettings: {}, // kilocode_change
 		condensingApiConfigId: "", // Default empty string for condensing API config ID
@@ -259,6 +363,9 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		showRooIgnoredFiles: true, // Default to showing .rooignore'd files with lock symbol (current behavior).
 		showAutoApproveMenu: false, // kilocode_change
 		renderContext: "sidebar",
+		browserInteractionStrategy: "legacy",
+		browserStreamFrames: {},
+		endlessSurface: undefined,
 		maxReadFileLine: -1, // Default max read file line limit
 		maxImageFileSize: 5, // Default max image file size in MB
 		maxTotalImageSize: 20, // Default max total image size in MB
@@ -296,7 +403,9 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		openRouterImageApiKey: "",
 		kiloCodeImageApiKey: "",
 		openRouterImageGenerationSelectedModel: "",
-		workplaceState: { companies: [] },
+		workplaceState: { companies: [], ownerProfileDefaults: undefined },
+		hubSnapshot: { rooms: [], activeRoomId: undefined },
+		outerGateState: defaultOuterGateState,
 	})
 
 	const [didHydrateState, setDidHydrateState] = useState(false)
@@ -337,6 +446,161 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 				...value,
 			},
 		}))
+	}, [])
+
+	const createHubRoom = useCallback(
+		(title?: string, options?: { autonomous?: boolean; participants?: HubAgentBlueprint[] }) => {
+			vscode.postMessage({
+				type: "hubCreateRoom",
+				text: title,
+				hubAutonomous: options?.autonomous,
+				hubParticipants: options?.participants,
+			})
+		},
+		[],
+	)
+
+	const setActiveHubRoom = useCallback((roomId: string) => {
+		vscode.postMessage({ type: "hubSetActiveRoom", hubRoomId: roomId })
+	}, [])
+
+	const sendHubMessage = useCallback((roomId: string, text: string) => {
+		vscode.postMessage({ type: "hubSendMessage", hubRoomId: roomId, text })
+	}, [])
+
+	const addHubAgent = useCallback((roomId: string, agent: HubAgentBlueprint) => {
+		vscode.postMessage({ type: "hubAddAgent", hubRoomId: roomId, hubAgent: agent })
+	}, [])
+
+	const removeHubParticipant = useCallback((roomId: string, participantId: string) => {
+		vscode.postMessage({ type: "hubRemoveParticipant", hubRoomId: roomId, participantId })
+	}, [])
+
+	const updateHubSettings = useCallback((roomId: string, settings: HubSettingsUpdate) => {
+		vscode.postMessage({ type: "hubUpdateSettings", hubRoomId: roomId, hubSettings: settings })
+	}, [])
+
+	const sendOuterGateMessage = useCallback((text: string) => {
+		const trimmed = text.trim()
+		if (!trimmed) {
+			return
+		}
+
+		const clientMessageId =
+			typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+				? crypto.randomUUID()
+				: `og-${Date.now()}-${Math.random().toString(16).slice(2)}`
+
+		setState((prev) => {
+			const outerGate = prev.outerGateState ?? defaultOuterGateState
+			return {
+				...prev,
+				outerGateState: {
+					...outerGate,
+					cloverMessages: [
+						...outerGate.cloverMessages,
+						{
+							id: clientMessageId,
+							speaker: "user",
+							text: trimmed,
+							timestamp: new Date().toISOString(),
+						},
+					],
+					isCloverProcessing: true,
+				},
+			}
+		})
+
+		vscode.postMessage({ type: "outerGateSend", text: trimmed, clientMessageId })
+	}, [])
+
+	const triggerOuterGateAction = useCallback((slug: string) => {
+		switch (slug) {
+			case "create-workspace": {
+				const payload = { type: "action", action: "switchTab", tab: "workspace" }
+				window.postMessage(payload, "*")
+				break
+			}
+			case "create-company": {
+				window.postMessage({ type: "outerGateOpenCreateCompanyModal" }, "*")
+				break
+			}
+			case "import-data": {
+				const payload = {
+					type: "action",
+					action: "switchTab",
+					tab: "hub",
+					values: { section: "integrations" },
+				}
+				window.postMessage(payload, "*")
+				break
+			}
+			case "capture-thought": {
+				window.postMessage({ type: "outerGateFocusComposer" }, "*")
+				break
+			}
+			default:
+				break
+		}
+	}, [])
+
+	const outerGateConnectNotion = useCallback(
+		(payload: {
+			token?: string
+			databaseId?: string
+			dataSourceId?: string
+			pageSize?: number
+			maxPages?: number
+		}) => {
+			vscode.postMessage({
+				type: "outerGateConnectNotion",
+				notionToken: payload.token,
+				notionDatabaseId: payload.databaseId,
+				notionDataSourceId: payload.dataSourceId,
+				notionPageSize: payload.pageSize,
+				notionMaxPages: payload.maxPages,
+			})
+		},
+		[],
+	)
+
+	const outerGateSyncNotion = useCallback(
+		(payload?: { databaseId?: string; dataSourceId?: string; pageSize?: number; maxPages?: number }) => {
+			vscode.postMessage({
+				type: "outerGateSyncNotion",
+				notionDatabaseId: payload?.databaseId,
+				notionDataSourceId: payload?.dataSourceId,
+				notionPageSize: payload?.pageSize,
+				notionMaxPages: payload?.maxPages,
+			})
+		},
+		[],
+	)
+
+	const outerGateConnectMiro = useCallback(
+		(payload: { token?: string; boardId?: string; itemTypes?: string[]; maxItems?: number }) => {
+			vscode.postMessage({
+				type: "outerGateConnectMiro",
+				miroToken: payload.token,
+				miroBoardId: payload.boardId,
+				miroItemTypes: payload.itemTypes,
+				miroMaxItems: payload.maxItems,
+			})
+		},
+		[],
+	)
+
+	const outerGateSyncMiro = useCallback((payload?: { boardId?: string; itemTypes?: string[]; maxItems?: number }) => {
+		vscode.postMessage({
+			type: "outerGateSyncMiro",
+			miroBoardId: payload?.boardId,
+			miroItemTypes: payload?.itemTypes,
+			miroMaxItems: payload?.maxItems,
+		})
+	}, [])
+
+	const outerGateImportZip = useCallback(() => {
+		vscode.postMessage({ type: "outerGateImportZip" })
 	}, [])
 
 	const handleMessage = useCallback(
@@ -385,6 +649,36 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 				}
 				case "commands": {
 					setCommands(message.commands ?? [])
+					break
+				}
+				case "browserStreamFrame": {
+					const frame = message.frame as BrowserStreamFrame | undefined
+					if (!frame?.sessionId) {
+						break
+					}
+
+					setState((prevState) => {
+						const existing = prevState.browserStreamFrames ?? {}
+						const nextFrames: Record<string, BrowserStreamFrame> = { ...existing }
+						if (frame.ended) {
+							delete nextFrames[frame.sessionId]
+						} else {
+							nextFrames[frame.sessionId] = frame
+						}
+
+						if (
+							existing === prevState.browserStreamFrames &&
+							existing[frame.sessionId] === frame &&
+							!frame.ended
+						) {
+							return prevState
+						}
+
+						return {
+							...prevState,
+							browserStreamFrames: nextFrames,
+						}
+					})
 					break
 				}
 				case "messageUpdated": {
@@ -457,10 +751,113 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		vscode.postMessage({ type: "webviewDidLaunch" })
 	}, [])
 
-	const workplaceState = state.workplaceState ?? { companies: [] }
+	const createSurface = useCallback(async (title?: string) => {
+		vscode.postMessage({ type: "endlessSurfaceCreate", surfaceTitle: title })
+	}, [])
+
+	const setActiveSurface = useCallback(async (surfaceId: string | undefined) => {
+		vscode.postMessage({ type: "endlessSurfaceSetActive", surfaceId })
+	}, [])
+
+	const renameSurface = useCallback(async (surfaceId: string, title: string) => {
+		vscode.postMessage({
+			type: "endlessSurfaceUpdateMeta",
+			surfaceId,
+			surfaceMetaUpdates: { title },
+		})
+	}, [])
+
+	const setSurfaceAgentAccess = useCallback(async (surfaceId: string, access: EndlessSurfaceAgentAccess) => {
+		vscode.postMessage({
+			type: "endlessSurfaceUpdateMeta",
+			surfaceId,
+			surfaceAgentAccess: access,
+		})
+	}, [])
+
+	const saveSurfaceRecord = useCallback(async (record: EndlessSurfaceRecord) => {
+		vscode.postMessage({ type: "endlessSurfaceSaveRecord", surfaceRecord: record })
+	}, [])
+
+	const deleteSurface = useCallback(async (surfaceId: string) => {
+		vscode.postMessage({ type: "endlessSurfaceDelete", surfaceId })
+	}, [])
+
+	const requestSurfaceSnapshot = useCallback(async ({ surfaceId }: { surfaceId: string }) => {
+		vscode.postMessage({ type: "endlessSurfaceRequestSnapshot", surfaceId })
+	}, [])
+
+	const workplaceState = useMemo<WorkplaceState>(() => {
+		if (!state.workplaceState) {
+			return { companies: [], ownerProfileDefaults: undefined }
+		}
+
+		return {
+			...state.workplaceState,
+			companies: state.workplaceState.companies.map((company) => {
+				const activeEmployees = company.employees
+					.filter((employee) => !employee.deletedAt)
+					.map((employee) => ({ ...employee }))
+				const activeEmployeeIds = new Set(activeEmployees.map((employee) => employee.id))
+
+				const sanitizedTeams = company.teams
+					.filter((team) => !team.deletedAt)
+					.map((team) => {
+						const memberships = (team.memberships ?? []).map((membership) => ({ ...membership }))
+						const activeMembershipIds = memberships
+							.filter(
+								(membership) => !membership.removedAt && activeEmployeeIds.has(membership.employeeId),
+							)
+							.map((membership) => membership.employeeId)
+						return {
+							...team,
+							memberships,
+							employeeIds: activeMembershipIds,
+						}
+					})
+				const activeTeamIds = new Set(sanitizedTeams.map((team) => team.id))
+
+				const sanitizedDepartments = company.departments
+					.filter((department) => !department.deletedAt)
+					.map((department) => {
+						const teamLinks = (department.teamLinks ?? []).map((link) => ({ ...link }))
+						const activeTeamIdList = teamLinks
+							.filter((link) => !link.unlinkedAt && activeTeamIds.has(link.teamId))
+							.map((link) => link.teamId)
+						return {
+							...department,
+							teamLinks,
+							teamIds: activeTeamIdList,
+						}
+					})
+
+				const resolvedExecutiveId =
+					company.executiveManagerId && activeEmployeeIds.has(company.executiveManagerId)
+						? company.executiveManagerId
+						: (activeEmployees.find((employee) => employee.isExecutiveManager)?.id ??
+							activeEmployees[0]?.id ??
+							"")
+				const resolvedActiveEmployeeId =
+					company.activeEmployeeId && activeEmployeeIds.has(company.activeEmployeeId)
+						? company.activeEmployeeId
+						: activeEmployees[0]?.id
+
+				return {
+					...company,
+					employees: activeEmployees,
+					teams: sanitizedTeams,
+					departments: sanitizedDepartments,
+					executiveManagerId: resolvedExecutiveId,
+					activeEmployeeId: resolvedActiveEmployeeId,
+				}
+			}),
+		}
+	}, [state.workplaceState])
 
 	const contextValue: ExtensionStateContextType = {
 		...state,
+		browserInteractionStrategy: state.browserInteractionStrategy ?? "legacy",
+		browserStreamFrames: state.browserStreamFrames ?? {},
 		didHydrateState,
 		showWelcome,
 		theme,
@@ -489,6 +886,13 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		profileThresholds: state.profileThresholds ?? {},
 		alwaysAllowFollowupQuestions,
 		followupAutoApproveTimeoutMs,
+		createSurface,
+		setActiveSurface,
+		renameSurface,
+		setSurfaceAgentAccess,
+		saveSurfaceRecord,
+		deleteSurface,
+		requestSurfaceSnapshot,
 		remoteControlEnabled: state.remoteControlEnabled ?? false,
 		setExperimentEnabled: (id, enabled) =>
 			setState((prevState) => ({ ...prevState, experiments: { ...prevState.experiments, [id]: enabled } })),
@@ -560,6 +964,8 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 			setState((prevState) => ({ ...prevState, commitMessageApiConfigId: value })),
 		setShowAutoApproveMenu: (value) => setState((prevState) => ({ ...prevState, showAutoApproveMenu: value })),
 		setShowTaskTimeline: (value) => setState((prevState) => ({ ...prevState, showTaskTimeline: value })),
+		setBrowserInteractionStrategy: (value: BrowserInteractionStrategy) =>
+			setState((prevState) => ({ ...prevState, browserInteractionStrategy: value })),
 		setHoveringTaskTimeline: (value) => setState((prevState) => ({ ...prevState, hoveringTaskTimeline: value })),
 		// kilocode_change end
 		setAutoApprovalEnabled: (value) => setState((prevState) => ({ ...prevState, autoApprovalEnabled: value })),
@@ -622,10 +1028,81 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		includeTaskHistoryInEnhance,
 		setIncludeTaskHistoryInEnhance,
 		workplaceState,
+		hubSnapshot: state.hubSnapshot,
+		createHubRoom,
+		setActiveHubRoom,
+		sendHubMessage,
+		addHubAgent,
+		removeHubParticipant,
+		updateHubSettings,
 		createCompany: (payload) => vscode.postMessage({ type: "createCompany", workplaceCompanyPayload: payload }),
+		updateCompany: (payload) => vscode.postMessage({ type: "updateCompany", workplaceCompanyUpdate: payload }),
+		createDepartment: (payload) =>
+			vscode.postMessage({ type: "createDepartment", workplaceDepartmentPayload: payload }),
+		updateDepartment: (payload) =>
+			vscode.postMessage({ type: "updateDepartment", workplaceDepartmentUpdate: payload }),
+		createTeam: (payload) => vscode.postMessage({ type: "createTeam", workplaceTeamPayload: payload }),
+		updateTeam: (payload) => vscode.postMessage({ type: "updateTeam", workplaceTeamUpdate: payload }),
+		archiveDepartment: (payload) =>
+			vscode.postMessage({ type: "archiveDepartment", workplaceDepartmentArchive: payload }),
+		archiveTeam: (payload) => vscode.postMessage({ type: "archiveTeam", workplaceTeamArchive: payload }),
+		removeTeamFromDepartment: (payload) =>
+			vscode.postMessage({
+				type: "removeTeamFromDepartment",
+				workplaceTeamDepartmentRemoval: payload,
+			}),
+		assignTeamToDepartment: (payload) =>
+			vscode.postMessage({ type: "assignTeamToDepartment", workplaceTeamAssignment: payload }),
+		assignEmployeeToTeam: (payload) =>
+			vscode.postMessage({
+				type: "assignEmployeeToTeam",
+				workplaceTeamEmployeeAssignment: payload,
+			}),
+		removeEmployeeFromTeam: (payload) =>
+			vscode.postMessage({
+				type: "removeEmployeeFromTeam",
+				workplaceTeamEmployeeRemoval: payload,
+			}),
 		createEmployee: (payload) => vscode.postMessage({ type: "createEmployee", workplaceEmployeePayload: payload }),
+		updateEmployee: (payload) => vscode.postMessage({ type: "updateEmployee", workplaceEmployeeUpdate: payload }),
+		archiveEmployee: (payload) =>
+			vscode.postMessage({ type: "archiveEmployee", workplaceEmployeeArchive: payload }),
 		selectCompany: (companyId) => vscode.postMessage({ type: "selectCompany", workplaceCompanyId: companyId }),
+		setActiveEmployee: (companyId, employeeId) =>
+			vscode.postMessage({
+				type: "setActiveEmployee",
+				workplaceCompanyId: companyId,
+				workplaceEmployeeId: employeeId,
+			}),
+		createActionItem: (payload) =>
+			vscode.postMessage({ type: "createActionItem", workplaceActionItemPayload: payload }),
+		updateActionItem: (payload) =>
+			vscode.postMessage({ type: "updateActionItem", workplaceActionItemUpdate: payload }),
+		deleteActionItem: (payload) =>
+			vscode.postMessage({ type: "deleteActionItem", workplaceActionItemDelete: payload }),
+		createActionStatus: (payload) =>
+			vscode.postMessage({ type: "createActionStatus", workplaceActionStatusPayload: payload }),
+		updateActionStatus: (payload) =>
+			vscode.postMessage({ type: "updateActionStatus", workplaceActionStatusUpdate: payload }),
+		startActionItems: (payload) => vscode.postMessage({ type: "startActionItems", workplaceActionStart: payload }),
 		setShowWelcome,
+		sendOuterGateMessage,
+		triggerOuterGateAction,
+		outerGateConnectNotion,
+		outerGateSyncNotion,
+		outerGateConnectMiro,
+		outerGateSyncMiro,
+		outerGateImportZip,
+		createCloverSession: (options) =>
+			vscode.postMessage({
+				type: "outerGateSessionsNew",
+				cloverSessionCompanyId: options?.companyId,
+				cloverSessionCompanyName: options?.companyName,
+			}),
+		activateCloverSession: (sessionId) =>
+			vscode.postMessage({ type: "outerGateSessionsActivate", cloverSessionId: sessionId }),
+		loadMoreCloverSessions: (cursor) =>
+			vscode.postMessage({ type: "outerGateSessionsLoadMore", cloverSessionCursor: cursor }),
 	}
 
 	return <ExtensionStateContext.Provider value={contextValue}>{children}</ExtensionStateContext.Provider>

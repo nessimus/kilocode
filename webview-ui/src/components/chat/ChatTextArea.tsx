@@ -34,13 +34,34 @@ import {
 	Check,
 	// Image, // kilocode_change
 	WandSparkles,
-	SendHorizontal,
 	Paperclip, // kilocode_change
+	Mic,
+	MicOff,
+	Phone,
+	PhoneOff,
+	Loader2,
 } from "lucide-react"
 import { IndexingStatusBadge } from "./IndexingStatusBadge"
 import { cn } from "@/lib/utils"
 import { usePromptHistory } from "./hooks/usePromptHistory"
 import { EditModeControls } from "./EditModeControls"
+import { ChatSendButton } from "./ChatSendButton"
+import { showSystemNotification } from "@/kilocode/helpers"
+
+// Minimal subset of the Web Speech API we rely on for voice drafting support.
+interface WebSpeechRecognition {
+	lang: string
+	continuous: boolean
+	interimResults: boolean
+	start: () => void
+	stop: () => void
+	abort?: () => void
+	onresult: ((event: any) => void) | null
+	onerror: ((event: any) => void) | null
+	onend: (() => void) | null
+}
+
+type WebSpeechRecognitionConstructor = new () => WebSpeechRecognition
 
 // kilocode_change start: pull slash commands from Cline
 import SlashCommandMenu from "@/components/chat/SlashCommandMenu"
@@ -53,6 +74,8 @@ import {
 } from "@/utils/slash-commands"
 // kilocode_change end
 
+type RealtimeStatus = "idle" | "requesting" | "connecting" | "active"
+
 interface ChatTextAreaProps {
 	inputValue: string
 	setInputValue: (value: string) => void
@@ -62,6 +85,8 @@ interface ChatTextAreaProps {
 	selectedImages: string[]
 	setSelectedImages: React.Dispatch<React.SetStateAction<string[]>>
 	onSend: () => void
+	sendButtonState?: "send" | "stop"
+	onStop?: () => void
 	onSelectImages: () => void
 	shouldDisableImages: boolean
 	onHeightChange?: (height: number) => void
@@ -84,6 +109,8 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			selectedImages,
 			setSelectedImages,
 			onSend,
+			sendButtonState = "send",
+			onStop,
 			onSelectImages,
 			shouldDisableImages,
 			onHeightChange,
@@ -121,6 +148,13 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			}
 		}, [listApiConfigMeta, currentApiConfigName])
 
+		const sendMessageLabel = (t("chat:sendMessage") ?? "Send Message") as string
+		const stopMessageLabel = t("common:hub.stop", { defaultValue: "Stop" }) as string
+		const isStopState = sendButtonState === "stop"
+		const sendButtonLabel = isStopState ? stopMessageLabel : sendMessageLabel
+		const sendButtonDisabled = isStopState ? false : sendingDisabled
+		const sendButtonHandler = isStopState ? (onStop ?? onSend) : onSend
+
 		const [gitCommits, setGitCommits] = useState<any[]>([])
 		const [showDropdown, setShowDropdown] = useState(false)
 		const [fileSearchResults, setFileSearchResults] = useState<SearchResult[]>([])
@@ -153,6 +187,84 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 
 		const [searchLoading, setSearchLoading] = useState(false)
 		const [searchRequestId, setSearchRequestId] = useState<string>("")
+
+		const speechRecognitionConstructor = useMemo<WebSpeechRecognitionConstructor | null>(() => {
+			const w = window as unknown as {
+				SpeechRecognition?: WebSpeechRecognitionConstructor
+				webkitSpeechRecognition?: WebSpeechRecognitionConstructor
+			}
+			return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null
+		}, [])
+		const isSpeechSupported = speechRecognitionConstructor !== null
+		const [isListening, setIsListening] = useState(false)
+		const [speechError, setSpeechError] = useState<string | null>(null)
+		const recognitionRef = useRef<WebSpeechRecognition | null>(null)
+		const speechAccumulatedValueRef = useRef<string>("")
+		const inputValueLiveRef = useRef(inputValue)
+
+		const realtimeStreamsRef = useRef<{ mic?: MediaStream; screen?: MediaStream }>({})
+		const realtimeSessionIdRef = useRef<string | null>(null)
+		const [realtimeStatus, setRealtimeStatus] = useState<RealtimeStatus>("idle")
+		const logRealtime = (...args: any[]) => {
+			console.info("[Realtime][UI]", ...args)
+		}
+
+		const supportsAudioCapture =
+			typeof navigator !== "undefined" &&
+			navigator.mediaDevices !== undefined &&
+			typeof navigator.mediaDevices.getUserMedia === "function"
+
+		const supportsScreenCapture =
+			typeof navigator !== "undefined" &&
+			navigator.mediaDevices !== undefined &&
+			typeof navigator.mediaDevices.getDisplayMedia === "function"
+
+		const isRealtimeSupported = supportsAudioCapture
+
+		const modeSlug = useMemo(() => {
+			if (mode && typeof mode === "object" && mode !== null && "slug" in mode) {
+				const { slug } = mode as { slug?: string }
+				return slug ?? undefined
+			}
+			return undefined
+		}, [mode])
+
+		const cleanupRealtime = useCallback(
+			(options?: { notifyExtension?: boolean; suppressStateReset?: boolean }) => {
+				const { notifyExtension = false, suppressStateReset = false } = options ?? {}
+				const { mic, screen } = realtimeStreamsRef.current
+
+				logRealtime("cleanup:start", {
+					notifyExtension,
+					suppressStateReset,
+					hasMic: Boolean(mic),
+					hasScreen: Boolean(screen),
+				})
+
+				if (mic) {
+					mic.getTracks().forEach((track) => track.stop())
+					logRealtime("cleanup:stopped-mic-tracks")
+				}
+
+				if (screen) {
+					screen.getTracks().forEach((track) => track.stop())
+					logRealtime("cleanup:stopped-screen-tracks")
+				}
+
+				realtimeStreamsRef.current = {}
+				realtimeSessionIdRef.current = null
+
+				if (!suppressStateReset) {
+					setRealtimeStatus("idle")
+				}
+
+				if (notifyExtension) {
+					logRealtime("cleanup:notify-extension")
+					vscode.postMessage({ type: "stopRealtimeSession" })
+				}
+			},
+			[logRealtime],
+		)
 
 		// Close dropdown when clicking outside.
 		useEffect(() => {
@@ -219,13 +331,166 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							}
 						}, 0)
 					}
+				} else if (message.type === "realtimeSessionCredentials") {
+					const values = (message.values ?? {}) as { sessionId?: string }
+					realtimeSessionIdRef.current = typeof values.sessionId === "string" ? values.sessionId : null
+					logRealtime("message:credentials", values)
+					setRealtimeStatus("active")
+				} else if (message.type === "realtimeSessionEnded") {
+					logRealtime("message:ended")
+					realtimeSessionIdRef.current = null
+					cleanupRealtime()
+				} else if (message.type === "realtimeSessionError") {
+					realtimeSessionIdRef.current = null
+					logRealtime("message:error", message.text)
+					cleanupRealtime()
+					const errorMessage =
+						typeof message.text === "string" && message.text.trim().length > 0
+							? message.text
+							: t("chat:realtimeSessionError")
+					showSystemNotification(errorMessage)
 				}
 				// kilocode_change end
 			}
 
 			window.addEventListener("message", messageHandler)
 			return () => window.removeEventListener("message", messageHandler)
-		}, [setInputValue, searchRequestId])
+		}, [cleanupRealtime, logRealtime, searchRequestId, setInputValue, t])
+
+		const requestRealtimeSession = useCallback(async () => {
+			if (!isRealtimeSupported || typeof navigator === "undefined" || !navigator.mediaDevices) {
+				showSystemNotification(t("chat:realtimeUnsupported"))
+				return
+			}
+
+			logRealtime("request:start")
+
+			setRealtimeStatus("requesting")
+
+			let micStream: MediaStream | undefined
+			try {
+				const getUserMedia = navigator.mediaDevices.getUserMedia?.bind(navigator.mediaDevices)
+				if (!getUserMedia) {
+					throw new Error("getUserMedia not available")
+				}
+				micStream = await getUserMedia({ audio: true, video: false })
+				logRealtime("request:microphone-granted", {
+					trackCount: micStream.getTracks().length,
+				})
+			} catch (error) {
+				setRealtimeStatus("idle")
+				const errorMessage =
+					error instanceof DOMException &&
+					(error.name === "NotAllowedError" || error.name === "SecurityError")
+						? t("chat:realtimePermissionDenied")
+						: t("chat:realtimeSessionError")
+				logRealtime("request:microphone-denied", { error })
+				showSystemNotification(errorMessage)
+				return
+			}
+
+			if (!supportsScreenCapture || !navigator.mediaDevices) {
+				micStream.getTracks().forEach((track) => track.stop())
+				setRealtimeStatus("idle")
+				showSystemNotification(t("chat:realtimeScreenUnsupported"))
+				return
+			}
+
+			let screenStream: MediaStream | undefined
+			try {
+				const getDisplayMedia = navigator.mediaDevices.getDisplayMedia?.bind(navigator.mediaDevices)
+				if (!getDisplayMedia) {
+					throw new Error("getDisplayMedia not available")
+				}
+				screenStream = await getDisplayMedia({
+					video: {
+						frameRate: { ideal: 15, max: 30 },
+						cursor: "always",
+					},
+					audio: false,
+				})
+				logRealtime("request:screen-granted", {
+					trackCount: screenStream.getTracks().length,
+				})
+			} catch (error) {
+				micStream.getTracks().forEach((track) => track.stop())
+				setRealtimeStatus("idle")
+				const errorMessage =
+					error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "AbortError")
+						? t("chat:realtimeScreenPermissionDenied")
+						: t("chat:realtimeSessionError")
+				logRealtime("request:screen-denied", { error })
+				showSystemNotification(errorMessage)
+				return
+			}
+
+			realtimeStreamsRef.current = { mic: micStream, screen: screenStream }
+			setRealtimeStatus("connecting")
+			logRealtime("request:streams-ready", {
+				hasMic: Boolean(micStream),
+				hasScreen: Boolean(screenStream),
+			})
+
+			const sessionValues: Record<string, any> = {
+				enableScreenShare: Boolean(screenStream),
+			}
+			if (modeSlug) {
+				sessionValues.modeSlug = modeSlug
+			}
+
+			logRealtime("request:postMessage", sessionValues)
+			vscode.postMessage({ type: "startRealtimeSession", values: sessionValues })
+		}, [isRealtimeSupported, logRealtime, modeSlug, supportsScreenCapture, t])
+
+		const handleRealtimeButtonClick = useCallback(() => {
+			if (realtimeStatus === "active" || realtimeStatus === "connecting") {
+				logRealtime("button:stop", { currentStatus: realtimeStatus, sessionId: realtimeSessionIdRef.current })
+				cleanupRealtime({ notifyExtension: true })
+				return
+			}
+			if (realtimeStatus !== "idle") {
+				logRealtime("button:ignored", { currentStatus: realtimeStatus })
+				return
+			}
+			if (!isRealtimeSupported) {
+				logRealtime("button:unsupported")
+				showSystemNotification(t("chat:realtimeUnsupported"))
+				return
+			}
+			logRealtime("button:start")
+			void requestRealtimeSession()
+		}, [cleanupRealtime, isRealtimeSupported, logRealtime, realtimeStatus, requestRealtimeSession, t])
+
+		const realtimeTooltip = useMemo(() => {
+			if (!isRealtimeSupported) {
+				return t("chat:realtimeUnsupported")
+			}
+			switch (realtimeStatus) {
+				case "idle":
+					return t("chat:startRealtimeSession")
+				case "requesting":
+					return t("chat:realtimeSessionStarting")
+				case "connecting":
+				case "active":
+					return t("chat:stopRealtimeSession")
+				default:
+					return t("chat:startRealtimeSession")
+			}
+		}, [isRealtimeSupported, realtimeStatus, t])
+
+		const isRealtimeActive = realtimeStatus === "active"
+		const isRealtimeConnecting = realtimeStatus === "connecting"
+		const isRealtimeRequesting = realtimeStatus === "requesting"
+		const isRealtimePending = isRealtimeRequesting || isRealtimeConnecting
+
+		useEffect(() => {
+			return () => {
+				if (realtimeStatus !== "idle") {
+					logRealtime("component:unmount-cleanup", { status: realtimeStatus })
+					cleanupRealtime({ notifyExtension: true, suppressStateReset: true })
+				}
+			}
+		}, [cleanupRealtime, logRealtime, realtimeStatus])
 
 		const [isDraggingOver, setIsDraggingOver] = useState(false)
 		// kilocode_change start: pull slash commands from Cline
@@ -678,99 +943,109 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		}, [inputValue, intendedCursorPosition])
 
 		// Ref to store the search timeout.
-		const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+		const searchTimeoutRef = useRef<number | null>(null)
 
-		const handleInputChange = useCallback(
-			(e: React.ChangeEvent<HTMLTextAreaElement>) => {
-				const newValue = e.target.value
+		const applyInputValue = useCallback(
+			(newValue: string, selectionPosition?: number) => {
 				setInputValue(newValue)
-
-				// Reset history navigation when user types
 				resetOnInputChange()
 
-				const newCursorPosition = e.target.selectionStart
-				setCursorPosition(newCursorPosition)
+				const nextCursorPosition =
+					typeof selectionPosition === "number" && selectionPosition >= 0
+						? selectionPosition
+						: newValue.length
+				setCursorPosition(nextCursorPosition)
 
-				// kilocode_change start: pull slash commands from Cline
-				let showMenu = shouldShowContextMenu(newValue, newCursorPosition)
-				const showSlashCommandsMenu = shouldShowSlashCommandsMenu(newValue, newCursorPosition)
+				let showMenu = shouldShowContextMenu(newValue, nextCursorPosition)
+				const slashCommandsVisible = shouldShowSlashCommandsMenu(newValue, nextCursorPosition)
 
-				// we do not allow both menus to be shown at the same time
-				// the slash commands menu has precedence bc its a narrower component
-				if (showSlashCommandsMenu) {
+				if (slashCommandsVisible) {
 					showMenu = false
 				}
 
-				setShowSlashCommandsMenu(showSlashCommandsMenu)
-				// kilocode_change end
-
-				setShowContextMenu(showMenu)
-
-				// kilocode_change start: pull slash commands from Cline
-				if (showSlashCommandsMenu) {
+				setShowSlashCommandsMenu(slashCommandsVisible)
+				if (slashCommandsVisible) {
 					const slashIndex = newValue.indexOf("/")
-					const query = newValue.slice(slashIndex + 1, newCursorPosition)
+					const query = newValue.slice(slashIndex + 1, nextCursorPosition)
 					setSlashCommandsQuery(query)
 					setSelectedSlashCommandsIndex(0)
 				} else {
 					setSlashCommandsQuery("")
 					setSelectedSlashCommandsIndex(0)
 				}
-				// kilocode_change end
+
+				setShowContextMenu(showMenu)
 
 				if (showMenu) {
-					// kilocode_change start - check lastAtIndex before handling slash commands
-					const lastAtIndex = newValue.lastIndexOf("@", newCursorPosition - 1)
+					const lastAtIndex = newValue.lastIndexOf("@", nextCursorPosition - 1)
 
-					// if (newValue.startsWith("/")) { ⚠️ kilocode_change added lastAtIndex check
 					if (newValue.startsWith("/") && lastAtIndex === -1) {
-						// Handle slash command.
-						const query = newValue
-						setSearchQuery(query)
+						setSearchQuery(newValue)
 						setSelectedMenuIndex(0)
 					} else {
-						// Existing @ mention handling.
-						const query = newValue.slice(lastAtIndex + 1, newCursorPosition)
+						const query = newValue.slice(lastAtIndex + 1, nextCursorPosition)
 						setSearchQuery(query)
 
-						// Send file search request if query is not empty.
 						if (query.length > 0) {
 							setSelectedMenuIndex(0)
 
-							// Don't clear results until we have new ones. This
-							// prevents flickering.
-
-							// Clear any existing timeout.
 							if (searchTimeoutRef.current) {
 								clearTimeout(searchTimeoutRef.current)
 							}
 
-							// Set a timeout to debounce the search requests.
-							searchTimeoutRef.current = setTimeout(() => {
-								// Generate a request ID for this search.
+							searchTimeoutRef.current = window.setTimeout(() => {
 								const reqId = Math.random().toString(36).substring(2, 9)
 								setSearchRequestId(reqId)
 								setSearchLoading(true)
 
-								// Send message to extension to search files.
 								vscode.postMessage({
 									type: "searchFiles",
 									query: unescapeSpaces(query),
 									requestId: reqId,
 								})
-							}, 200) // 200ms debounce.
+							}, 200)
 						} else {
-							setSelectedMenuIndex(3) // Set to "File" option by default.
+							setSelectedMenuIndex(3)
 						}
 					}
 				} else {
 					setSearchQuery("")
 					setSelectedMenuIndex(-1)
-					setFileSearchResults([]) // Clear file search results.
+					setFileSearchResults([])
+				}
+
+				if (textAreaRef.current) {
+					const boundedCursor = Math.min(nextCursorPosition, newValue.length)
+					setIntendedCursorPosition(boundedCursor)
 				}
 			},
-			[setInputValue, setSearchRequestId, setFileSearchResults, setSearchLoading, resetOnInputChange],
+			[
+				resetOnInputChange,
+				setFileSearchResults,
+				setInputValue,
+				setSearchLoading,
+				setSearchQuery,
+				setSearchRequestId,
+				setSelectedMenuIndex,
+				setShowContextMenu,
+				setShowSlashCommandsMenu,
+				setSlashCommandsQuery,
+				setSelectedSlashCommandsIndex,
+				setCursorPosition,
+				setIntendedCursorPosition,
+			],
 		)
+
+		const handleInputChange = useCallback(
+			(e: React.ChangeEvent<HTMLTextAreaElement>) => {
+				applyInputValue(e.target.value, e.target.selectionStart ?? undefined)
+			},
+			[applyInputValue],
+		)
+
+		useEffect(() => {
+			inputValueLiveRef.current = inputValue
+		}, [inputValue])
 
 		useEffect(() => {
 			if (!showContextMenu) {
@@ -937,6 +1212,191 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				setCursorPosition(textAreaRef.current.selectionStart)
 			}
 		}, [])
+
+		const appendTranscript = useCallback((base: string, addition: string) => {
+			const trimmedAddition = addition.trim()
+			if (!trimmedAddition) {
+				return base
+			}
+
+			const needsSpace = base.length > 0 && !/\s$/.test(base) && !/^[',.!?)/\]]/.test(trimmedAddition)
+
+			return `${base}${needsSpace ? " " : ""}${trimmedAddition}`
+		}, [])
+
+		const handleSpeechRecognitionError = useCallback(
+			(event: any) => {
+				const error = event?.error as string | undefined
+				let message = t("chat:voiceInputError")
+
+				switch (error) {
+					case "not-allowed":
+					case "service-not-allowed":
+						message = t("chat:voiceInputPermissionDenied")
+						break
+					case "no-speech":
+						message = t("chat:voiceInputNoSpeech")
+						break
+					default:
+						if (typeof error === "string" && error.length > 0) {
+							message = `${t("chat:voiceInputError")}: ${error}`
+						}
+				}
+
+				setSpeechError(message)
+				setIsListening(false)
+			},
+			[t],
+		)
+
+		const stopSpeechRecognition = useCallback(() => {
+			if (!recognitionRef.current) {
+				return
+			}
+
+			try {
+				recognitionRef.current.stop()
+			} catch {
+				recognitionRef.current.abort?.()
+			}
+
+			setIsListening(false)
+		}, [])
+
+		const processSpeechResult = useCallback(
+			(event: any) => {
+				let interimTranscript = ""
+				let finalTranscript = ""
+
+				for (let i = event.resultIndex; i < event.results.length; i += 1) {
+					const result = event.results[i]
+					const transcriptSegment = result?.[0]?.transcript ?? ""
+
+					if (!transcriptSegment) {
+						continue
+					}
+
+					if (result.isFinal) {
+						finalTranscript += transcriptSegment
+					} else {
+						interimTranscript += transcriptSegment
+					}
+				}
+
+				if (finalTranscript) {
+					speechAccumulatedValueRef.current = appendTranscript(
+						speechAccumulatedValueRef.current,
+						finalTranscript,
+					)
+				}
+
+				const nextValue = interimTranscript
+					? appendTranscript(speechAccumulatedValueRef.current, interimTranscript)
+					: speechAccumulatedValueRef.current
+
+				applyInputValue(nextValue, nextValue.length)
+				requestAnimationFrame(() => updateHighlights())
+			},
+			[appendTranscript, applyInputValue, updateHighlights],
+		)
+
+		const startSpeechRecognition = useCallback(() => {
+			if (!speechRecognitionConstructor || isListening) {
+				return
+			}
+
+			setSpeechError(null)
+
+			if (!recognitionRef.current) {
+				const recognition = new speechRecognitionConstructor()
+				recognition.continuous = true
+				recognition.interimResults = true
+				recognition.lang = navigator.language || "en-US"
+				recognition.onresult = processSpeechResult
+				recognition.onerror = handleSpeechRecognitionError
+				recognition.onend = () => {
+					setIsListening(false)
+				}
+				recognitionRef.current = recognition
+			}
+
+			speechAccumulatedValueRef.current = inputValueLiveRef.current.trimEnd()
+
+			try {
+				recognitionRef.current.start()
+				setIsListening(true)
+			} catch (error) {
+				console.error("Speech recognition start failed", error)
+				setSpeechError(t("chat:voiceInputError"))
+			}
+		}, [
+			handleSpeechRecognitionError,
+			inputValueLiveRef,
+			isListening,
+			processSpeechResult,
+			speechRecognitionConstructor,
+			t,
+		])
+
+		useEffect(() => {
+			return () => {
+				if (!recognitionRef.current) {
+					return
+				}
+
+				const recognition = recognitionRef.current
+				try {
+					recognition.onresult = null
+					recognition.onerror = null
+					recognition.onend = null
+					recognition.stop()
+				} catch {
+					recognition.abort?.()
+				}
+				recognitionRef.current = null
+			}
+		}, [])
+
+		useEffect(() => {
+			if (!isListening || !sendingDisabled) {
+				return
+			}
+
+			stopSpeechRecognition()
+		}, [isListening, sendingDisabled, stopSpeechRecognition])
+
+		useEffect(() => {
+			if (!speechError) {
+				return
+			}
+
+			const timeout = window.setTimeout(() => setSpeechError(null), 5000)
+			return () => window.clearTimeout(timeout)
+		}, [speechError])
+
+		const toggleSpeechRecognition = useCallback(() => {
+			if (!isSpeechSupported) {
+				return
+			}
+
+			if (isListening) {
+				stopSpeechRecognition()
+			} else {
+				startSpeechRecognition()
+			}
+		}, [isSpeechSupported, isListening, startSpeechRecognition, stopSpeechRecognition])
+
+		const voiceInputTooltip = useMemo(() => {
+			if (speechError) {
+				return speechError
+			}
+
+			if (!isSpeechSupported) {
+				return t("chat:voiceInputUnsupported")
+			}
+
+			return isListening ? t("chat:stopVoiceInput") : t("chat:startVoiceInput")
+		}, [isListening, isSpeechSupported, speechError, t])
 
 		const handleKeyUp = useCallback(
 			(e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1279,6 +1739,22 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 								<WandSparkles className={cn("w-4 h-4", isEnhancingPrompt && "animate-spin")} />
 							</button>
 						</StandardTooltip>
+						<StandardTooltip content={voiceInputTooltip}>
+							<button
+								aria-label={voiceInputTooltip}
+								disabled={!isSpeechSupported || sendingDisabled}
+								onClick={!isSpeechSupported || sendingDisabled ? undefined : toggleSpeechRecognition}
+								className={cn(
+									baseButtonClasses,
+									isSpeechSupported && !sendingDisabled && "cursor-pointer",
+									(!isSpeechSupported || sendingDisabled) &&
+										"opacity-40 cursor-not-allowed grayscale-[30%] hover:bg-transparent hover:border-[rgba(255,255,255,0.08)] active:bg-transparent",
+									isListening &&
+										"text-[var(--vscode-focusBorder)] opacity-100 bg-[color-mix(in_srgb,var(--vscode-focusBorder)_18%,transparent)]",
+								)}>
+								{isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+							</button>
+						</StandardTooltip>
 						<StandardTooltip content="Add Context (@)">
 							<button
 								aria-label="Add Context (@)"
@@ -1302,20 +1778,37 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 								<Paperclip className={cn("w-4", "h-4", { hidden: containerWidth < 235 })} />
 							</button>
 						</StandardTooltip>
-						<StandardTooltip content={t("chat:sendMessage")}>
+						<StandardTooltip content={realtimeTooltip}>
 							<button
-								aria-label={t("chat:sendMessage")}
-								disabled={sendingDisabled}
-								onClick={!sendingDisabled ? onSend : undefined}
+								type="button"
+								aria-label={realtimeTooltip}
+								onClick={handleRealtimeButtonClick}
+								disabled={!isRealtimeSupported || isRealtimeRequesting}
 								className={cn(
 									baseButtonClasses,
-									!sendingDisabled && "cursor-pointer",
-									sendingDisabled &&
+									isRealtimeActive &&
+										"text-[var(--vscode-focusBorder)] opacity-100 bg-[color-mix(in_srgb,var(--vscode-focusBorder)_18%,transparent)]",
+									isRealtimeConnecting && "cursor-pointer",
+									isRealtimeRequesting && "cursor-progress",
+									!isRealtimeSupported &&
 										"opacity-40 cursor-not-allowed grayscale-[30%] hover:bg-transparent hover:border-[rgba(255,255,255,0.08)] active:bg-transparent",
 								)}>
-								<SendHorizontal className="w-4 h-4 rtl:-scale-x-100" />
+								{isRealtimePending ? (
+									<Loader2 className="w-4 h-4 animate-spin" />
+								) : isRealtimeActive ? (
+									<PhoneOff className="w-4 h-4" />
+								) : (
+									<Phone className="w-4 h-4" />
+								)}
 							</button>
 						</StandardTooltip>
+						<ChatSendButton
+							disabled={sendButtonDisabled}
+							onClick={sendButtonHandler}
+							tooltip={sendButtonLabel}
+							ariaLabel={sendButtonLabel}
+							variant={isStopState ? "stop" : "send"}
+						/>
 					</div>
 				</div>
 			)

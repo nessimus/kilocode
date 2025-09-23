@@ -3,7 +3,13 @@ import { useDeepCompareEffect, useEvent, useMount } from "react-use"
 import debounce from "debounce"
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso"
 import removeMd from "remove-markdown"
-import { VSCodeButton } from "@vscode/webview-ui-toolkit/react"
+import {
+	VSCodeButton,
+	VSCodeDropdown,
+	VSCodeOption,
+	VSCodeTextArea,
+	VSCodeTextField,
+} from "@vscode/webview-ui-toolkit/react"
 import useSound from "use-sound"
 import { LRUCache } from "lru-cache"
 import { useTranslation } from "react-i18next"
@@ -12,6 +18,13 @@ import { useDebounceEffect } from "@src/utils/useDebounceEffect"
 import { appendImages } from "@src/utils/imageUtils"
 
 import type { ClineAsk, ClineMessage, McpServerUse } from "@roo-code/types"
+import {
+	MBTI_TYPES,
+	type MbtiType,
+	type WorkplaceDepartment,
+	type WorkplaceEmployee,
+	type WorkplaceTeam,
+} from "@roo/golden/workplace"
 
 import { ClineSayBrowserAction, ClineSayTool, ExtensionMessage } from "@roo/ExtensionMessage"
 import { McpServer, McpTool } from "@roo/mcp"
@@ -35,6 +48,7 @@ import {
 import { useAppTranslation } from "@src/i18n/TranslationContext"
 import { useExtensionState } from "@src/context/ExtensionStateContext"
 import { useSelectedModel } from "@src/components/ui/hooks/useSelectedModel"
+import { WorkforceCanvas } from "@src/components/workplace/WorkforceCanvas"
 // import RooHero from "@src/components/welcome/RooHero" // kilocode_change: unused
 // import RooTips from "@src/components/welcome/RooTips" // kilocode_change: unused
 // import RooCloudCTA from "@src/components/welcome/RooCloudCTA" // kilocode_change: unused
@@ -137,14 +151,37 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		// cloudIsAuthenticated, // kilocode_change
 		messageQueue = [],
 		workplaceState,
+		setActiveEmployee,
+		selectCompany,
 		setShowWelcome,
+		updateCompany,
+		createEmployee,
+		updateEmployee,
+		createDepartment,
+		createTeam,
+		assignTeamToDepartment,
+		assignEmployeeToTeam,
+		removeEmployeeFromTeam,
 	} = useExtensionState()
 
 	const messagesRef = useRef(messages)
+	const missionStatusTimeoutRef = useRef<number | undefined>()
+	const structureFeedbackTimeoutRef = useRef<number | undefined>()
 
 	useEffect(() => {
 		messagesRef.current = messages
 	}, [messages])
+
+	useEffect(() => {
+		return () => {
+			if (missionStatusTimeoutRef.current) {
+				window.clearTimeout(missionStatusTimeoutRef.current)
+			}
+			if (structureFeedbackTimeoutRef.current) {
+				window.clearTimeout(structureFeedbackTimeoutRef.current)
+			}
+		}
+	}, [])
 
 	const { tasks } = useTaskSearch()
 
@@ -169,8 +206,250 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		[activeCompany],
 	)
 
-	const brandMark = useMemo(() => activeCompany?.name?.[0]?.toUpperCase() ?? "GW", [activeCompany?.name])
+	const companyEmployees = useMemo(() => activeCompany?.employees ?? [], [activeCompany?.employees])
+	const companyDepartments = useMemo(() => activeCompany?.departments ?? [], [activeCompany?.departments])
+	const companyTeams = useMemo(() => activeCompany?.teams ?? [], [activeCompany?.teams])
+	const sortedSupportingEmployees = useMemo(
+		() =>
+			supportingEmployees
+				.slice()
+				.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })),
+		[supportingEmployees],
+	)
+
+	const hierarchyData = useMemo(() => {
+		if (!activeCompany) {
+			return {
+				departments: [] as Array<
+					WorkplaceDepartment & { teams: Array<WorkplaceTeam & { employees: WorkplaceEmployee[] }> }
+				>,
+				independentTeams: [] as Array<WorkplaceTeam & { employees: WorkplaceEmployee[] }>,
+				unassignedEmployees: [] as WorkplaceEmployee[],
+			}
+		}
+
+		const employeesById = new Map(companyEmployees.map((employee) => [employee.id, employee]))
+		const teamsWithEmployees = (activeCompany.teams ?? []).map((team) => {
+			const members = (team.employeeIds ?? [])
+				.map((id) => employeesById.get(id))
+				.filter((employee): employee is WorkplaceEmployee => Boolean(employee && !employee.isExecutiveManager))
+				.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+			return { ...team, employees: members }
+		})
+
+		const assignedEmployeeIds = new Set<string>()
+		teamsWithEmployees.forEach((team) => {
+			team.employees.forEach((employee) => assignedEmployeeIds.add(employee.id))
+		})
+
+		const departmentsWithTeams = (activeCompany.departments ?? [])
+			.map((department) => ({
+				...department,
+				teams: teamsWithEmployees.filter(
+					(team) => (department.teamIds ?? []).includes(team.id) && team.employees.length > 0,
+				),
+			}))
+			.filter((department) => department.teams.length > 0)
+
+		const departmentTeamIds = new Set(
+			departmentsWithTeams.flatMap((department) => department.teams.map((team) => team.id)),
+		)
+
+		const independentTeams = teamsWithEmployees.filter(
+			(team) => !departmentTeamIds.has(team.id) && team.employees.length > 0,
+		)
+
+		const unassignedEmployees = companyEmployees
+			.filter((employee) => !employee.isExecutiveManager && !assignedEmployeeIds.has(employee.id))
+			.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+
+		return {
+			departments: departmentsWithTeams,
+			independentTeams,
+			unassignedEmployees,
+		}
+	}, [activeCompany, companyEmployees])
+
+	const [workforceViewMode, setWorkforceViewMode] = useState<"list" | "hierarchy">("list")
+	const [hasWelcomeNotifications, setHasWelcomeNotifications] = useState(false)
+	const [isStructureManagerOpen, setIsStructureManagerOpen] = useState(false)
+	const [newDepartmentName, setNewDepartmentName] = useState("")
+	const [newDepartmentDescription, setNewDepartmentDescription] = useState("")
+	const [newTeamName, setNewTeamName] = useState("")
+	const [newTeamDescription, setNewTeamDescription] = useState("")
+	const [newTeamDepartmentId, setNewTeamDepartmentId] = useState<string>("")
+	const [selectedTeamForDepartment, setSelectedTeamForDepartment] = useState<string>("")
+	const [selectedDepartmentForTeam, setSelectedDepartmentForTeam] = useState<string>("")
+	const [selectedTeamForAssignment, setSelectedTeamForAssignment] = useState<string>("")
+	const [selectedEmployeeForAssignment, setSelectedEmployeeForAssignment] = useState<string>("")
+	const [selectedTeamForRemoval, setSelectedTeamForRemoval] = useState<string>("")
+	const [selectedEmployeeForRemoval, setSelectedEmployeeForRemoval] = useState<string>("")
+	const [structureFeedback, setStructureFeedback] = useState<string | null>(null)
+	const [selectedEmployeeForEdit, setSelectedEmployeeForEdit] = useState<string>("")
+	const [employeeEditName, setEmployeeEditName] = useState("")
+	const [employeeEditRole, setEmployeeEditRole] = useState("")
+	const [employeeEditMbti, setEmployeeEditMbti] = useState<MbtiType | "">("")
+	const [employeeEditPersonality, setEmployeeEditPersonality] = useState("")
+	const [employeeEditDescription, setEmployeeEditDescription] = useState("")
+	const canShowHierarchy = useMemo(
+		() => hierarchyData.departments.length > 0 || hierarchyData.independentTeams.length > 0,
+		[hierarchyData.departments.length, hierarchyData.independentTeams.length],
+	)
+
+	useEffect(() => {
+		if (!canShowHierarchy && workforceViewMode === "hierarchy") {
+			setWorkforceViewMode("list")
+		}
+	}, [canShowHierarchy, workforceViewMode])
+
+	const showHierarchyView = workforceViewMode === "hierarchy" && canShowHierarchy
+	const selectedAssignmentTeam = useMemo(
+		() => companyTeams.find((team) => team.id === selectedTeamForAssignment),
+		[companyTeams, selectedTeamForAssignment],
+	)
+	const selectedRemovalTeam = useMemo(
+		() => companyTeams.find((team) => team.id === selectedTeamForRemoval),
+		[companyTeams, selectedTeamForRemoval],
+	)
+	const employeesAvailableForAssignment = useMemo(() => {
+		if (!selectedAssignmentTeam) {
+			return companyEmployees
+		}
+		const memberIds = new Set(selectedAssignmentTeam.employeeIds ?? [])
+		return companyEmployees.filter((employee) => !memberIds.has(employee.id))
+	}, [companyEmployees, selectedAssignmentTeam])
+
+	const employeesAvailableForRemoval = useMemo(() => {
+		if (!selectedRemovalTeam) {
+			return [] as WorkplaceEmployee[]
+		}
+		const memberIds = new Set(selectedRemovalTeam.employeeIds ?? [])
+		return companyEmployees.filter((employee) => memberIds.has(employee.id))
+	}, [companyEmployees, selectedRemovalTeam])
+
+	useEffect(() => {
+		if (!selectedEmployeeForEdit) {
+			setEmployeeEditName("")
+			setEmployeeEditRole("")
+			setEmployeeEditMbti("")
+			setEmployeeEditPersonality("")
+			setEmployeeEditDescription("")
+			return
+		}
+		const employee = companyEmployees.find((entry) => entry.id === selectedEmployeeForEdit)
+		if (!employee) {
+			setSelectedEmployeeForEdit("")
+			return
+		}
+		setEmployeeEditName(employee.name ?? "")
+		setEmployeeEditRole(employee.role ?? "")
+		setEmployeeEditMbti(employee.mbtiType ?? "")
+		setEmployeeEditPersonality(employee.personality ?? "")
+		setEmployeeEditDescription(employee.description ?? "")
+	}, [companyEmployees, selectedEmployeeForEdit])
+
+	const fallbackPersonaId = useMemo(() => {
+		if (activeCompany?.activeEmployeeId) {
+			return activeCompany.activeEmployeeId
+		}
+		if (workplaceState?.activeEmployeeId) {
+			return workplaceState.activeEmployeeId
+		}
+		return companyEmployees[0]?.id
+	}, [activeCompany?.activeEmployeeId, workplaceState?.activeEmployeeId, companyEmployees])
+	const [localPersonaId, setLocalPersonaId] = useState<string | undefined>(fallbackPersonaId)
+	useEffect(() => {
+		setLocalPersonaId(fallbackPersonaId)
+	}, [fallbackPersonaId])
+	const displayPersonaId = localPersonaId ?? fallbackPersonaId
+	const activePersona = useMemo(
+		() => companyEmployees.find((employee) => employee.id === displayPersonaId),
+		[companyEmployees, displayPersonaId],
+	)
+	const activeCompanyResolvedId = activeCompany?.id
+	const hasCompanies = companies.length > 0
+	const selectedCompanyId = activeCompanyResolvedId ?? (hasCompanies ? (companies[0]?.id ?? "") : "")
+	const hasPersonaOptions = !!(activeCompanyResolvedId && companyEmployees.length > 0 && displayPersonaId)
+
+	const handlePersonaChange = useCallback(
+		(employeeId: string) => {
+			if (!activeCompanyResolvedId || !employeeId || employeeId === displayPersonaId) {
+				return
+			}
+			setLocalPersonaId(employeeId)
+			setActiveEmployee(activeCompanyResolvedId, employeeId)
+		},
+		[activeCompanyResolvedId, displayPersonaId, setActiveEmployee],
+	)
+
+	const handleCompanyChange = useCallback(
+		(companyId: string) => {
+			if (!companyId || companyId === activeCompanyResolvedId) {
+				return
+			}
+			setLocalPersonaId(undefined)
+			selectCompany(companyId)
+		},
+		[activeCompanyResolvedId, selectCompany, setLocalPersonaId],
+	)
+
+	const brandMark = useMemo(() => {
+		const companyName = activeCompany?.name?.trim()
+		if (!companyName) {
+			return "GW"
+		}
+		const parts = companyName
+			.split(/\s+/)
+			.map((segment) => segment.trim())
+			.filter(Boolean)
+		if (parts.length === 0) {
+			return "GW"
+		}
+		const initials = parts
+			.slice(0, 2)
+			.map((segment) => segment[0]?.toUpperCase())
+			.join("")
+		return initials || "GW"
+	}, [activeCompany?.name])
+
+	const ownerProfile = useMemo(
+		() => activeCompany?.ownerProfile ?? workplaceState?.ownerProfileDefaults,
+		[activeCompany?.ownerProfile, workplaceState?.ownerProfileDefaults],
+	)
+
+	const ownerFirstName = useMemo(() => {
+		const explicitFirstName = ownerProfile?.firstName?.trim()
+		if (explicitFirstName) {
+			return explicitFirstName
+		}
+		const name = ownerProfile?.name?.trim()
+		if (!name) {
+			return undefined
+		}
+		const [firstPart] = name
+			.split(/\s+/)
+			.map((segment) => segment.trim())
+			.filter(Boolean)
+		return firstPart
+	}, [ownerProfile])
+	const greetingName = ownerFirstName ?? t("kilocode:chat.welcomeFallbackName", { defaultValue: "friend" })
 	const companySummary = activeCompany?.mission ?? activeCompany?.vision ?? t("kilocode:introText1")
+	const checkInDescription = activeCompany
+		? t("kilocode:workplace.checkInDescriptionActive", {
+				defaultValue: "Run a guided check-in with {{company}} to reconfirm goals, staffing, and action items.",
+				company: activeCompany.name,
+			})
+		: t("kilocode:workplace.checkInDescriptionEmpty", {
+				defaultValue: "Create your first company to unlock the guided check-in workflow.",
+			})
+	const showCompanySwitchHint = companies.length > 1
+	const [isMissionEditing, setIsMissionEditing] = useState(false)
+	const [missionDraft, setMissionDraft] = useState(activeCompany?.mission ?? "")
+	const [missionStatus, setMissionStatus] = useState<"idle" | "saved">("idle")
+	useEffect(() => {
+		setMissionDraft(activeCompany?.mission ?? "")
+		setIsMissionEditing(false)
+	}, [activeCompany?.mission, activeCompany?.id])
 
 	// Initialize expanded state based on the persisted setting (default to expanded if undefined)
 	const [isExpanded, setIsExpanded] = useState(
@@ -187,6 +466,204 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 	const triggerCheckIn = useCallback(() => {
 		setShowWelcome(true)
 	}, [setShowWelcome])
+
+	const handleMissionSave = useCallback(() => {
+		if (!activeCompany) {
+			return
+		}
+
+		const trimmedMission = missionDraft.trim()
+		updateCompany({
+			id: activeCompany.id,
+			name: activeCompany.name,
+			mission: trimmedMission ? trimmedMission : undefined,
+			vision: activeCompany.vision,
+			ownerProfile: activeCompany.ownerProfile,
+			updateDefaultOwnerProfile: false,
+		})
+		setIsMissionEditing(false)
+		setMissionStatus("saved")
+		if (missionStatusTimeoutRef.current) {
+			window.clearTimeout(missionStatusTimeoutRef.current)
+		}
+		missionStatusTimeoutRef.current = window.setTimeout(() => setMissionStatus("idle"), 2400)
+	}, [activeCompany, missionDraft, updateCompany])
+
+	const handleMissionCancel = useCallback(() => {
+		setMissionDraft(activeCompany?.mission ?? "")
+		setIsMissionEditing(false)
+		setMissionStatus("idle")
+		if (missionStatusTimeoutRef.current) {
+			window.clearTimeout(missionStatusTimeoutRef.current)
+		}
+	}, [activeCompany?.mission])
+
+	const openWorkforceHub = useCallback(() => {
+		vscode.postMessage({ type: "switchTab", tab: "profile" })
+	}, [])
+
+	const openWorkforceTab = useCallback(() => {
+		vscode.postMessage({ type: "switchTab", tab: "workforce" })
+	}, [])
+
+	const showStructureFeedback = useCallback((message: string) => {
+		setStructureFeedback(message)
+		if (structureFeedbackTimeoutRef.current) {
+			window.clearTimeout(structureFeedbackTimeoutRef.current)
+		}
+		structureFeedbackTimeoutRef.current = window.setTimeout(() => setStructureFeedback(null), 2600)
+	}, [])
+
+	const handleCreateDepartment = useCallback(() => {
+		if (!activeCompany) {
+			return
+		}
+		const trimmedName = newDepartmentName.trim()
+		const trimmedDescription = newDepartmentDescription.trim()
+		if (!trimmedName) {
+			showStructureFeedback("Department name is required.")
+			return
+		}
+		createDepartment({
+			companyId: activeCompany.id,
+			name: trimmedName,
+			description: trimmedDescription ? trimmedDescription : undefined,
+		})
+		setNewDepartmentName("")
+		setNewDepartmentDescription("")
+		showStructureFeedback("Department update sent.")
+	}, [activeCompany, createDepartment, newDepartmentDescription, newDepartmentName, showStructureFeedback])
+
+	const handleCreateTeam = useCallback(() => {
+		if (!activeCompany) {
+			return
+		}
+		const trimmedName = newTeamName.trim()
+		const trimmedDescription = newTeamDescription.trim()
+		if (!trimmedName) {
+			showStructureFeedback("Team name is required.")
+			return
+		}
+		createTeam({
+			companyId: activeCompany.id,
+			name: trimmedName,
+			description: trimmedDescription ? trimmedDescription : undefined,
+			departmentId: newTeamDepartmentId ? newTeamDepartmentId : undefined,
+		})
+		setNewTeamName("")
+		setNewTeamDescription("")
+		setNewTeamDepartmentId("")
+		showStructureFeedback("Team update sent.")
+	}, [activeCompany, createTeam, newTeamDepartmentId, newTeamDescription, newTeamName, showStructureFeedback])
+
+	const handleAssignTeamDepartment = useCallback(() => {
+		if (!activeCompany) {
+			return
+		}
+		if (!selectedTeamForDepartment) {
+			showStructureFeedback("Select a team to update.")
+			return
+		}
+		assignTeamToDepartment({
+			companyId: activeCompany.id,
+			teamId: selectedTeamForDepartment,
+			departmentId: selectedDepartmentForTeam ? selectedDepartmentForTeam : undefined,
+		})
+		showStructureFeedback("Team placement updated.")
+	}, [
+		activeCompany,
+		assignTeamToDepartment,
+		selectedDepartmentForTeam,
+		selectedTeamForDepartment,
+		showStructureFeedback,
+	])
+
+	const handleAddEmployeeToTeam = useCallback(() => {
+		if (!activeCompany) {
+			return
+		}
+		if (!selectedTeamForAssignment || !selectedEmployeeForAssignment) {
+			showStructureFeedback("Select both a team and an employee.")
+			return
+		}
+		assignEmployeeToTeam({
+			companyId: activeCompany.id,
+			teamId: selectedTeamForAssignment,
+			employeeId: selectedEmployeeForAssignment,
+		})
+		setSelectedEmployeeForAssignment("")
+		showStructureFeedback("Team membership updated.")
+	}, [
+		activeCompany,
+		assignEmployeeToTeam,
+		selectedEmployeeForAssignment,
+		selectedTeamForAssignment,
+		showStructureFeedback,
+	])
+
+	const handleRemoveEmployeeFromTeam = useCallback(() => {
+		if (!activeCompany) {
+			return
+		}
+		if (!selectedTeamForRemoval || !selectedEmployeeForRemoval) {
+			showStructureFeedback("Select both a team and a member to remove.")
+			return
+		}
+		removeEmployeeFromTeam({
+			companyId: activeCompany.id,
+			teamId: selectedTeamForRemoval,
+			employeeId: selectedEmployeeForRemoval,
+		})
+		setSelectedEmployeeForRemoval("")
+		showStructureFeedback("Team membership updated.")
+	}, [
+		activeCompany,
+		removeEmployeeFromTeam,
+		selectedEmployeeForRemoval,
+		selectedTeamForRemoval,
+		showStructureFeedback,
+	])
+
+	const handleSaveEmployeeEdits = useCallback(() => {
+		if (!activeCompany || !selectedEmployeeForEdit) {
+			showStructureFeedback("Select an employee to edit.")
+			return
+		}
+		const employee = companyEmployees.find((entry) => entry.id === selectedEmployeeForEdit)
+		if (!employee) {
+			showStructureFeedback("Employee not found.")
+			return
+		}
+		const name = employeeEditName.trim()
+		const role = employeeEditRole.trim()
+		if (!name || !role) {
+			showStructureFeedback("Name and role are required.")
+			return
+		}
+		updateEmployee({
+			companyId: activeCompany.id,
+			employee: {
+				...employee,
+				name,
+				role,
+				mbtiType: employeeEditMbti === "" ? undefined : employeeEditMbti,
+				personality: employeeEditPersonality.trim() || undefined,
+				description: employeeEditDescription.trim() || undefined,
+			},
+		})
+		showStructureFeedback("Employee updates sent.")
+	}, [
+		activeCompany,
+		companyEmployees,
+		employeeEditDescription,
+		employeeEditMbti,
+		employeeEditName,
+		employeeEditPersonality,
+		employeeEditRole,
+		selectedEmployeeForEdit,
+		showStructureFeedback,
+		updateEmployee,
+	])
 
 	// Leaving this less safe version here since if the first message is not a
 	// task, then the extension is in a bad state and needs to be debugged (see
@@ -1994,6 +2471,52 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 						isTaskActive={sendingDisabled}
 						todos={latestTodos}
 					/>
+					{hasPersonaOptions && (
+						<div className="px-3 pb-2">
+							<div className="flex flex-col gap-1">
+								<span className="text-xs font-semibold uppercase tracking-wide text-[var(--vscode-descriptionForeground)]">
+									{t("kilocode:chat.personaPicker.label", { defaultValue: "Speaking with" })}
+								</span>
+								<div className="flex items-center gap-2 flex-wrap">
+									<VSCodeDropdown
+										value={displayPersonaId ?? ""}
+										onChange={(event: any) => {
+											const nextId =
+												typeof event?.target?.value === "string"
+													? event.target.value
+													: undefined
+											if (nextId) {
+												handlePersonaChange(nextId)
+											}
+										}}
+										className="min-w-[180px]">
+										{companyEmployees.map((employee) => (
+											<VSCodeOption key={employee.id} value={employee.id}>
+												{employee.name}
+											</VSCodeOption>
+										))}
+									</VSCodeDropdown>
+									{activePersona && (
+										<StandardTooltip
+											content={
+												activePersona.description ||
+												activePersona.personality ||
+												t("kilocode:chat.personaPicker.noPersonaDetails", {
+													defaultValue: "No persona details provided.",
+												})
+											}>
+											<span className="text-[10px] uppercase tracking-wide text-[color-mix(in_srgb,var(--vscode-descriptionForeground)_85%,transparent)] border border-[color-mix(in_srgb,var(--vscode-descriptionForeground)_35%,transparent)] rounded px-1 py-[2px] truncate max-w-[220px]">
+												{activePersona.role ||
+													t("kilocode:chat.personaPicker.noRole", {
+														defaultValue: "No role set",
+													})}
+											</span>
+										</StandardTooltip>
+									)}
+								</div>
+							</div>
+						</div>
+					)}
 					{/* kilocode_change start */}
 
 					{hasSystemPromptOverride && (
@@ -2011,7 +2534,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 			) : (
 				<div className="workspace-welcome flex-1 min-h-0">
 					<div className="workspace-welcome__scroll scrollbar-fade">
-						<section className="workspace-welcome__hero">
+						<section className="workspace-welcome__hero workspace-welcome__hero--stacked">
 							<div className="workspace-welcome__badge" aria-hidden="true">
 								<span>{brandMark}</span>
 							</div>
@@ -2019,60 +2542,1018 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 								<p className="workspace-welcome__timestamp" aria-live="polite">
 									{currentTimestamp}
 								</p>
-								<h1 className="workspace-welcome__headline">Hey there, Arc Lover.</h1>
+								<h1 className="workspace-welcome__headline">Hey there, {greetingName}.</h1>
 								<p className="workspace-welcome__lede">Welcome to your Golden Workplace.</p>
 								{activeCompany && <p className="workspace-welcome__company">{activeCompany.name}</p>}
+								{hasCompanies && (
+									<div className="workspace-welcome__company-switcher workspace-welcome__company-switcher--inline">
+										<label
+											htmlFor="workspace-company-dropdown"
+											className="workspace-welcome__company-select-label">
+											{t("kilocode:workplace.activeCompany", { defaultValue: "Active company" })}
+										</label>
+										<div className="workspace-welcome__company-controls">
+											<VSCodeDropdown
+												id="workspace-company-dropdown"
+												value={selectedCompanyId}
+												onChange={(event: any) => {
+													const nextId =
+														typeof event?.target?.value === "string"
+															? event.target.value
+															: undefined
+													if (nextId) {
+														handleCompanyChange(nextId)
+													}
+												}}
+												className="workspace-welcome__selector">
+												{companies.map((company) => (
+													<VSCodeOption key={company.id} value={company.id}>
+														{company.name}
+													</VSCodeOption>
+												))}
+											</VSCodeDropdown>
+											<StandardTooltip
+												content={t("kilocode:workplace.manageCompanies", {
+													defaultValue: "Manage companies",
+												})}>
+												<button
+													type="button"
+													onClick={triggerCheckIn}
+													title={t("kilocode:workplace.manageCompanies", {
+														defaultValue: "Manage companies",
+													})}
+													aria-label={t("kilocode:workplace.manageCompanies", {
+														defaultValue: "Manage companies",
+													})}
+													className="workspace-welcome__icon-button">
+													<span className="codicon codicon-gear" aria-hidden="true"></span>
+													<span className="sr-only">
+														{t("kilocode:workplace.manageCompanies", {
+															defaultValue: "Manage companies",
+														})}
+													</span>
+												</button>
+											</StandardTooltip>
+										</div>
+									</div>
+								)}
 							</div>
 						</section>
 
 						<section className="workspace-welcome__section">
 							<div className="workspace-welcome__section-header">
-								<h2>Choose your company</h2>
+								<h2>
+									{t("kilocode:workplace.companyMissionHeading", { defaultValue: "Company mission" })}
+								</h2>
+								{activeCompany && (
+									<div className="workspace-welcome__section-tools">
+										{!isMissionEditing && (
+											<StandardTooltip
+												content={t("kilocode:workplace.editMission", {
+													defaultValue: "Edit mission",
+												})}>
+												<button
+													type="button"
+													onClick={() => {
+														setIsMissionEditing(true)
+														setMissionStatus("idle")
+													}}
+													title={t("kilocode:workplace.editMission", {
+														defaultValue: "Edit mission",
+													})}
+													aria-label={t("kilocode:workplace.editMission", {
+														defaultValue: "Edit mission",
+													})}
+													className="workspace-welcome__icon-button">
+													<span className="codicon codicon-edit" aria-hidden="true"></span>
+													<span className="sr-only">
+														{t("kilocode:workplace.editMission", {
+															defaultValue: "Edit mission",
+														})}
+													</span>
+												</button>
+											</StandardTooltip>
+										)}
+									</div>
+								)}
 							</div>
 							<OrganizationSelector className="workspace-welcome__selector" showLabel />
-							{companySummary && <p className="workspace-welcome__description">{companySummary}</p>}
+							{isMissionEditing ? (
+								<div className="workspace-welcome__inline-editor">
+									<VSCodeTextArea
+										value={missionDraft}
+										onInput={(event: any) =>
+											setMissionDraft(
+												typeof event?.target?.value === "string" ? event.target.value : "",
+											)
+										}
+										rows={4}
+										placeholder={t("kilocode:workplace.missionPlaceholder", {
+											defaultValue: "Outline the purpose or focus for this company.",
+										})}
+									/>
+									<div className="workspace-welcome__inline-editor-actions">
+										<VSCodeButton appearance="primary" onClick={handleMissionSave}>
+											{t("kilocode:workplace.saveMission", { defaultValue: "Save mission" })}
+										</VSCodeButton>
+										<VSCodeButton appearance="secondary" onClick={handleMissionCancel}>
+											{t("kilocode:workplace.cancelEdit", { defaultValue: "Cancel" })}
+										</VSCodeButton>
+									</div>
+								</div>
+							) : (
+								companySummary && <p className="workspace-welcome__description">{companySummary}</p>
+							)}
+							{missionStatus === "saved" && (
+								<span className="workspace-welcome__helper">
+									{t("kilocode:workplace.missionSaved", { defaultValue: "Mission updated" })}
+								</span>
+							)}
 						</section>
 
-						{(executiveManager || supportingEmployees.length > 0) && (
+						{hasPersonaOptions && (
 							<section className="workspace-welcome__section">
 								<div className="workspace-welcome__section-header">
-									<h2>Your team</h2>
+									<h2>
+										{t("kilocode:chat.personaPicker.welcomeHeading", {
+											defaultValue: "Who you're speaking with",
+										})}
+									</h2>
 								</div>
-								<ul className="workspace-welcome__team">
-									{executiveManager && (
-										<li className="workspace-welcome__team-item" key={executiveManager.id}>
-											<span className="workspace-welcome__team-name">
-												{executiveManager.name}
-											</span>
-											<span className="workspace-welcome__team-role">
-												{t("kilocode:workplace.executiveManagerTag")}
-											</span>
-										</li>
-									)}
-									{supportingEmployees.slice(0, 5).map((employee) => (
-										<li key={employee.id} className="workspace-welcome__team-item">
-											<span className="workspace-welcome__team-name">{employee.name}</span>
-											{employee.role && (
-												<span className="workspace-welcome__team-role">{employee.role}</span>
+								<div className="flex flex-col gap-2">
+									<span className="text-xs font-semibold uppercase tracking-wide text-[var(--vscode-descriptionForeground)]">
+										{t("kilocode:chat.personaPicker.label", { defaultValue: "Speaking with" })}
+									</span>
+									<div className="flex items-center gap-2 flex-wrap">
+										<VSCodeDropdown
+											value={displayPersonaId ?? ""}
+											onChange={(event: any) => {
+												const nextId =
+													typeof event?.target?.value === "string"
+														? event.target.value
+														: undefined
+												if (nextId) {
+													handlePersonaChange(nextId)
+												}
+											}}
+											className="min-w-[200px]">
+											{companyEmployees.map((employee) => (
+												<VSCodeOption key={employee.id} value={employee.id}>
+													{employee.name}
+												</VSCodeOption>
+											))}
+										</VSCodeDropdown>
+										{activePersona && (
+											<StandardTooltip
+												content={
+													activePersona.description ||
+													activePersona.personality ||
+													t("kilocode:chat.personaPicker.noPersonaDetails", {
+														defaultValue: "No persona details provided.",
+													})
+												}>
+												<span
+													className={`workspace-welcome__persona-pill ${
+														activePersona.isExecutiveManager
+															? "workspace-welcome__persona-pill--executive"
+															: ""
+													}`}
+													title={activePersona.role || undefined}>
+													{activePersona.role ||
+														t("kilocode:chat.personaPicker.noRole", {
+															defaultValue: "No role set",
+														})}
+												</span>
+											</StandardTooltip>
+										)}
+									</div>
+								</div>
+							</section>
+						)}
+
+						{companyEmployees.length > 0 && (
+							<section className="workspace-welcome__section">
+								<div className="workspace-welcome__section-header">
+									<h2>
+										{t("kilocode:workplace.workforceHeading", { defaultValue: "Your workforce" })}
+									</h2>
+									<div className="workspace-welcome__section-tools">
+										<div
+											className="workspace-welcome__view-toggle"
+											role="group"
+											aria-label={t("kilocode:workplace.workforceViewToggle", {
+												defaultValue: "Change workforce view",
+											})}>
+											<button
+												type="button"
+												className={`workspace-welcome__view-toggle-button ${
+													workforceViewMode === "list" ? "is-active" : ""
+												}`}
+												onClick={() => setWorkforceViewMode("list")}
+												aria-pressed={workforceViewMode === "list"}>
+												{t("kilocode:workplace.listView", { defaultValue: "List" })}
+											</button>
+											<button
+												type="button"
+												className={`workspace-welcome__view-toggle-button ${
+													workforceViewMode === "hierarchy" ? "is-active" : ""
+												}`}
+												onClick={() => canShowHierarchy && setWorkforceViewMode("hierarchy")}
+												aria-pressed={workforceViewMode === "hierarchy"}
+												disabled={!canShowHierarchy}>
+												{t("kilocode:workplace.hierarchyView", { defaultValue: "Hierarchy" })}
+											</button>
+										</div>
+										<StandardTooltip
+											content={t("kilocode:workplace.openWorkforceHub", {
+												defaultValue: "Open Workforce Hub",
+											})}>
+											<button
+												className="workspace-welcome__icon-button"
+												type="button"
+												onClick={openWorkforceHub}
+												title={t("kilocode:workplace.openWorkforceHub", {
+													defaultValue: "Open Workforce Hub",
+												})}
+												aria-label={t("kilocode:workplace.openWorkforceHub", {
+													defaultValue: "Open Workforce Hub",
+												})}>
+												<span
+													className="codicon codicon-organization"
+													aria-hidden="true"></span>
+												<span className="sr-only">
+													{t("kilocode:workplace.openWorkforceHub", {
+														defaultValue: "Open Workforce Hub",
+													})}
+												</span>
+											</button>
+										</StandardTooltip>
+										<StandardTooltip
+											content={t("kilocode:workplace.openStructureTab", {
+												defaultValue: "Open structure tab",
+											})}>
+											<button
+												className="workspace-welcome__icon-button"
+												type="button"
+												onClick={openWorkforceTab}
+												title={t("kilocode:workplace.openStructureTab", {
+													defaultValue: "Open structure tab",
+												})}
+												aria-label={t("kilocode:workplace.openStructureTab", {
+													defaultValue: "Open structure tab",
+												})}>
+												<span className="codicon codicon-new-window" aria-hidden="true"></span>
+												<span className="sr-only">
+													{t("kilocode:workplace.openStructureTab", {
+														defaultValue: "Open structure tab",
+													})}
+												</span>
+											</button>
+										</StandardTooltip>
+										<StandardTooltip
+											content={t("kilocode:workplace.addEmployeeQuick", {
+												defaultValue: "Add team member",
+											})}>
+											<button
+												className="workspace-welcome__icon-button"
+												type="button"
+												onClick={triggerCheckIn}
+												title={t("kilocode:workplace.addEmployeeQuick", {
+													defaultValue: "Add team member",
+												})}
+												aria-label={t("kilocode:workplace.addEmployeeQuick", {
+													defaultValue: "Add team member",
+												})}>
+												<span className="codicon codicon-person-add" aria-hidden="true"></span>
+												<span className="sr-only">
+													{t("kilocode:workplace.addEmployeeQuick", {
+														defaultValue: "Add team member",
+													})}
+												</span>
+											</button>
+										</StandardTooltip>
+										<StandardTooltip
+											content={
+												isStructureManagerOpen
+													? t("kilocode:workplace.closeStructure", {
+															defaultValue: "Hide manager",
+														})
+													: t("kilocode:workplace.manageStructure", {
+															defaultValue: "Manage structure",
+														})
+											}>
+											<button
+												className={`workspace-welcome__icon-button ${
+													isStructureManagerOpen
+														? "workspace-welcome__icon-button--active"
+														: ""
+												}`}
+												type="button"
+												onClick={() => setIsStructureManagerOpen((open) => !open)}
+												aria-pressed={isStructureManagerOpen}
+												title={
+													isStructureManagerOpen
+														? t("kilocode:workplace.closeStructure", {
+																defaultValue: "Hide manager",
+															})
+														: t("kilocode:workplace.manageStructure", {
+																defaultValue: "Manage structure",
+															})
+												}>
+												<span className="codicon codicon-graph" aria-hidden="true"></span>
+												<span className="sr-only">
+													{isStructureManagerOpen
+														? t("kilocode:workplace.closeStructure", {
+																defaultValue: "Hide manager",
+															})
+														: t("kilocode:workplace.manageStructure", {
+																defaultValue: "Manage structure",
+															})}
+												</span>
+											</button>
+										</StandardTooltip>
+									</div>
+								</div>
+
+								{showHierarchyView ? (
+									<div className="workspace-welcome__hierarchy scrollbar-fade">
+										{executiveManager && (
+											<div className="workspace-welcome__hierarchy-node">
+												<span className="workspace-welcome__hierarchy-label">
+													{t("kilocode:workplace.leadershipLabel", {
+														defaultValue: "Leadership",
+													})}
+												</span>
+												<div className="workspace-welcome__hierarchy-branch">
+													<span className="workspace-welcome__hierarchy-pill">
+														<span className="workspace-welcome__hierarchy-name">
+															{executiveManager.name}
+														</span>
+														<span className="workspace-welcome__hierarchy-role">
+															{t("kilocode:workplace.executiveManagerTag")}
+														</span>
+													</span>
+												</div>
+											</div>
+										)}
+
+										{hierarchyData.departments.map((department) => (
+											<div key={department.id} className="workspace-welcome__hierarchy-node">
+												<span className="workspace-welcome__hierarchy-label">
+													{department.name}
+												</span>
+												<div className="workspace-welcome__hierarchy-branch">
+													{department.teams.map((team) => (
+														<div
+															key={team.id}
+															className="workspace-welcome__hierarchy-team">
+															<div className="workspace-welcome__hierarchy-team-name">
+																{team.name}
+															</div>
+															<div className="workspace-welcome__hierarchy-pill-group">
+																{team.employees.map((employee) => (
+																	<span
+																		key={employee.id}
+																		className="workspace-welcome__hierarchy-pill">
+																		<span className="workspace-welcome__hierarchy-name">
+																			{employee.name}
+																		</span>
+																		{employee.role && (
+																			<span className="workspace-welcome__hierarchy-role">
+																				{employee.role}
+																			</span>
+																		)}
+																	</span>
+																))}
+															</div>
+														</div>
+													))}
+												</div>
+											</div>
+										))}
+
+										{hierarchyData.independentTeams.length > 0 && (
+											<div className="workspace-welcome__hierarchy-node">
+												<span className="workspace-welcome__hierarchy-label">
+													{t("kilocode:workplace.independentTeamsLabel", {
+														defaultValue: "Independent teams",
+													})}
+												</span>
+												<div className="workspace-welcome__hierarchy-branch">
+													{hierarchyData.independentTeams.map((team) => (
+														<div
+															key={team.id}
+															className="workspace-welcome__hierarchy-team">
+															<div className="workspace-welcome__hierarchy-team-name">
+																{team.name}
+															</div>
+															<div className="workspace-welcome__hierarchy-pill-group">
+																{team.employees.map((employee) => (
+																	<span
+																		key={employee.id}
+																		className="workspace-welcome__hierarchy-pill">
+																		<span className="workspace-welcome__hierarchy-name">
+																			{employee.name}
+																		</span>
+																		{employee.role && (
+																			<span className="workspace-welcome__hierarchy-role">
+																				{employee.role}
+																			</span>
+																		)}
+																	</span>
+																))}
+															</div>
+														</div>
+													))}
+												</div>
+											</div>
+										)}
+
+										{hierarchyData.unassignedEmployees.length > 0 && (
+											<div className="workspace-welcome__hierarchy-node">
+												<span className="workspace-welcome__hierarchy-label">
+													{t("kilocode:workplace.individualContributorsLabel", {
+														defaultValue: "Individual contributors",
+													})}
+												</span>
+												<div className="workspace-welcome__hierarchy-branch">
+													<div className="workspace-welcome__hierarchy-pill-group">
+														{hierarchyData.unassignedEmployees.map((employee) => (
+															<span
+																key={employee.id}
+																className="workspace-welcome__hierarchy-pill">
+																<span className="workspace-welcome__hierarchy-name">
+																	{employee.name}
+																</span>
+																{employee.role && (
+																	<span className="workspace-welcome__hierarchy-role">
+																		{employee.role}
+																	</span>
+																)}
+															</span>
+														))}
+													</div>
+												</div>
+											</div>
+										)}
+									</div>
+								) : (
+									<div className="workspace-welcome__team-container scrollbar-fade">
+										<ul className="workspace-welcome__team">
+											{executiveManager && (
+												<li className="workspace-welcome__team-item" key={executiveManager.id}>
+													<span className="workspace-welcome__team-name">
+														{executiveManager.name}
+													</span>
+													<span className="workspace-welcome__team-role">
+														{t("kilocode:workplace.executiveManagerTag")}
+													</span>
+												</li>
 											)}
-										</li>
-									))}
-								</ul>
+											{sortedSupportingEmployees.map((employee) => (
+												<li key={employee.id} className="workspace-welcome__team-item">
+													<span className="workspace-welcome__team-name">
+														{employee.name}
+													</span>
+													{employee.role && (
+														<span className="workspace-welcome__team-role">
+															{employee.role}
+														</span>
+													)}
+												</li>
+											))}
+										</ul>
+									</div>
+								)}
+
+								{isStructureManagerOpen && (
+									<div className="workspace-welcome__structure">
+										{activeCompany && (
+											<div className="workspace-welcome__structure-group">
+												<h3 className="workspace-welcome__structure-heading">
+													{t("kilocode:workplace.structureCanvasHeading", {
+														defaultValue: "Hierarchy canvas",
+													})}
+												</h3>
+												<WorkforceCanvas
+													company={activeCompany}
+													onCreateDepartment={(name, description) =>
+														createDepartment({
+															companyId: activeCompany.id,
+															name,
+															description: description || undefined,
+														})
+													}
+													onCreateTeam={(name, description, departmentId) =>
+														createTeam({
+															companyId: activeCompany.id,
+															name,
+															description,
+															departmentId: departmentId || undefined,
+														})
+													}
+													onCreateEmployee={(name, role) =>
+														createEmployee({ companyId: activeCompany.id, name, role })
+													}
+													onAssignTeamToDepartment={(teamId, departmentId) =>
+														assignTeamToDepartment({
+															companyId: activeCompany.id,
+															teamId,
+															departmentId,
+														})
+													}
+													onAssignEmployeeToTeam={(teamId, employeeId) =>
+														assignEmployeeToTeam({
+															companyId: activeCompany.id,
+															teamId,
+															employeeId,
+														})
+													}
+													onRemoveEmployeeFromTeam={(teamId, employeeId) =>
+														removeEmployeeFromTeam({
+															companyId: activeCompany.id,
+															teamId,
+															employeeId,
+														})
+													}
+													onFeedback={showStructureFeedback}
+												/>
+											</div>
+										)}
+										<div className="workspace-welcome__structure-group">
+											<h3 className="workspace-welcome__structure-heading">
+												{t("kilocode:workplace.departmentHeading", {
+													defaultValue: "Departments",
+												})}
+											</h3>
+											<label
+												className="workspace-welcome__structure-label"
+												htmlFor="gw-structure-dept-name">
+												{t("kilocode:workplace.departmentNameLabel", {
+													defaultValue: "Department name",
+												})}
+											</label>
+											<VSCodeTextField
+												id="gw-structure-dept-name"
+												value={newDepartmentName}
+												onInput={(event: any) => setNewDepartmentName(event.target.value ?? "")}
+												placeholder={t("kilocode:workplace.departmentNameLabel", {
+													defaultValue: "Department name",
+												})}
+											/>
+											<label
+												className="workspace-welcome__structure-label"
+												htmlFor="gw-structure-dept-notes">
+												{t("kilocode:workplace.departmentDescriptionLabel", {
+													defaultValue: "Notes (optional)",
+												})}
+											</label>
+											<VSCodeTextArea
+												id="gw-structure-dept-notes"
+												rows={3}
+												value={newDepartmentDescription}
+												onInput={(event: any) =>
+													setNewDepartmentDescription(event.target.value ?? "")
+												}
+											/>
+											<div className="workspace-welcome__structure-actions">
+												<VSCodeButton appearance="primary" onClick={handleCreateDepartment}>
+													{t("kilocode:workplace.createDepartment", {
+														defaultValue: "Create department",
+													})}
+												</VSCodeButton>
+											</div>
+										</div>
+
+										<div className="workspace-welcome__structure-group">
+											<h3 className="workspace-welcome__structure-heading">
+												{t("kilocode:workplace.teamHeading", { defaultValue: "Teams" })}
+											</h3>
+											<label
+												className="workspace-welcome__structure-label"
+												htmlFor="gw-structure-team-name">
+												{t("kilocode:workplace.teamNameLabel", { defaultValue: "Team name" })}
+											</label>
+											<VSCodeTextField
+												id="gw-structure-team-name"
+												value={newTeamName}
+												onInput={(event: any) => setNewTeamName(event.target.value ?? "")}
+												placeholder={t("kilocode:workplace.teamNameLabel", {
+													defaultValue: "Team name",
+												})}
+											/>
+											<label
+												className="workspace-welcome__structure-label"
+												htmlFor="gw-structure-team-notes">
+												{t("kilocode:workplace.teamDescriptionLabel", {
+													defaultValue: "Description (optional)",
+												})}
+											</label>
+											<VSCodeTextArea
+												id="gw-structure-team-notes"
+												rows={3}
+												value={newTeamDescription}
+												onInput={(event: any) =>
+													setNewTeamDescription(event.target.value ?? "")
+												}
+											/>
+											<label
+												className="workspace-welcome__structure-label"
+												htmlFor="gw-structure-team-dept">
+												{t("kilocode:workplace.teamDepartmentLabel", {
+													defaultValue: "Department",
+												})}
+											</label>
+											<VSCodeDropdown
+												id="gw-structure-team-dept"
+												value={newTeamDepartmentId}
+												onChange={(event: any) =>
+													setNewTeamDepartmentId(event.target.value ?? "")
+												}
+												className="workspace-welcome__structure-select">
+												<VSCodeOption value="">
+													{t("kilocode:workplace.noDepartmentOption", {
+														defaultValue: "No department",
+													})}
+												</VSCodeOption>
+												{companyDepartments.map((department) => (
+													<VSCodeOption key={department.id} value={department.id}>
+														{department.name}
+													</VSCodeOption>
+												))}
+											</VSCodeDropdown>
+											<div className="workspace-welcome__structure-actions">
+												<VSCodeButton appearance="primary" onClick={handleCreateTeam}>
+													{t("kilocode:workplace.createTeam", {
+														defaultValue: "Create team",
+													})}
+												</VSCodeButton>
+											</div>
+										</div>
+
+										<div className="workspace-welcome__structure-group">
+											<h3 className="workspace-welcome__structure-heading">
+												{t("kilocode:workplace.teamPlacementHeading", {
+													defaultValue: "Team placement",
+												})}
+											</h3>
+											<label
+												className="workspace-welcome__structure-label"
+												htmlFor="gw-structure-team-select">
+												{t("kilocode:workplace.teamSelectLabel", {
+													defaultValue: "Select team",
+												})}
+											</label>
+											<VSCodeDropdown
+												id="gw-structure-team-select"
+												value={selectedTeamForDepartment}
+												onChange={(event: any) =>
+													setSelectedTeamForDepartment(event.target.value ?? "")
+												}
+												className="workspace-welcome__structure-select">
+												<VSCodeOption value="">
+													{t("kilocode:workplace.teamSelectLabel", {
+														defaultValue: "Select team",
+													})}
+												</VSCodeOption>
+												{companyTeams.map((team) => (
+													<VSCodeOption key={team.id} value={team.id}>
+														{team.name}
+													</VSCodeOption>
+												))}
+											</VSCodeDropdown>
+											<label
+												className="workspace-welcome__structure-label"
+												htmlFor="gw-structure-team-department-assign">
+												{t("kilocode:workplace.teamDepartmentSelectLabel", {
+													defaultValue: "Assign to department",
+												})}
+											</label>
+											<VSCodeDropdown
+												id="gw-structure-team-department-assign"
+												value={selectedDepartmentForTeam}
+												onChange={(event: any) =>
+													setSelectedDepartmentForTeam(event.target.value ?? "")
+												}
+												className="workspace-welcome__structure-select">
+												<VSCodeOption value="">
+													{t("kilocode:workplace.noDepartmentOption", {
+														defaultValue: "No department",
+													})}
+												</VSCodeOption>
+												{companyDepartments.map((department) => (
+													<VSCodeOption key={department.id} value={department.id}>
+														{department.name}
+													</VSCodeOption>
+												))}
+											</VSCodeDropdown>
+											<div className="workspace-welcome__structure-actions">
+												<VSCodeButton
+													appearance="secondary"
+													onClick={handleAssignTeamDepartment}
+													disabled={!selectedTeamForDepartment}>
+													{t("kilocode:workplace.updateTeamPlacement", {
+														defaultValue: "Update placement",
+													})}
+												</VSCodeButton>
+											</div>
+										</div>
+
+										<div className="workspace-welcome__structure-group">
+											<h3 className="workspace-welcome__structure-heading">
+												{t("kilocode:workplace.teamMembersHeading", {
+													defaultValue: "Team members",
+												})}
+											</h3>
+											<div className="workspace-welcome__structure-subgroup">
+												<h4 className="workspace-welcome__structure-subheading">
+													{t("kilocode:workplace.teamMemberAddLabel", {
+														defaultValue: "Add member",
+													})}
+												</h4>
+												<label
+													className="workspace-welcome__structure-label"
+													htmlFor="gw-structure-team-add">
+													{t("kilocode:workplace.teamSelectLabel", {
+														defaultValue: "Select team",
+													})}
+												</label>
+												<VSCodeDropdown
+													id="gw-structure-team-add"
+													value={selectedTeamForAssignment}
+													onChange={(event: any) =>
+														setSelectedTeamForAssignment(event.target.value ?? "")
+													}
+													className="workspace-welcome__structure-select">
+													<VSCodeOption value="">
+														{t("kilocode:workplace.teamSelectLabel", {
+															defaultValue: "Select team",
+														})}
+													</VSCodeOption>
+													{companyTeams.map((team) => (
+														<VSCodeOption key={team.id} value={team.id}>
+															{team.name}
+														</VSCodeOption>
+													))}
+												</VSCodeDropdown>
+												<label
+													className="workspace-welcome__structure-label"
+													htmlFor="gw-structure-employee-add">
+													{t("kilocode:workplace.selectEmployeeLabel", {
+														defaultValue: "Select employee",
+													})}
+												</label>
+												<VSCodeDropdown
+													id="gw-structure-employee-add"
+													value={selectedEmployeeForAssignment}
+													onChange={(event: any) =>
+														setSelectedEmployeeForAssignment(event.target.value ?? "")
+													}
+													disabled={!selectedTeamForAssignment}
+													className="workspace-welcome__structure-select">
+													<VSCodeOption value="">
+														{t("kilocode:workplace.selectEmployeeLabel", {
+															defaultValue: "Select employee",
+														})}
+													</VSCodeOption>
+													{employeesAvailableForAssignment.map((employee) => (
+														<VSCodeOption key={employee.id} value={employee.id}>
+															{employee.name}
+														</VSCodeOption>
+													))}
+												</VSCodeDropdown>
+												<div className="workspace-welcome__structure-actions">
+													<VSCodeButton
+														appearance="secondary"
+														onClick={handleAddEmployeeToTeam}
+														disabled={
+															!selectedTeamForAssignment || !selectedEmployeeForAssignment
+														}>
+														{t("kilocode:workplace.addMember", {
+															defaultValue: "Add to team",
+														})}
+													</VSCodeButton>
+												</div>
+											</div>
+											<div className="workspace-welcome__structure-subgroup">
+												<h4 className="workspace-welcome__structure-subheading">
+													{t("kilocode:workplace.teamMemberRemoveLabel", {
+														defaultValue: "Remove member",
+													})}
+												</h4>
+												<label
+													className="workspace-welcome__structure-label"
+													htmlFor="gw-structure-team-remove">
+													{t("kilocode:workplace.teamSelectLabel", {
+														defaultValue: "Select team",
+													})}
+												</label>
+												<VSCodeDropdown
+													id="gw-structure-team-remove"
+													value={selectedTeamForRemoval}
+													onChange={(event: any) => {
+														setSelectedTeamForRemoval(event.target.value ?? "")
+														setSelectedEmployeeForRemoval("")
+													}}
+													className="workspace-welcome__structure-select">
+													<VSCodeOption value="">
+														{t("kilocode:workplace.teamSelectLabel", {
+															defaultValue: "Select team",
+														})}
+													</VSCodeOption>
+													{companyTeams.map((team) => (
+														<VSCodeOption key={team.id} value={team.id}>
+															{team.name}
+														</VSCodeOption>
+													))}
+												</VSCodeDropdown>
+												<label
+													className="workspace-welcome__structure-label"
+													htmlFor="gw-structure-employee-remove">
+													{t("kilocode:workplace.selectEmployeeLabel", {
+														defaultValue: "Select employee",
+													})}
+												</label>
+												<VSCodeDropdown
+													id="gw-structure-employee-remove"
+													value={selectedEmployeeForRemoval}
+													onChange={(event: any) =>
+														setSelectedEmployeeForRemoval(event.target.value ?? "")
+													}
+													disabled={!selectedTeamForRemoval}
+													className="workspace-welcome__structure-select">
+													<VSCodeOption value="">
+														{t("kilocode:workplace.selectEmployeeLabel", {
+															defaultValue: "Select employee",
+														})}
+													</VSCodeOption>
+													{employeesAvailableForRemoval.map((employee) => (
+														<VSCodeOption key={employee.id} value={employee.id}>
+															{employee.name}
+														</VSCodeOption>
+													))}
+												</VSCodeDropdown>
+												<div className="workspace-welcome__structure-actions">
+													<VSCodeButton
+														appearance="secondary"
+														onClick={handleRemoveEmployeeFromTeam}
+														disabled={
+															!selectedTeamForRemoval || !selectedEmployeeForRemoval
+														}>
+														{t("kilocode:workplace.removeMember", {
+															defaultValue: "Remove from team",
+														})}
+													</VSCodeButton>
+												</div>
+											</div>
+										</div>
+
+										<div className="workspace-welcome__structure-group">
+											<h3 className="workspace-welcome__structure-heading">
+												{t("kilocode:workplace.employeeEditorHeading", {
+													defaultValue: "Edit employee",
+												})}
+											</h3>
+											<label
+												className="workspace-welcome__structure-label"
+												htmlFor="gw-structure-employee-edit">
+												{t("kilocode:workplace.selectEmployeeLabel", {
+													defaultValue: "Select employee",
+												})}
+											</label>
+											<VSCodeDropdown
+												id="gw-structure-employee-edit"
+												value={selectedEmployeeForEdit}
+												onChange={(event: any) =>
+													setSelectedEmployeeForEdit(event.target.value ?? "")
+												}
+												className="workspace-welcome__structure-select">
+												<VSCodeOption value="">
+													{t("kilocode:workplace.selectEmployeeLabel", {
+														defaultValue: "Select employee",
+													})}
+												</VSCodeOption>
+												{companyEmployees.map((employee) => (
+													<VSCodeOption key={employee.id} value={employee.id}>
+														{employee.name}
+													</VSCodeOption>
+												))}
+											</VSCodeDropdown>
+											<VSCodeTextField
+												id="gw-structure-employee-name"
+												value={employeeEditName}
+												onInput={(event: any) => setEmployeeEditName(event.target.value ?? "")}
+												placeholder={t("kilocode:workplace.employeeNamePlaceholder", {
+													defaultValue: "Employee name",
+												})}
+											/>
+											<VSCodeTextField
+												id="gw-structure-employee-role"
+												value={employeeEditRole}
+												onInput={(event: any) => setEmployeeEditRole(event.target.value ?? "")}
+												placeholder={t("kilocode:workplace.employeeRolePlaceholder", {
+													defaultValue: "Role",
+												})}
+											/>
+											<label
+												className="workspace-welcome__structure-label"
+												htmlFor="gw-structure-employee-mbti">
+												{t("kilocode:workplace.employeeMbtiLabel", { defaultValue: "MBTI" })}
+											</label>
+											<VSCodeDropdown
+												id="gw-structure-employee-mbti"
+												value={employeeEditMbti}
+												onChange={(event: any) => {
+													const value = event.target.value ?? ""
+													setEmployeeEditMbti(value === "" ? "" : (value as MbtiType))
+												}}
+												className="workspace-welcome__structure-select">
+												<VSCodeOption value="">
+													{t("kilocode:workplace.mbtiUnset", { defaultValue: "Not set" })}
+												</VSCodeOption>
+												{MBTI_TYPES.map((type) => (
+													<VSCodeOption key={type} value={type}>
+														{type}
+													</VSCodeOption>
+												))}
+											</VSCodeDropdown>
+											<VSCodeTextArea
+												rows={2}
+												value={employeeEditPersonality}
+												onInput={(event: any) =>
+													setEmployeeEditPersonality(event.target.value ?? "")
+												}
+												placeholder={t("kilocode:workplace.employeePersonalityPlaceholder", {
+													defaultValue: "Personality notes",
+												})}
+											/>
+											<VSCodeTextArea
+												rows={2}
+												value={employeeEditDescription}
+												onInput={(event: any) =>
+													setEmployeeEditDescription(event.target.value ?? "")
+												}
+												placeholder={t("kilocode:workplace.employeeDescriptionPlaceholder", {
+													defaultValue: "Role summary",
+												})}
+											/>
+											<div className="workspace-welcome__structure-actions">
+												<VSCodeButton
+													appearance="secondary"
+													onClick={handleSaveEmployeeEdits}
+													disabled={!selectedEmployeeForEdit}>
+													{t("kilocode:workplace.saveEmployee", {
+														defaultValue: "Save changes",
+													})}
+												</VSCodeButton>
+											</div>
+										</div>
+
+										{structureFeedback && (
+											<span className="workspace-welcome__helper workspace-welcome__helper--structure">
+												{structureFeedback}
+											</span>
+										)}
+									</div>
+								)}
 							</section>
 						)}
 
 						<section className="workspace-welcome__section workspace-welcome__actions">
 							<div className="workspace-welcome__section-header">
-								<h2>Workspace setup</h2>
+								<h2>
+									{t("kilocode:workplace.companyCheckInHeading", {
+										defaultValue: "Company check-in",
+									})}
+								</h2>
 							</div>
+							<p className="workspace-welcome__description workspace-welcome__description--subtle">
+								{checkInDescription}
+							</p>
+							{showCompanySwitchHint && (
+								<span className="workspace-welcome__helper">
+									{t("kilocode:workplace.checkInSwitcherHint", {
+										defaultValue:
+											"Use the company switcher above to choose who you want to check in with before you begin.",
+									})}
+								</span>
+							)}
 							<VSCodeButton appearance="primary" onClick={triggerCheckIn}>
-								{t("kilocode:workplace.openSetup")}
+								{t("kilocode:workplace.startCheckIn", { defaultValue: "Start check-in" })}
 							</VSCodeButton>
 						</section>
 
-						<section className="workspace-welcome__section">
-							{telemetrySetting === "unset" ? <TelemetryBanner /> : <KilocodeNotifications />}
-						</section>
+						{telemetrySetting === "unset" ? (
+							<section className="workspace-welcome__section">
+								<TelemetryBanner />
+							</section>
+						) : hasWelcomeNotifications ? (
+							<section className="workspace-welcome__section">
+								<KilocodeNotifications onHasNotificationsChange={setHasWelcomeNotifications} />
+							</section>
+						) : (
+							<KilocodeNotifications onHasNotificationsChange={setHasWelcomeNotifications} />
+						)}
 
 						<section className="workspace-welcome__section">
 							<div className="workspace-welcome__section-header">

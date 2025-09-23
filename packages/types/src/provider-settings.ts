@@ -108,6 +108,8 @@ const baseProviderSettingsSchema = z.object({
 	modelTemperature: z.number().nullish(),
 	rateLimitSeconds: z.number().optional(),
 	consecutiveMistakeLimit: z.number().min(0).optional(),
+	outerGateNotionToken: z.string().optional(),
+	outerGateMiroToken: z.string().optional(),
 
 	// Model reasoning.
 	enableReasoningEffort: z.boolean().optional(),

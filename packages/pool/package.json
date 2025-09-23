@@ -1,0 +1,35 @@
+{
+	"name": "@roo-code/pool",
+	"description": "Golden Workspace pool datastore and HTTP API.",
+	"version": "0.0.0",
+	"type": "module",
+	"exports": "./src/index.ts",
+	"scripts": {
+		"lint": "eslint src --ext=ts --max-warnings=0",
+		"check-types": "tsc --noEmit",
+		"test": "vitest run",
+		"drizzle-kit": "pnpm exec drizzle-kit",
+		"db:generate": "pnpm drizzle-kit generate",
+		"db:migrate": "pnpm drizzle-kit migrate",
+		"db:push": "pnpm drizzle-kit push",
+		"clean": "rimraf dist .turbo"
+	},
+	"dependencies": {
+		"@roo-code/types": "workspace:^",
+		"drizzle-orm": "^0.44.1",
+		"express": "^5.1.0",
+		"pg": "^8.13.1",
+		"zod": "^3.25.76"
+	},
+	"devDependencies": {
+		"@roo-code/config-eslint": "workspace:^",
+		"@roo-code/config-typescript": "workspace:^",
+		"@types/express": "^5.0.0",
+		"@types/node": "^24.1.0",
+		"@types/pg": "^8.11.6",
+		"drizzle-kit": "^0.31.4",
+		"supertest": "^7.1.1",
+		"tsx": "^4.19.3",
+		"vitest": "^3.2.4"
+	}
+}

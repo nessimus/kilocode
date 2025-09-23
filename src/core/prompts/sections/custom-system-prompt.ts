@@ -9,17 +9,54 @@ export type PromptVariables = {
 	language?: string
 	shell?: string
 	operatingSystem?: string
+	// Golden Workplace persona variables (optional)
+	personaName?: string
+	personaRole?: string
+	personaPersonality?: string
+	personaDescription?: string
+	companyName?: string
+	companyId?: string
+	personaModeName?: string
+	personaModeSummary?: string
+	employeeId?: string
+	teamIds?: string
+	departmentIds?: string
 }
 
-function interpolatePromptContent(content: string, variables: PromptVariables): string {
+export function interpolatePromptContent(content: string, variables: PromptVariables): string {
+	if (!content) return content
+
+	// Computed convenience tokens
+	const personaName = variables.personaName || ""
+	const personaRole = variables.personaRole || ""
+	const personaNameRole = personaRole ? `${personaName}, ${personaRole}` : personaName
+
 	let interpolatedContent = content
+
+	// Support the common JS-like conditional macro seen in UI text
+	// {{ personaRole ? ', ' + personaRole : '' }}
+	const conditionalRolePattern =
+		/\{\{\s*personaRole\s*\?\s*['"]\s*,\s*['"]\s*\+\s*personaRole\s*:\s*['"]\s*['"]\s*\}\}/g
+	interpolatedContent = interpolatedContent.replace(conditionalRolePattern, personaRole ? `, ${personaRole}` : "")
+
+	// Support combined token if user writes {{personaName}}{{ personaRole ? ', ' + personaRole : '' }}
+	const namePlusConditional = /\{\{\s*personaName\s*\}\}\s*\{\{\s*personaRole\s*\?[^}]*\}\}/g
+	interpolatedContent = interpolatedContent.replace(namePlusConditional, personaNameRole)
+
+	// Provide {{personaNameRole}} directly too
+	interpolatedContent = interpolatedContent.replace(/\{\{\s*personaNameRole\s*\}\}/g, personaNameRole)
+
+	// Basic {{key}} replacements
 	for (const key in variables) {
 		if (
 			Object.prototype.hasOwnProperty.call(variables, key) &&
 			variables[key as keyof PromptVariables] !== undefined
 		) {
 			const placeholder = new RegExp(`\\{\\{${key}\\}\\}`, "g")
-			interpolatedContent = interpolatedContent.replace(placeholder, variables[key as keyof PromptVariables]!)
+			interpolatedContent = interpolatedContent.replace(
+				placeholder,
+				String(variables[key as keyof PromptVariables]!),
+			)
 		}
 	}
 	return interpolatedContent

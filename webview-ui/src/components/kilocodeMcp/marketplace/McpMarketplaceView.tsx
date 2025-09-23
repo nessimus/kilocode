@@ -8,12 +8,29 @@ import {
 	VSCodeOption,
 	VSCodeTextField,
 } from "@vscode/webview-ui-toolkit/react"
-import { McpMarketplaceItem } from "../../../../../src/shared/kilocode/mcp"
+import { McpMarketplaceItem, ToolIntegrationType, ToolLibrarySource } from "../../../../../src/shared/kilocode/mcp"
 import { useExtensionState } from "../../../context/ExtensionStateContext"
 import { vscode } from "../../../utils/vscode"
 import McpMarketplaceCard from "./McpMarketplaceCard"
 import McpSubmitCard from "./McpSubmitCard"
-const McpMarketplaceView = () => {
+type McpMarketplaceViewProps = {
+	allowedIntegrationTypes?: ToolIntegrationType[]
+	allowedSources?: ToolLibrarySource[]
+	defaultIntegrationFilter?: "all" | ToolIntegrationType
+}
+
+const integrationFilterLabels: Record<"all" | ToolIntegrationType, string> = {
+	all: "All Integration Types",
+	mcp: "MCP Server",
+	"computer-use": "Computer Use",
+	"potential-mcp": "Potential MCP",
+}
+
+const McpMarketplaceView = ({
+	allowedIntegrationTypes,
+	allowedSources,
+	defaultIntegrationFilter = "all",
+}: McpMarketplaceViewProps) => {
 	const { mcpServers } = useExtensionState()
 	const [items, setItems] = useState<McpMarketplaceItem[]>([])
 	const [isLoading, setIsLoading] = useState(true)
@@ -22,14 +39,47 @@ const McpMarketplaceView = () => {
 	const [searchQuery, setSearchQuery] = useState("")
 	const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
 	const [sortBy, setSortBy] = useState<"newest" | "stars" | "name">("newest")
+	const [integrationFilter, setIntegrationFilter] = useState<"all" | ToolIntegrationType>(defaultIntegrationFilter)
+
+	const constrainedItems = useMemo(() => {
+		return items.filter((item) => {
+			const integration = (item.integrationType ?? "mcp") as ToolIntegrationType
+			const source = (item.source ?? "remote") as ToolLibrarySource
+
+			if (allowedIntegrationTypes?.length && !allowedIntegrationTypes.includes(integration)) {
+				return false
+			}
+
+			if (allowedSources?.length && !allowedSources.includes(source)) {
+				return false
+			}
+
+			return true
+		})
+	}, [items, allowedIntegrationTypes, allowedSources])
 
 	const categories = useMemo(() => {
-		const uniqueCategories = new Set(items.map((item) => item.category))
+		const uniqueCategories = new Set(constrainedItems.map((item) => item.category))
 		return Array.from(uniqueCategories).sort()
-	}, [items])
+	}, [constrainedItems])
+
+	const integrationOptions = useMemo(() => {
+		const uniqueTypes = new Set<ToolIntegrationType>()
+		constrainedItems.forEach((item) => {
+			uniqueTypes.add((item.integrationType ?? "mcp") as ToolIntegrationType)
+		})
+		const sorted = Array.from(uniqueTypes).sort()
+		return ["all", ...sorted] as ("all" | ToolIntegrationType)[]
+	}, [constrainedItems])
+
+	useEffect(() => {
+		if (integrationFilter !== "all" && !integrationOptions.includes(integrationFilter)) {
+			setIntegrationFilter("all")
+		}
+	}, [integrationFilter, integrationOptions])
 
 	const filteredItems = useMemo(() => {
-		return items
+		return constrainedItems
 			.filter((item) => {
 				const matchesSearch =
 					searchQuery === "" ||
@@ -37,7 +87,9 @@ const McpMarketplaceView = () => {
 					item.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
 					item.tags.some((tag) => tag.toLowerCase().includes(searchQuery.toLowerCase()))
 				const matchesCategory = !selectedCategory || item.category === selectedCategory
-				return matchesSearch && matchesCategory
+				const matchesIntegration =
+					integrationFilter === "all" || (item.integrationType ?? "mcp") === integrationFilter
+				return matchesSearch && matchesCategory && matchesIntegration
 			})
 			.sort((a, b) => {
 				switch (sortBy) {
@@ -53,7 +105,7 @@ const McpMarketplaceView = () => {
 						return 0
 				}
 			})
-	}, [items, searchQuery, selectedCategory, sortBy])
+	}, [constrainedItems, searchQuery, selectedCategory, integrationFilter, sortBy])
 
 	useEffect(() => {
 		const handleMessage = (event: MessageEvent) => {
@@ -141,7 +193,7 @@ const McpMarketplaceView = () => {
 				{/* Search row */}
 				<VSCodeTextField
 					style={{ width: "100%" }}
-					placeholder="Search MCPs..."
+					placeholder="Search tools..."
 					value={searchQuery}
 					onInput={(e) => setSearchQuery((e.target as HTMLInputElement).value)}>
 					<div
@@ -202,6 +254,25 @@ const McpMarketplaceView = () => {
 							{categories.map((category) => (
 								<VSCodeOption key={category} value={category}>
 									{category}
+								</VSCodeOption>
+							))}
+						</VSCodeDropdown>
+					</div>
+					<div
+						style={{
+							position: "relative",
+							zIndex: 1,
+							flex: 1,
+						}}>
+						<VSCodeDropdown
+							style={{ width: "100%" }}
+							value={integrationFilter}
+							onChange={(e) =>
+								setIntegrationFilter((e.target as HTMLSelectElement).value as typeof integrationFilter)
+							}>
+							{integrationOptions.map((option) => (
+								<VSCodeOption key={option} value={option}>
+									{integrationFilterLabels[option]}
 								</VSCodeOption>
 							))}
 						</VSCodeDropdown>
@@ -270,9 +341,9 @@ const McpMarketplaceView = () => {
 							padding: "20px",
 							color: "var(--vscode-descriptionForeground)",
 						}}>
-						{searchQuery || selectedCategory
-							? "No matching MCP servers found"
-							: "No MCP servers found in the marketplace"}
+						{searchQuery || selectedCategory || integrationFilter !== "all"
+							? "No matching tools found"
+							: "No tools found in the library"}
 					</div>
 				) : (
 					filteredItems.map((item) => (

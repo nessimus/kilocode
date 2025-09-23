@@ -20,6 +20,7 @@ import { editFileTool } from "../tools/editFileTool" // kilocode_change: Morph f
 import { listCodeDefinitionNamesTool } from "../tools/listCodeDefinitionNamesTool"
 import { searchFilesTool } from "../tools/searchFilesTool"
 import { browserActionTool } from "../tools/browserActionTool"
+import { webSearchTool } from "../tools/webSearchTool"
 import { executeCommandTool } from "../tools/executeCommandTool"
 import { useMcpToolTool } from "../tools/useMcpToolTool"
 import { accessMcpResourceTool } from "../tools/accessMcpResourceTool"
@@ -30,7 +31,29 @@ import { newTaskTool } from "../tools/newTaskTool"
 
 import { updateTodoListTool } from "../tools/updateTodoListTool"
 import { runSlashCommandTool } from "../tools/runSlashCommandTool"
+import { upsertSopTool } from "../tools/upsertSopTool"
 import { generateImageTool } from "../tools/generateImageTool"
+import { createEmployeeTool } from "../tools/createEmployeeTool"
+import { updateEmployeeTool } from "../tools/updateEmployeeTool"
+import { createDepartmentTool } from "../tools/createDepartmentTool"
+import { updateDepartmentTool } from "../tools/updateDepartmentTool"
+import { createTeamTool } from "../tools/createTeamTool"
+import { updateTeamTool } from "../tools/updateTeamTool"
+import { assignEmployeeToTeamTool } from "../tools/assignEmployeeToTeamTool"
+import { assignTeamToDepartmentTool } from "../tools/assignTeamToDepartmentTool"
+import { archiveEmployeeTool } from "../tools/archiveEmployeeTool"
+import { archiveTeamTool } from "../tools/archiveTeamTool"
+import { archiveDepartmentTool } from "../tools/archiveDepartmentTool"
+import { removeEmployeeFromTeamTool } from "../tools/removeEmployeeFromTeamTool"
+import { removeTeamFromDepartmentTool } from "../tools/removeTeamFromDepartmentTool"
+import { listCompaniesTool } from "../tools/listCompaniesTool"
+import { listDepartmentsTool } from "../tools/listDepartmentsTool"
+import { listTeamsTool } from "../tools/listTeamsTool"
+import { listEmployeesTool } from "../tools/listEmployeesTool"
+import { createActionItemTool } from "../tools/createActionItemTool"
+import { updateActionItemTool } from "../tools/updateActionItemTool"
+import { deleteActionItemTool } from "../tools/deleteActionItemTool"
+import { listActionItemsTool } from "../tools/listActionItemsTool"
 
 import { formatResponse } from "../prompts/responses"
 import { validateToolUse } from "../tools/validateToolUse"
@@ -246,6 +269,89 @@ export async function presentAssistantMessage(cline: Task, recursionDepth: numbe
 						return `[${block.name} for '${block.params.command}'${block.params.args ? ` with args: ${block.params.args}` : ""}]`
 					case "generate_image":
 						return `[${block.name} for '${block.params.path}']`
+					case "create_employee":
+						return `[${block.name} for '${block.params.name}'${
+							block.params.role ? ` as ${block.params.role}` : ""
+						}]`
+					case "update_employee": {
+						const employee =
+							block.params.employee_id ?? (block.params.employee_updates ? "multiple" : "(unspecified)")
+						const company =
+							block.params.company_id ?? (block.params.employee_updates ? "multiple" : "(unspecified)")
+						return `[${block.name} for employee '${employee}' in company '${company}']`
+					}
+					case "create_department": {
+						const name = block.params.name ?? (block.params.departments ? "department(s)" : "(unnamed)")
+						return `[${block.name} for '${name}']`
+					}
+					case "update_department": {
+						const department =
+							block.params.department_id ??
+							(block.params.department_updates ? "multiple" : "(unspecified)")
+						const company =
+							block.params.company_id ?? (block.params.department_updates ? "multiple" : "(unspecified)")
+						return `[${block.name} for department '${department}' in company '${company}']`
+					}
+					case "create_team": {
+						const name = block.params.name ?? (block.params.teams ? "team(s)" : "(unnamed)")
+						return `[${block.name} for '${name}']`
+					}
+					case "update_team": {
+						const team = block.params.team_id ?? (block.params.team_updates ? "multiple" : "(unspecified)")
+						const company =
+							block.params.company_id ?? (block.params.team_updates ? "multiple" : "(unspecified)")
+						return `[${block.name} for team '${team}' in company '${company}']`
+					}
+					case "assign_employee_to_team": {
+						const employee =
+							block.params.employee_id ?? (block.params.assignments ? "multiple" : "(unspecified)")
+						const team = block.params.team_id ?? (block.params.assignments ? "multiple" : "(unspecified)")
+						return `[${block.name} assigning '${employee}' to '${team}']`
+					}
+					case "assign_team_to_department": {
+						const team = block.params.team_id ?? (block.params.assignments ? "multiple" : "(unspecified)")
+						const department =
+							block.params.department_id ?? (block.params.assignments ? "multiple" : "(detach)")
+						return `[${block.name} assigning team '${team}' to department '${department}']`
+					}
+					case "archive_employee": {
+						const employee =
+							block.params.employee_id ?? (block.params.employee_ids ? "multiple" : "(unspecified)")
+						const company =
+							block.params.company_id ?? (block.params.employee_ids ? "multiple" : "(unspecified)")
+						return `[${block.name} for employee '${employee}' in company '${company}']`
+					}
+					case "archive_team": {
+						const team = block.params.team_id ?? (block.params.team_ids ? "multiple" : "(unspecified)")
+						const company =
+							block.params.company_id ?? (block.params.team_ids ? "multiple" : "(unspecified)")
+						return `[${block.name} for team '${team}' in company '${company}']`
+					}
+					case "archive_department": {
+						const department =
+							block.params.department_id ?? (block.params.department_ids ? "multiple" : "(unspecified)")
+						const company =
+							block.params.company_id ?? (block.params.department_ids ? "multiple" : "(unspecified)")
+						return `[${block.name} for department '${department}' in company '${company}']`
+					}
+					case "remove_employee_from_team": {
+						const employee =
+							block.params.employee_id ?? (block.params.assignments ? "multiple" : "(unspecified)")
+						const team = block.params.team_id ?? (block.params.assignments ? "multiple" : "(unspecified)")
+						const company =
+							block.params.company_id ?? (block.params.assignments ? "multiple" : "(unspecified)")
+						return `[${block.name} removing '${employee}' from '${team}' (${company})]`
+					}
+					case "remove_team_from_department": {
+						const team = block.params.team_id ?? (block.params.assignments ? "multiple" : "(unspecified)")
+						const department =
+							block.params.department_id ?? (block.params.assignments ? "multiple" : "(unspecified)")
+						const company =
+							block.params.company_id ?? (block.params.assignments ? "multiple" : "(unspecified)")
+						return `[${block.name} removing team '${team}' from department '${department}' (${company})]`
+					}
+					default:
+						return `[${block.name}]`
 				}
 			}
 
@@ -526,6 +632,9 @@ export async function presentAssistantMessage(cline: Task, recursionDepth: numbe
 				case "search_files":
 					await searchFilesTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
 					break
+				case "web_search":
+					await webSearchTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					break
 				case "browser_action":
 					await browserActionTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
 					break
@@ -588,8 +697,109 @@ export async function presentAssistantMessage(cline: Task, recursionDepth: numbe
 				case "run_slash_command":
 					await runSlashCommandTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
 					break
+				case "upsert_sop":
+					await upsertSopTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					break
 				case "generate_image":
 					await generateImageTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					break
+				case "create_employee":
+					await createEmployeeTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					break
+				case "update_employee":
+					await updateEmployeeTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					break
+				case "create_department":
+					await createDepartmentTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					break
+				case "update_department":
+					await updateDepartmentTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					break
+				case "create_team":
+					await createTeamTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					break
+				case "update_team":
+					await updateTeamTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					break
+				case "assign_employee_to_team":
+					await assignEmployeeToTeamTool(
+						cline,
+						block,
+						askApproval,
+						handleError,
+						pushToolResult,
+						removeClosingTag,
+					)
+					break
+				case "assign_team_to_department":
+					await assignTeamToDepartmentTool(
+						cline,
+						block,
+						askApproval,
+						handleError,
+						pushToolResult,
+						removeClosingTag,
+					)
+					break
+				case "list_companies":
+					await listCompaniesTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					break
+				case "list_departments":
+					await listDepartmentsTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					break
+				case "list_teams":
+					await listTeamsTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					break
+				case "list_employees":
+					await listEmployeesTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					break
+				case "list_action_items":
+					await listActionItemsTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					break
+				case "archive_employee":
+					await archiveEmployeeTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					break
+				case "archive_team":
+					await archiveTeamTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					break
+				case "archive_department":
+					await archiveDepartmentTool(
+						cline,
+						block,
+						askApproval,
+						handleError,
+						pushToolResult,
+						removeClosingTag,
+					)
+					break
+				case "remove_employee_from_team":
+					await removeEmployeeFromTeamTool(
+						cline,
+						block,
+						askApproval,
+						handleError,
+						pushToolResult,
+						removeClosingTag,
+					)
+					break
+				case "remove_team_from_department":
+					await removeTeamFromDepartmentTool(
+						cline,
+						block,
+						askApproval,
+						handleError,
+						pushToolResult,
+						removeClosingTag,
+					)
+					break
+				case "create_action_item":
+					await createActionItemTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					break
+				case "update_action_item":
+					await updateActionItemTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					break
+				case "delete_action_item":
+					await deleteActionItemTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
 					break
 			}
 			// kilocode_change end

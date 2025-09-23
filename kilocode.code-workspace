@@ -1,0 +1,31 @@
+{
+	"folders": [
+		{
+			"name": "kilocode",
+			"path": "."
+		}
+	],
+	"settings": {
+		"files.exclude": {
+			"out": false,
+			"dist": false,
+			"deps/vscode/**": true,
+			"jetbrains/host/deps/**": true
+		},
+		"search.exclude": {
+			"out": true,
+			"dist": true,
+			"deps/vscode/**": true,
+			"jetbrains/host/deps/**": true
+		},
+		"files.watcherExclude": {
+			"deps/vscode/**": true,
+			"jetbrains/host/deps/**": true
+		},
+		"typescript.tsc.autoDetect": "off",
+		"markdown.editor.filePaste.copyIntoWorkspace": "mediaFiles",
+		"markdown.copyFiles.destination": {
+			"**/*": "/static/img/${documentBaseName}/${documentBaseName}.${fileName/(.*)\\.(.*)/$2/}"
+		}
+	}
+}

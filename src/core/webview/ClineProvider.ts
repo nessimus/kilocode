@@ -1,6 +1,7 @@
 import os from "os"
 import * as path from "path"
 import fs from "fs/promises"
+import { randomUUID } from "crypto"
 import EventEmitter from "events"
 
 import { Anthropic } from "@anthropic-ai/sdk"
@@ -40,6 +41,10 @@ import {
 	DEFAULT_WRITE_DELAY_MS,
 	ORGANIZATION_ALLOW_ALL,
 	DEFAULT_MODES,
+	EndlessSurfaceAgentAccess,
+	EndlessSurfaceRecord,
+	EndlessSurfaceState,
+	EndlessSurfaceSummary,
 } from "@roo-code/types"
 import { TelemetryService } from "@roo-code/telemetry"
 import { CloudService, BridgeOrchestrator, getRooCodeApiUrl } from "@roo-code/cloud"
@@ -49,6 +54,7 @@ import { findLast } from "../../shared/array"
 import { supportPrompt } from "../../shared/support-prompt"
 import { GlobalFileNames } from "../../shared/globalFileNames"
 import type { ExtensionMessage, ExtensionState, MarketplaceInstalledMetadata } from "../../shared/ExtensionMessage"
+import type { BrowserInteractionStrategy } from "../../shared/browser"
 import { Mode, defaultModeSlug, getModeBySlug } from "../../shared/modes"
 import { experimentDefault } from "../../shared/experiments"
 import { formatLanguage } from "../../shared/language"
@@ -88,13 +94,19 @@ import { ProviderSettingsManager } from "../config/ProviderSettingsManager"
 import { CustomModesManager } from "../config/CustomModesManager"
 import { Task } from "../task/Task"
 import { getSystemPromptFilePath } from "../prompts/sections/custom-system-prompt"
+import { EndlessSurfaceService } from "../surfaces/EndlessSurfaceService"
 
 import { webviewMessageHandler } from "./webviewMessageHandler"
 import { getNonce } from "./getNonce"
 import { getUri } from "./getUri"
+import { ConversationHubService } from "../hub/ConversationHubService"
+import type { HubSnapshot } from "../../shared/hub"
+import { singleCompletionHandler } from "../../utils/single-completion-handler"
+import { countTokens } from "../../utils/countTokens"
 
 //kilocode_change start
-import { McpDownloadResponse, McpMarketplaceCatalog } from "../../shared/kilocode/mcp"
+import { McpDownloadResponse, McpMarketplaceCatalog, McpMarketplaceItem } from "../../shared/kilocode/mcp"
+import { additionalToolLibraryItems } from "../../shared/toolLibraryData"
 import { McpServer } from "../../shared/mcp"
 import { OpenRouterHandler } from "../../api/providers"
 import { stringifyError } from "../../shared/kilocode/errorUtils"
@@ -102,9 +114,41 @@ import isWsl from "is-wsl"
 import { getKilocodeDefaultModel } from "../../api/providers/kilocode/getKilocodeDefaultModel"
 import { getKiloCodeWrapperProperties } from "../../core/kilocode/wrapper"
 import type { WorkplaceService } from "../../services/workplace/WorkplaceService"
+import type { WorkplaceCompany, WorkplaceState } from "../../shared/golden/workplace"
+import {
+	defaultOuterGateIntegrations,
+	defaultOuterGateState,
+	OuterGateCloverMessage,
+	OuterGateCloverSessionSummary,
+	OuterGateState,
+} from "../../shared/golden/outerGate"
+import { CloverSessionService, DEFAULT_CLOVER_SESSION_PAGE_SIZE } from "../../services/outerGate/CloverSessionService"
+import { OuterGateIntegrationManager } from "../../services/outerGate/OuterGateIntegrationManager"
 
 export type ClineProviderState = Awaited<ReturnType<ClineProvider["getState"]>>
 // kilocode_change end
+
+interface EndlessSurfaceViewState extends EndlessSurfaceState {
+	activeSurface?: EndlessSurfaceRecord
+}
+
+const ENABLE_VERBOSE_PROVIDER_LOGS = false
+
+const verboseProviderLog = (...args: unknown[]) => {
+	if (!ENABLE_VERBOSE_PROVIDER_LOGS) {
+		return
+	}
+	console.debug("[ClineProvider]", ...args)
+}
+
+const CLOVER_MAX_MESSAGES = 18
+const CLOVER_SESSION_SUMMARY_LIMIT = DEFAULT_CLOVER_SESSION_PAGE_SIZE * 4
+const CLOVER_SESSION_RETRY_DELAY_MS = 60_000
+
+const CLOVER_SYSTEM_PROMPT = `You are Clover AI, the concierge for Golden Workplace's Outer Gates. Your role is to help founders surface passions, route raw context into the right company workspaces, and recommend actionable next steps.\n\nGuidelines:\n- Greet warmly yet concisely; speak like a strategic partner who understands venture building.\n- Ask focused clarifying questions when the goal or next step is uncertain.\n- Summarize the essence of what you heard before proposing actions.\n- Recommend an existing workspace or suggest creating a new one when appropriate.\n- Offer up to three concrete next steps formatted as short bullet prompts starting with \">" or "▶".\n- Highlight relevant artifacts or integrations already connected to the Outer Gates.\n- Keep responses under roughly 170 words, using short paragraphs and a motivating closing invitation.\n- Never fabricate tools or integrations that aren't in the provided data.`
+
+const CLOVER_WELCOME_TEXT =
+	"Welcome back to the Outer Gates! Tell me what spark you want to explore and I’ll line it up with the right workspace."
 
 /**
  * https://github.com/microsoft/vscode-webview-ui-toolkit-samples/blob/main/default/weather-webview/src/providers/WeatherViewProvider.ts
@@ -129,6 +173,9 @@ export class ClineProvider
 	extends EventEmitter<TaskProviderEvents>
 	implements vscode.WebviewViewProvider, TelemetryPropertiesProvider, TaskProviderLike
 {
+	private static globalWorkplaceService?: WorkplaceService
+	private static globalEndlessSurfaceService?: EndlessSurfaceService
+	private static globalCloverSessionService?: CloverSessionService
 	// Used in package.json as the view's id. This value cannot be changed due
 	// to how VSCode caches views based on their id, and updating the id would
 	// break existing instances of the extension.
@@ -149,10 +196,20 @@ export class ClineProvider
 	private taskEventListeners: WeakMap<Task, Array<() => void>> = new WeakMap()
 	private currentWorkspacePath: string | undefined
 	private workplaceService?: WorkplaceService
+	private endlessSurfaceService?: EndlessSurfaceService
+	private cloverSessionService?: CloverSessionService
+	private cloverSessionsInitialized = false
+	private cloverSessionWarningShown = false
+	private lastCloverSessionFetchErrorAt?: number
+	private endlessSurfaceListenerCleanup: Array<() => void> = []
+	private outerGateState: OuterGateState
+	private outerGateManager?: OuterGateIntegrationManager
+	private outerGateManagerPromise?: Promise<OuterGateIntegrationManager>
 
 	private recentTasksCache?: string[]
 	private pendingOperations: Map<string, PendingEditOperation> = new Map()
 	private static readonly PENDING_OPERATION_TIMEOUT_MS = 30000 // 30 seconds
+	private readonly conversationHub: ConversationHubService
 
 	public isViewLaunched = false
 	public settingsImportedAt?: number
@@ -171,6 +228,15 @@ export class ClineProvider
 		this.currentWorkspacePath = getWorkspacePath()
 
 		ClineProvider.activeInstances.add(this)
+		if (!this.workplaceService && ClineProvider.globalWorkplaceService) {
+			this.workplaceService = ClineProvider.globalWorkplaceService
+		}
+		if (ClineProvider.globalEndlessSurfaceService) {
+			this.attachEndlessSurfaceService(ClineProvider.globalEndlessSurfaceService)
+		}
+
+		this.outerGateState = createInitialOuterGateState(this.workplaceService?.getState())
+		this.initializeOuterGateManager()
 
 		this.mdmService = mdmService
 		this.updateGlobalState("codebaseIndexModels", EMBEDDING_MODEL_PROFILES)
@@ -201,6 +267,11 @@ export class ClineProvider
 			})
 
 		this.marketplaceManager = new MarketplaceManager(this.context, this.customModesManager)
+
+		this.conversationHub = new ConversationHubService(this)
+		this.conversationHub.on("stateChanged", () => {
+			void this.postStateToWebview()
+		})
 
 		// Forward <most> task events to the provider.
 		// We do something fairly similar for the IPC-based API.
@@ -272,10 +343,88 @@ export class ClineProvider
 
 	public attachWorkplaceService(service: WorkplaceService) {
 		this.workplaceService = service
+		ClineProvider.globalWorkplaceService = service
 	}
 
 	public getWorkplaceService(): WorkplaceService | undefined {
+		if (!this.workplaceService && ClineProvider.globalWorkplaceService) {
+			this.workplaceService = ClineProvider.globalWorkplaceService
+		}
 		return this.workplaceService
+	}
+
+	public attachCloverSessionService(service: CloverSessionService) {
+		this.cloverSessionService = service
+		ClineProvider.globalCloverSessionService = service
+	}
+
+	public getCloverSessionService(): CloverSessionService | undefined {
+		if (this.cloverSessionService) {
+			return this.cloverSessionService
+		}
+		if (ClineProvider.globalCloverSessionService) {
+			this.cloverSessionService = ClineProvider.globalCloverSessionService
+			return this.cloverSessionService
+		}
+		const service = new CloverSessionService(this.context, () => this.getWorkplaceService())
+		ClineProvider.globalCloverSessionService = service
+		this.cloverSessionService = service
+		return this.cloverSessionService
+	}
+
+	public attachEndlessSurfaceService(service: EndlessSurfaceService) {
+		if (this.endlessSurfaceService === service) {
+			return
+		}
+
+		this.cleanupEndlessSurfaceListeners()
+		this.endlessSurfaceService = service
+		ClineProvider.globalEndlessSurfaceService = service
+
+		const stateHandler = this.handleEndlessSurfaceStateChange
+		service.on("stateChanged", stateHandler)
+		service.on("surfaceUpdated", stateHandler)
+		service.on("surfaceDeleted", stateHandler)
+
+		this.endlessSurfaceListenerCleanup = [
+			() => service.off("stateChanged", stateHandler),
+			() => service.off("surfaceUpdated", stateHandler),
+			() => service.off("surfaceDeleted", stateHandler),
+		]
+
+		void this.postStateToWebview()
+	}
+
+	public getEndlessSurfaceService(): EndlessSurfaceService | undefined {
+		if (!this.endlessSurfaceService && ClineProvider.globalEndlessSurfaceService) {
+			this.attachEndlessSurfaceService(ClineProvider.globalEndlessSurfaceService)
+		}
+		return this.endlessSurfaceService
+	}
+
+	private cleanupEndlessSurfaceListeners() {
+		if (!this.endlessSurfaceListenerCleanup.length) {
+			return
+		}
+
+		for (const dispose of this.endlessSurfaceListenerCleanup) {
+			try {
+				dispose()
+			} catch (error) {
+				this.log(
+					`Failed to remove endless surface listener: ${error instanceof Error ? error.message : String(error)}`,
+				)
+			}
+		}
+		this.endlessSurfaceListenerCleanup = []
+	}
+
+	private handleEndlessSurfaceStateChange = () => {
+		void this.postStateToWebview()
+	}
+
+	public getConversationHub(): ConversationHubService {
+		return this.conversationHub
 	}
 
 	/**
@@ -601,6 +750,9 @@ export class ClineProvider
 		this.mcpHub = undefined
 		this.marketplaceManager?.cleanup()
 		this.customModesManager?.dispose()
+		this.conversationHub.dispose()
+		this.cleanupEndlessSurfaceListeners()
+		this.endlessSurfaceService = undefined
 		this.log("Disposed all disposables")
 		ClineProvider.activeInstances.delete(this)
 
@@ -887,6 +1039,7 @@ export class ClineProvider
 			}
 		}
 
+		const state = await this.getState()
 		const {
 			apiConfiguration,
 			diffEnabled: enableDiff,
@@ -1639,9 +1792,759 @@ export class ClineProvider
 		await this.postStateToWebview()
 	}
 
+	private initializeOuterGateManager() {
+		if (this.outerGateManagerPromise) {
+			return
+		}
+
+		this.outerGateManagerPromise = OuterGateIntegrationManager.initialize(this.contextProxy, () =>
+			this.getActiveWorkspaceName(),
+		)
+
+		this.outerGateManagerPromise
+			.then(async (manager) => {
+				this.outerGateManager = manager
+				const baseState = createInitialOuterGateState(this.workplaceService?.getState())
+				const enriched = manager.applyToState(baseState)
+				this.updateOuterGateState(enriched)
+				await this.postStateToWebview()
+			})
+			.catch((error) => {
+				console.error("[ClineProvider] Failed to initialize Outer Gate integrations", error)
+			})
+	}
+
+	private async getOuterGateManager(): Promise<OuterGateIntegrationManager | undefined> {
+		if (this.outerGateManager) {
+			return this.outerGateManager
+		}
+
+		if (!this.outerGateManagerPromise) {
+			this.initializeOuterGateManager()
+		}
+
+		if (!this.outerGateManagerPromise) {
+			return undefined
+		}
+
+		try {
+			this.outerGateManager = await this.outerGateManagerPromise
+			return this.outerGateManager
+		} catch (error) {
+			console.error("[ClineProvider] Unable to resolve Outer Gate manager", error)
+			return undefined
+		}
+	}
+
+	private async refreshOuterGateStateFromManager() {
+		const manager = await this.getOuterGateManager()
+		if (!manager) {
+			return
+		}
+
+		const baseState = createInitialOuterGateState(this.workplaceService?.getState())
+		const enriched = manager.applyToState(baseState)
+		this.updateOuterGateState(enriched)
+	}
+
+	public async importNotionIntegration(options: {
+		token?: string
+		databaseId?: string
+		dataSourceId?: string
+		pageSize?: number
+		maxPages?: number
+	}) {
+		const manager = await this.getOuterGateManager()
+		if (!manager) {
+			void vscode.window.showErrorMessage("Outer Gate integrations are still starting. Try again in a moment.")
+			return
+		}
+
+		try {
+			await manager.importNotion(options)
+			await this.refreshOuterGateStateFromManager()
+			await this.postStateToWebview()
+			void vscode.window.showInformationMessage("Notion workspace synced into the Outer Gates.")
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error)
+			const existingMeta = manager.getStoredMeta("notion")
+			const cleanedDatabaseId =
+				options.databaseId?.trim() ||
+				(typeof existingMeta?.extra?.databaseId === "string" ? existingMeta.extra.databaseId : undefined)
+			const cleanedDataSourceId =
+				options.dataSourceId?.trim() ||
+				(typeof existingMeta?.extra?.dataSourceId === "string" ? existingMeta.extra.dataSourceId : undefined)
+			const existingLabel = typeof existingMeta?.targetLabel === "string" ? existingMeta.targetLabel : undefined
+			await manager.recordIntegrationError("notion", message, {
+				targetLabel: cleanedDatabaseId ?? existingLabel,
+				extra: {
+					...(existingMeta?.extra ?? {}),
+					databaseId: cleanedDatabaseId,
+					dataSourceId: cleanedDataSourceId,
+				},
+			})
+			await this.refreshOuterGateStateFromManager()
+			await this.postStateToWebview()
+			console.error("[ClineProvider] Notion import failed", error)
+			void vscode.window.showErrorMessage(`Notion import failed: ${message}`)
+		}
+	}
+
+	public async importMiroIntegration(options: {
+		token?: string
+		boardId?: string
+		itemTypes?: string[]
+		maxItems?: number
+	}) {
+		const manager = await this.getOuterGateManager()
+		if (!manager) {
+			void vscode.window.showErrorMessage("Outer Gate integrations are still starting. Try again in a moment.")
+			return
+		}
+
+		try {
+			await manager.importMiro(options)
+			await this.refreshOuterGateStateFromManager()
+			await this.postStateToWebview()
+			void vscode.window.showInformationMessage("Miro board synced into the Outer Gates.")
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error)
+			const existingMeta = manager.getStoredMeta("miro")
+			const cleanedBoardId =
+				options.boardId?.trim() ||
+				(typeof existingMeta?.extra?.boardId === "string" ? existingMeta.extra.boardId : undefined)
+			const cleanedItemTypes =
+				options.itemTypes && options.itemTypes.length > 0
+					? options.itemTypes.join(",")
+					: typeof existingMeta?.extra?.itemTypes === "string"
+						? existingMeta.extra.itemTypes
+						: undefined
+			const existingLabel = typeof existingMeta?.targetLabel === "string" ? existingMeta.targetLabel : undefined
+			await manager.recordIntegrationError("miro", message, {
+				targetLabel: cleanedBoardId ?? existingLabel,
+				extra: {
+					...(existingMeta?.extra ?? {}),
+					boardId: cleanedBoardId,
+					itemTypes: cleanedItemTypes,
+				},
+			})
+			await this.refreshOuterGateStateFromManager()
+			await this.postStateToWebview()
+			console.error("[ClineProvider] Miro import failed", error)
+			void vscode.window.showErrorMessage(`Miro import failed: ${message}`)
+		}
+	}
+
+	public async importZipIntegration(zipPath: string) {
+		const manager = await this.getOuterGateManager()
+		if (!manager) {
+			void vscode.window.showErrorMessage("Outer Gate integrations are still starting. Try again in a moment.")
+			return
+		}
+
+		try {
+			await manager.importZipArchive(zipPath)
+			await this.refreshOuterGateStateFromManager()
+			await this.postStateToWebview()
+			void vscode.window.showInformationMessage("ZIP archive imported into the Outer Gates.")
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error)
+			await manager.recordIntegrationError("zip-file", message, {
+				targetLabel: zipPath,
+				extra: {
+					...(manager.getStoredMeta("zip-file")?.extra ?? {}),
+					archivePath: zipPath,
+				},
+			})
+			await this.refreshOuterGateStateFromManager()
+			await this.postStateToWebview()
+			console.error("[ClineProvider] ZIP import failed", error)
+			void vscode.window.showErrorMessage(`ZIP import failed: ${message}`)
+		}
+	}
+
+	private ensureOuterGateState(): OuterGateState {
+		if (!this.outerGateState) {
+			this.outerGateState = createInitialOuterGateState(this.workplaceService?.getState())
+		}
+		return this.outerGateState
+	}
+
+	private updateOuterGateState(next: OuterGateState) {
+		this.outerGateState = this.pruneOuterGateState(next)
+	}
+
+	private pruneOuterGateState(next: OuterGateState): OuterGateState {
+		return {
+			...next,
+			cloverMessages: [...next.cloverMessages].slice(-CLOVER_MAX_MESSAGES),
+			recentInsights: [...next.recentInsights].slice(0, 8),
+			cloverSessions: {
+				...next.cloverSessions,
+				entries: [...next.cloverSessions.entries].slice(0, CLOVER_SESSION_SUMMARY_LIMIT),
+			},
+		}
+	}
+
+	public getOuterGateStateSnapshot(): OuterGateState {
+		return cloneOuterGateState(this.ensureOuterGateState())
+	}
+
+	private getActiveWorkspaceName(): string | undefined {
+		const workplaceSnapshot = this.workplaceService?.getState()
+		if (!workplaceSnapshot || workplaceSnapshot.companies.length === 0) {
+			return undefined
+		}
+		const activeCompanyId =
+			workplaceSnapshot.activeCompanyId ??
+			workplaceSnapshot.companies[0]?.id ??
+			workplaceSnapshot.companies[0]?.id
+		const activeCompany = workplaceSnapshot.companies.find((company) => company.id === activeCompanyId)
+		return activeCompany?.name ?? workplaceSnapshot.companies[0]?.name
+	}
+
+	private async ensureCloverSessionsInitialized(): Promise<void> {
+		if (this.cloverSessionsInitialized) {
+			return
+		}
+		const service = this.getCloverSessionService()
+		if (!service) {
+			return
+		}
+		if (this.lastCloverSessionFetchErrorAt) {
+			const elapsed = Date.now() - this.lastCloverSessionFetchErrorAt
+			if (elapsed < CLOVER_SESSION_RETRY_DELAY_MS) {
+				return
+			}
+		}
+		const state = this.ensureOuterGateState()
+		await service.ensureDefaultSession(state.cloverMessages)
+		const initialized = await this.refreshCloverSessions({ append: false, syncActiveSession: true })
+		if (initialized) {
+			this.cloverSessionsInitialized = true
+			this.lastCloverSessionFetchErrorAt = undefined
+			return
+		}
+		this.lastCloverSessionFetchErrorAt = Date.now()
+	}
+
+	private mergeCloverSessionEntries(
+		existing: OuterGateCloverSessionSummary[],
+		incoming: OuterGateCloverSessionSummary[],
+		append: boolean,
+	): OuterGateCloverSessionSummary[] {
+		const combined = append ? [...existing, ...incoming] : [...incoming, ...existing]
+		const deduped: OuterGateCloverSessionSummary[] = []
+		const seen = new Set<string>()
+		for (const session of combined) {
+			if (seen.has(session.id)) {
+				continue
+			}
+			deduped.push(session)
+			seen.add(session.id)
+		}
+		return deduped.slice(0, CLOVER_SESSION_SUMMARY_LIMIT)
+	}
+
+	private async refreshCloverSessions(
+		options: {
+			cursor?: string
+			append?: boolean
+			limit?: number
+			syncActiveSession?: boolean
+		} = {},
+	): Promise<boolean> {
+		const service = this.getCloverSessionService()
+		if (!service) {
+			return false
+		}
+		const { cursor, append = false, limit = DEFAULT_CLOVER_SESSION_PAGE_SIZE, syncActiveSession = true } = options
+		const state = this.ensureOuterGateState()
+		const loadingState: OuterGateState = {
+			...state,
+			cloverSessions: {
+				...state.cloverSessions,
+				isLoading: true,
+			},
+		}
+		this.updateOuterGateState(loadingState)
+
+		try {
+			const result = await service.listSessions({ cursor, limit })
+			const mergedEntries = this.mergeCloverSessionEntries(state.cloverSessions.entries, result.sessions, append)
+
+			const refreshedState: OuterGateState = {
+				...this.ensureOuterGateState(),
+				cloverSessions: {
+					entries: mergedEntries,
+					hasMore: result.hasMore,
+					cursor: result.nextCursor,
+					isLoading: false,
+					isInitialFetchComplete: true,
+				},
+			}
+			this.updateOuterGateState(refreshedState)
+
+			if (syncActiveSession) {
+				await this.syncActiveCloverSessionMessages(service.getActiveSessionId())
+			}
+
+			this.cloverSessionWarningShown = false
+			return true
+		} catch (error) {
+			console.error("[ClineProvider.refreshCloverSessions] Failed to fetch Clover sessions", error)
+			const hadEntries = state.cloverSessions.entries.length > 0
+			const fallbackState: OuterGateState = {
+				...state,
+				cloverSessions: {
+					...state.cloverSessions,
+					isLoading: false,
+					isInitialFetchComplete: hadEntries ? (state.cloverSessions.isInitialFetchComplete ?? true) : true,
+				},
+			}
+			this.updateOuterGateState(fallbackState)
+
+			if (!this.cloverSessionWarningShown) {
+				void vscode.window.showWarningMessage(this.formatCloverSessionFetchError(error))
+				this.cloverSessionWarningShown = true
+			}
+
+			return false
+		}
+	}
+
+	private formatCloverSessionFetchError(error: unknown): string {
+		if (axios.isAxiosError(error)) {
+			const status = error.response?.status
+			if (status) {
+				return `Clover sessions are unavailable (HTTP ${status}). Check your network connection or POOL_API_URL setting, then try again.`
+			}
+			if (error.code) {
+				return `Clover sessions are unavailable (${error.code}). Check your network connection or POOL_API_URL setting, then try again.`
+			}
+		}
+		return "Clover sessions are unavailable right now. Check your network connection or POOL_API_URL setting, then try again."
+	}
+
+	private async syncActiveCloverSessionMessages(sessionId?: string): Promise<void> {
+		if (!sessionId) {
+			return
+		}
+		const service = this.getCloverSessionService()
+		if (!service) {
+			return
+		}
+		let session = service.getSession(sessionId)
+		if (!session) {
+			session = await service.fetchSession(sessionId)
+			if (!session) {
+				return
+			}
+		}
+		const state = this.ensureOuterGateState()
+		this.updateOuterGateState({
+			...state,
+			activeCloverSessionId: sessionId,
+			cloverMessages: session.messages.map((message) => ({ ...message })),
+		})
+	}
+
+	private async setActiveCloverSession(sessionId?: string): Promise<void> {
+		const service = this.getCloverSessionService()
+		if (!service) {
+			return
+		}
+		await service.setActiveSessionId(sessionId)
+		await this.syncActiveCloverSessionMessages(sessionId)
+	}
+
+	private getActiveCompanyContext(): { companyId?: string; companyName?: string } {
+		const workplace = this.getWorkplaceService()
+		if (!workplace) {
+			return {}
+		}
+		const snapshot = workplace.getState()
+		if (!snapshot.companies.length) {
+			return {}
+		}
+		const activeCompanyId = snapshot.activeCompanyId ?? snapshot.companies[0]?.id ?? snapshot.companies[0]?.id
+		const company = snapshot.companies.find((entry) => entry.id === activeCompanyId) ?? snapshot.companies[0]
+		return {
+			companyId: company?.id,
+			companyName: company?.name,
+		}
+	}
+
+	private async ensureActiveCloverSession(): Promise<string | undefined> {
+		await this.ensureCloverSessionsInitialized()
+		const service = this.getCloverSessionService()
+		if (!service) {
+			return this.ensureOuterGateState().activeCloverSessionId
+		}
+		let sessionId = this.ensureOuterGateState().activeCloverSessionId
+		if (!sessionId) {
+			const context = this.getActiveCompanyContext()
+			const welcomeMessage = createCloverWelcomeMessage()
+			welcomeMessage.tokens = await this.estimateCloverTokenCount(welcomeMessage.text)
+			const session = await service.createSession({
+				companyId: context.companyId,
+				companyName: context.companyName,
+				initialMessages: [welcomeMessage],
+			})
+			const summary = service.toSummary(session)
+			const stateAfterCreate = this.ensureOuterGateState()
+			const mergedEntries = this.mergeCloverSessionEntries(
+				stateAfterCreate.cloverSessions.entries,
+				[summary],
+				false,
+			)
+			this.updateOuterGateState({
+				...stateAfterCreate,
+				activeCloverSessionId: session.id,
+				cloverMessages: session.messages.map((message) => ({ ...message })),
+				cloverSessions: {
+					...stateAfterCreate.cloverSessions,
+					entries: mergedEntries,
+					hasMore: stateAfterCreate.cloverSessions.hasMore,
+					cursor: stateAfterCreate.cloverSessions.cursor,
+					isLoading: false,
+					isInitialFetchComplete: true,
+				},
+			})
+			sessionId = session.id
+		}
+		await this.setActiveCloverSession(sessionId)
+		return sessionId
+	}
+
+	public async createCloverSession(options?: { companyId?: string; companyName?: string }): Promise<void> {
+		await this.ensureCloverSessionsInitialized()
+		const service = this.getCloverSessionService()
+		if (!service) {
+			return
+		}
+		const context = options ?? this.getActiveCompanyContext()
+		const welcomeMessage = createCloverWelcomeMessage()
+		welcomeMessage.tokens = await this.estimateCloverTokenCount(welcomeMessage.text)
+		const session = await service.createSession({
+			companyId: context.companyId,
+			companyName: context.companyName,
+			initialMessages: [welcomeMessage],
+		})
+		const summary = service.toSummary(session)
+		const state = this.ensureOuterGateState()
+		const mergedEntries = this.mergeCloverSessionEntries(state.cloverSessions.entries, [summary], false)
+		const nextState: OuterGateState = {
+			...state,
+			activeCloverSessionId: session.id,
+			cloverMessages: session.messages.map((message) => ({ ...message })),
+			isCloverProcessing: false,
+			cloverSessions: {
+				...state.cloverSessions,
+				entries: mergedEntries,
+				hasMore: state.cloverSessions.hasMore,
+				cursor: state.cloverSessions.cursor,
+				isInitialFetchComplete: true,
+			},
+		}
+		this.updateOuterGateState(nextState)
+		await service.setActiveSessionId(session.id)
+		await this.postStateToWebview()
+	}
+
+	public async activateCloverSession(sessionId: string): Promise<void> {
+		await this.ensureCloverSessionsInitialized()
+		const service = this.getCloverSessionService()
+		if (!service) {
+			return
+		}
+		const session = service.getSession(sessionId)
+		if (!session) {
+			return
+		}
+		const summary = service.toSummary(session)
+		const state = this.ensureOuterGateState()
+		const mergedEntries = this.mergeCloverSessionEntries(state.cloverSessions.entries, [summary], false)
+		await service.setActiveSessionId(sessionId)
+		this.updateOuterGateState({
+			...state,
+			activeCloverSessionId: sessionId,
+			cloverMessages: session.messages.map((message) => ({ ...message })),
+			isCloverProcessing: false,
+			cloverSessions: {
+				...state.cloverSessions,
+				entries: mergedEntries,
+				hasMore: state.cloverSessions.hasMore,
+				cursor: state.cloverSessions.cursor,
+				isInitialFetchComplete: true,
+			},
+		})
+		await this.postStateToWebview()
+	}
+
+	public async loadMoreCloverSessions(cursor?: string, limit?: number): Promise<void> {
+		await this.ensureCloverSessionsInitialized()
+		const state = this.ensureOuterGateState()
+		const nextCursor = cursor ?? state.cloverSessions.cursor
+		if (!nextCursor && state.cloverSessions.entries.length > 0 && !state.cloverSessions.hasMore) {
+			return
+		}
+		await this.refreshCloverSessions({ cursor: nextCursor, append: true, limit, syncActiveSession: false })
+		await this.postStateToWebview()
+	}
+
+	private buildOuterGatePrompt(latestUserMessage: string): string {
+		const state = this.ensureOuterGateState()
+		const analysis = state.analysisPool
+		const recentInsights = state.recentInsights.slice(0, 5)
+		const conversation = state.cloverMessages
+			.slice(-10)
+			.map((message) => {
+				const speaker = message.speaker === "clover" ? "Clover" : "User"
+				return `${speaker}: ${message.text}`
+			})
+			.join("\n")
+		const insightSummary =
+			recentInsights.length > 0
+				? recentInsights
+						.map(
+							(insight) =>
+								`- ${insight.title}${insight.recommendedWorkspace ? ` → ${insight.recommendedWorkspace}` : ""} (${insight.stage})`,
+						)
+						.join("\n")
+				: "- No recent insights captured yet."
+
+		return `${CLOVER_SYSTEM_PROMPT.trim()}
+
+Analysis Pool:
+- Captured: ${analysis.totalCaptured}
+- Processing: ${analysis.processing}
+- Ready: ${analysis.ready}
+- Assigned this week: ${analysis.assignedThisWeek}
+
+Recent Insights:
+${insightSummary}
+
+Conversation So Far:
+${conversation ? `${conversation}\n` : ""}User: ${latestUserMessage}
+Clover:`
+	}
+
+	private async estimateCloverTokenCount(text: string): Promise<number | undefined> {
+		if (!text || text.trim().length === 0) {
+			return undefined
+		}
+		try {
+			const blocks: Anthropic.Messages.ContentBlockParam[] = [{ type: "text", text }]
+			return await countTokens(blocks)
+		} catch (error) {
+			console.warn("[ClineProvider] Failed to estimate Clover token count", error)
+			return undefined
+		}
+	}
+
+	private async generateOuterGateResponse(latestUserMessage: string): Promise<string> {
+		const { apiConfiguration } = await this.getState()
+		if (!apiConfiguration || Object.keys(apiConfiguration).length === 0) {
+			throw new Error(
+				"No language model configuration is available. Configure a provider in API settings to chat with Clover.",
+			)
+		}
+		const prompt = this.buildOuterGatePrompt(latestUserMessage)
+		const response = await singleCompletionHandler(apiConfiguration, prompt)
+		return response.trim()
+	}
+
+	public async handleOuterGateMessage(text: string, clientMessageId?: string): Promise<void> {
+		const trimmed = text.trim()
+		if (!trimmed) {
+			return
+		}
+
+		const sessionId = await this.ensureActiveCloverSession()
+		const service = this.getCloverSessionService()
+		const baseState = this.ensureOuterGateState()
+		const nowIso = new Date().toISOString()
+		const messageId = clientMessageId ?? randomUUID()
+		const userTokens = await this.estimateCloverTokenCount(trimmed)
+
+		const userMessage: OuterGateCloverMessage = {
+			id: messageId,
+			speaker: "user",
+			text: trimmed,
+			timestamp: nowIso,
+			tokens: userTokens,
+		}
+
+		const hasMessage = baseState.cloverMessages.some((message) => message.id === messageId)
+		const nextMessages = hasMessage ? [...baseState.cloverMessages] : [...baseState.cloverMessages, userMessage]
+
+		const recommendedWorkspace = this.getActiveWorkspaceName()
+		const newInsightId = messageId
+		const newInsight = {
+			id: newInsightId,
+			title: trimmed.length > 90 ? `${trimmed.slice(0, 87)}…` : trimmed,
+			sourceType: "conversation" as const,
+			stage: "processing" as const,
+			recommendedWorkspace,
+			capturedAtIso: nowIso,
+			assignedCompanyId: recommendedWorkspace,
+		}
+
+		let updatedState: OuterGateState = {
+			...baseState,
+			analysisPool: {
+				...baseState.analysisPool,
+				totalCaptured: baseState.analysisPool.totalCaptured + 1,
+				processing: baseState.analysisPool.processing + 1,
+				lastUpdatedIso: nowIso,
+			},
+			recentInsights: [newInsight, ...baseState.recentInsights.filter((insight) => insight.id !== newInsightId)],
+			cloverMessages: nextMessages,
+			isCloverProcessing: true,
+		}
+
+		if (!hasMessage && sessionId && service) {
+			const session = await service.appendMessages(sessionId, [userMessage], this.getActiveCompanyContext())
+			const summary = service.toSummary(session)
+			updatedState = {
+				...updatedState,
+				cloverSessions: {
+					...updatedState.cloverSessions,
+					entries: this.mergeCloverSessionEntries(updatedState.cloverSessions.entries, [summary], false),
+					hasMore: updatedState.cloverSessions.hasMore,
+					cursor: updatedState.cloverSessions.cursor,
+					isInitialFetchComplete: true,
+				},
+			}
+		}
+
+		this.updateOuterGateState(updatedState)
+		await this.postStateToWebview()
+
+		try {
+			const assistantReply = await this.generateOuterGateResponse(trimmed)
+			const assistantTokens = await this.estimateCloverTokenCount(assistantReply)
+			const replyMessage: OuterGateCloverMessage = {
+				id: randomUUID(),
+				speaker: "clover",
+				text: assistantReply,
+				timestamp: new Date().toISOString(),
+				tokens: assistantTokens,
+			}
+
+			const readyState = this.ensureOuterGateState()
+			const summaryText = assistantReply.split("\n").find((line) => line.trim().length > 0) ?? assistantReply
+			const responseInsights = readyState.recentInsights.map((insight) =>
+				insight.id === newInsightId
+					? {
+							...insight,
+							stage: "ready" as const,
+							summary: summaryText.length > 280 ? `${summaryText.slice(0, 277)}…` : summaryText,
+						}
+					: insight,
+			)
+
+			let stateWithReply: OuterGateState = {
+				...readyState,
+				analysisPool: {
+					...readyState.analysisPool,
+					processing: Math.max(0, readyState.analysisPool.processing - 1),
+					ready: readyState.analysisPool.ready + 1,
+					lastUpdatedIso: replyMessage.timestamp,
+				},
+				recentInsights: responseInsights,
+				cloverMessages: [...readyState.cloverMessages, replyMessage],
+				isCloverProcessing: false,
+			}
+
+			if (sessionId && service) {
+				const session = await service.appendMessages(sessionId, [replyMessage])
+				const summary = service.toSummary(session)
+				stateWithReply = {
+					...stateWithReply,
+					cloverSessions: {
+						...stateWithReply.cloverSessions,
+						entries: this.mergeCloverSessionEntries(
+							stateWithReply.cloverSessions.entries,
+							[summary],
+							false,
+						),
+						hasMore: stateWithReply.cloverSessions.hasMore,
+						cursor: stateWithReply.cloverSessions.cursor,
+						isInitialFetchComplete: true,
+					},
+				}
+			}
+
+			this.updateOuterGateState(stateWithReply)
+		} catch (error) {
+			console.error("[ClineProvider] Clover response failed", error)
+			const fallbackMessage =
+				error instanceof Error
+					? error.message
+					: "I hit a snag reaching the concierge model. Double-check your AI provider configuration and try again."
+			const readyState = this.ensureOuterGateState()
+			const errorTokens = await this.estimateCloverTokenCount(fallbackMessage)
+			const errorReply: OuterGateCloverMessage = {
+				id: randomUUID(),
+				speaker: "clover",
+				text: fallbackMessage,
+				timestamp: new Date().toISOString(),
+				tokens: errorTokens,
+			}
+
+			let stateWithError: OuterGateState = {
+				...readyState,
+				analysisPool: {
+					...readyState.analysisPool,
+					processing: Math.max(0, readyState.analysisPool.processing - 1),
+					lastUpdatedIso: errorReply.timestamp,
+				},
+				recentInsights: readyState.recentInsights.map((insight) =>
+					insight.id === newInsightId ? { ...insight, stage: "captured" as const } : insight,
+				),
+				cloverMessages: [...readyState.cloverMessages, errorReply],
+				isCloverProcessing: false,
+			}
+
+			if (sessionId && service) {
+				const session = await service.appendMessages(sessionId, [errorReply])
+				const summary = service.toSummary(session)
+				stateWithError = {
+					...stateWithError,
+					cloverSessions: {
+						...stateWithError.cloverSessions,
+						entries: this.mergeCloverSessionEntries(
+							stateWithError.cloverSessions.entries,
+							[summary],
+							false,
+						),
+						hasMore: stateWithError.cloverSessions.hasMore,
+						cursor: stateWithError.cloverSessions.cursor,
+						isInitialFetchComplete: true,
+					},
+				}
+			}
+
+			this.updateOuterGateState(stateWithError)
+		}
+
+		await this.postStateToWebview()
+	}
+
 	async postStateToWebview() {
-		const state = await this.getStateToPostToWebview()
-		this.postMessageToWebview({ type: "state", state })
+		try {
+			const state = await this.getStateToPostToWebview()
+			verboseProviderLog("postStateToWebview", {
+				activeCompanyId: state.workplaceState?.activeCompanyId,
+				activeEmployeeId: state.workplaceState?.activeEmployeeId,
+				companyCount: state.workplaceState?.companies?.length ?? 0,
+			})
+			this.postMessageToWebview({ type: "state", state })
+		} catch (error) {
+			console.error("[ClineProvider.postStateToWebview] failed to send state", error)
+		}
 
 		// Check MDM compliance and send user to account tab if not compliant
 		// Only redirect if there's an actual MDM policy requiring authentication
@@ -1771,7 +2674,26 @@ export class ClineProvider
 		}
 	}
 
+	private async getEndlessSurfaceViewState(): Promise<EndlessSurfaceViewState | undefined> {
+		const service = this.getEndlessSurfaceService()
+		if (!service) {
+			return undefined
+		}
+
+		const state = service.getState()
+		const activeSurfaceId = state.activeSurfaceId
+		const activeSurface = activeSurfaceId ? await service.getSurfaceData(activeSurfaceId) : undefined
+
+		return {
+			...state,
+			activeSurface,
+		}
+	}
+
 	async getStateToPostToWebview(): Promise<ExtensionState> {
+		await this.ensureCloverSessionsInitialized()
+		const state = await this.getState()
+		const endlessSurfaceViewState = await this.getEndlessSurfaceViewState()
 		const {
 			apiConfiguration,
 			customInstructions,
@@ -1835,6 +2757,7 @@ export class ClineProvider
 			maxOpenTabsContext,
 			maxWorkspaceFiles,
 			browserToolEnabled,
+			browserInteractionStrategy,
 			telemetrySetting,
 			showRooIgnoredFiles,
 			language,
@@ -1870,9 +2793,21 @@ export class ClineProvider
 			openRouterImageApiKey,
 			kiloCodeImageApiKey,
 			openRouterImageGenerationSelectedModel,
+			notificationEmail,
+			notificationSmsNumber,
+			notificationSmsGateway,
+			notificationTelegramChatId,
 			openRouterUseMiddleOutTransform,
-		} = await this.getState()
+			hubSnapshot,
+		} = state
 
+		verboseProviderLog("getStateToPostToWebview", {
+			renderContext: this.renderContext,
+			activeCompanyId: state.workplaceState?.activeCompanyId,
+			activeEmployeeId: state.workplaceState?.activeEmployeeId,
+			companyCount: state.workplaceState?.companies?.length ?? 0,
+			companyNames: state.workplaceState?.companies?.map((entry) => entry.name) ?? [],
+		})
 		const telemetryKey = process.env.KILOCODE_POSTHOG_API_KEY
 		const machineId = vscode.env.machineId
 
@@ -1888,6 +2823,15 @@ export class ClineProvider
 		const kiloCodeWrapperProperties = getKiloCodeWrapperProperties()
 		// kilocode_change end
 
+		const workplaceService = this.getWorkplaceService()
+		const workplaceStateSnapshot = workplaceService?.getState()
+		const companyNames = workplaceStateSnapshot?.companies?.map((company) => company.name) ?? []
+		verboseProviderLog("getState", {
+			renderContext: this.renderContext,
+			hasWorkplace: Boolean(workplaceService),
+			companyCount: workplaceStateSnapshot?.companies?.length ?? 0,
+			companyNames,
+		})
 		return {
 			version: this.context.extension?.packageJSON?.version ?? "",
 			apiConfiguration,
@@ -1970,6 +2914,8 @@ export class ClineProvider
 			maxWorkspaceFiles: maxWorkspaceFiles ?? 200,
 			cwd,
 			browserToolEnabled: browserToolEnabled ?? true,
+			browserInteractionStrategy:
+				(browserInteractionStrategy as BrowserInteractionStrategy | undefined) ?? "legacy",
 			telemetrySetting,
 			telemetryKey,
 			machineId,
@@ -2030,8 +2976,14 @@ export class ClineProvider
 			openRouterImageApiKey,
 			kiloCodeImageApiKey,
 			openRouterImageGenerationSelectedModel,
+			notificationEmail,
+			notificationSmsNumber,
+			notificationSmsGateway,
 			openRouterUseMiddleOutTransform,
-			workplaceState: this.workplaceService?.getState() ?? { companies: [] },
+			endlessSurface: endlessSurfaceViewState,
+			workplaceState: workplaceStateSnapshot ?? { companies: [] },
+			outerGateState: this.getOuterGateStateSnapshot(),
+			hubSnapshot,
 		}
 	}
 
@@ -2054,6 +3006,7 @@ export class ClineProvider
 	> {
 		const stateValues = this.contextProxy.getValues()
 		const customModes = await this.customModesManager.getCustomModes()
+		const workplaceStateSnapshot = this.getWorkplaceService()?.getState()
 
 		// Determine apiProvider with the same logic as before.
 		const apiProvider: ProviderName = stateValues.apiProvider ? stateValues.apiProvider : "kilocode" // kilocode_change: fall back to kilocode
@@ -2119,8 +3072,8 @@ export class ClineProvider
 			)
 		}
 
-		// Return the same structure as before.
-		return {
+		// Build the same structure as before.
+		const result = {
 			apiConfiguration: providerSettings,
 			kilocodeDefaultModel: await getKilocodeDefaultModel(
 				providerSettings.kilocodeToken,
@@ -2204,6 +3157,8 @@ export class ClineProvider
 			maxWorkspaceFiles: stateValues.maxWorkspaceFiles ?? 200,
 			openRouterUseMiddleOutTransform: stateValues.openRouterUseMiddleOutTransform,
 			browserToolEnabled: stateValues.browserToolEnabled ?? true,
+			browserInteractionStrategy:
+				(stateValues.browserInteractionStrategy as BrowserInteractionStrategy | undefined) ?? "legacy",
 			telemetrySetting: stateValues.telemetrySetting || "unset",
 			showRooIgnoredFiles: stateValues.showRooIgnoredFiles ?? false,
 			showAutoApproveMenu: stateValues.showAutoApproveMenu ?? false, // kilocode_change
@@ -2258,7 +3213,17 @@ export class ClineProvider
 			openRouterImageApiKey: stateValues.openRouterImageApiKey,
 			kiloCodeImageApiKey: stateValues.kiloCodeImageApiKey,
 			openRouterImageGenerationSelectedModel: stateValues.openRouterImageGenerationSelectedModel,
+			notificationEmail: stateValues.notificationEmail,
+			notificationSmsNumber: stateValues.notificationSmsNumber,
+			notificationSmsGateway: stateValues.notificationSmsGateway,
+			notificationTelegramChatId: stateValues.notificationTelegramChatId,
+			workplaceState: workplaceStateSnapshot ?? { companies: [] },
+			hubSnapshot: this.conversationHub.getSnapshot(),
 		}
+		const companyCount = result.workplaceState?.companies?.length ?? 0
+		const companyNames = result.workplaceState?.companies?.map((company: WorkplaceCompany) => company.name) ?? []
+		console.log("[ClineProvider.getState] returning companyCount=%d companyNames=%o", companyCount, companyNames)
+		return result
 	}
 
 	async updateTaskHistory(item: HistoryItem): Promise<HistoryItem[]> {
@@ -2340,7 +3305,9 @@ export class ClineProvider
 
 	public log(message: string) {
 		this.outputChannel.appendLine(message)
-		console.log(message)
+		if (ENABLE_VERBOSE_PROVIDER_LOGS) {
+			console.debug("[ClineProvider]", message)
+		}
 	}
 
 	// getters
@@ -2899,7 +3866,7 @@ export class ClineProvider
 	}
 
 	// kilocode_change:
-	// MCP Marketplace
+	// Tool Library (MCP marketplace + additional sources)
 	private async fetchMcpMarketplaceFromApi(silent: boolean = false): Promise<McpMarketplaceCatalog | undefined> {
 		try {
 			const response = await axios.get("https://api.cline.bot/v1/mcp/marketplace", {
@@ -2912,13 +3879,28 @@ export class ClineProvider
 				throw new Error("Invalid response from MCP marketplace API")
 			}
 
+			const remoteItems: McpMarketplaceItem[] = (response.data || []).map((item: any) => ({
+				...item,
+				githubStars: item.githubStars ?? 0,
+				downloadCount: item.downloadCount ?? 0,
+				tags: item.tags ?? [],
+				integrationType: (item.integrationType ?? "mcp") as McpMarketplaceItem["integrationType"],
+				source: "remote",
+			}))
+
+			const mergedById = new Map<string, McpMarketplaceItem>()
+			for (const item of remoteItems) {
+				mergedById.set(item.mcpId, item)
+			}
+			for (const localItem of additionalToolLibraryItems) {
+				mergedById.set(localItem.mcpId, {
+					...localItem,
+					integrationType: localItem.integrationType ?? "computer-use",
+				})
+			}
+
 			const catalog: McpMarketplaceCatalog = {
-				items: (response.data || []).map((item: any) => ({
-					...item,
-					githubStars: item.githubStars ?? 0,
-					downloadCount: item.downloadCount ?? 0,
-					tags: item.tags ?? [],
-				})),
+				items: Array.from(mergedById.values()),
 			}
 
 			await this.updateGlobalState("mcpMarketplaceCatalog", catalog)
@@ -3154,4 +4136,113 @@ Here is the project's README to help you get started:\n\n${mcpDetails.readmeCont
 			return vscode.Uri.file(filePath).toString()
 		}
 	}
+}
+
+function createCloverWelcomeMessage(timestampIso = new Date().toISOString()): OuterGateCloverMessage {
+	return {
+		id: randomUUID(),
+		speaker: "clover",
+		text: CLOVER_WELCOME_TEXT,
+		timestamp: timestampIso,
+	}
+}
+
+function cloneOuterGateState(state: OuterGateState): OuterGateState {
+	return {
+		analysisPool: { ...state.analysisPool },
+		recentInsights: state.recentInsights.map((insight) => ({ ...insight })),
+		suggestions: [...state.suggestions],
+		quickActions: state.quickActions.map((action) => ({ ...action })),
+		integrations: state.integrations.map((integration) => ({ ...integration })),
+		cloverMessages: state.cloverMessages.map((message) => ({ ...message })),
+		isCloverProcessing: state.isCloverProcessing ?? false,
+		cloverSessions: {
+			entries: state.cloverSessions.entries.map((session) => ({ ...session })),
+			hasMore: state.cloverSessions.hasMore,
+			cursor: state.cloverSessions.cursor,
+			isLoading: state.cloverSessions.isLoading,
+			isInitialFetchComplete: state.cloverSessions.isInitialFetchComplete,
+		},
+		activeCloverSessionId: state.activeCloverSessionId,
+	}
+}
+
+function createInitialOuterGateState(workplaceState?: WorkplaceState): OuterGateState {
+	const base = cloneOuterGateState(defaultOuterGateState)
+	const now = Date.now()
+	const companyNames = workplaceState?.companies?.map((company) => company.name).filter(Boolean) ?? []
+	const primaryCompany = companyNames[0] ?? "Launchpad Studio"
+	const secondaryCompany = companyNames[1] ?? "Passion Incubator"
+
+	base.analysisPool = {
+		totalCaptured: 18,
+		processing: 2,
+		ready: 6,
+		assignedThisWeek: 4,
+		lastUpdatedIso: new Date(now - 5 * 60 * 1000).toISOString(),
+	}
+
+	base.quickActions = defaultOuterGateState.quickActions.map((action) => ({ ...action }))
+
+	base.integrations = defaultOuterGateIntegrations.map((integration) => {
+		switch (integration.id) {
+			case "notion":
+				return {
+					...integration,
+					description: "Connected workspace wiki for organizing docs and projects across your team.",
+				}
+			case "miro":
+				return {
+					...integration,
+					description: "Collaborative whiteboarding platform for brainstorming, mapping, and planning.",
+				}
+			default:
+				return { ...integration }
+		}
+	})
+
+	base.recentInsights = [
+		{
+			id: randomUUID(),
+			title: "Eco retreat concept with regenerative workshops",
+			sourceType: "conversation" as const,
+			summary: "You outlined a weekend retreat blending nature immersion with structured founder masterminds.",
+			stage: "ready" as const,
+			recommendedWorkspace: primaryCompany,
+			capturedAtIso: new Date(now - 60 * 60 * 1000).toISOString(),
+			assignedCompanyId: primaryCompany,
+		},
+		{
+			id: randomUUID(),
+			title: "Podcast highlights from creative residency interviews",
+			sourceType: "integration" as const,
+			summary: "Imported Life HQ notes about multidisciplinary residencies seeking production support.",
+			stage: "processing" as const,
+			recommendedWorkspace: secondaryCompany,
+			capturedAtIso: new Date(now - 2 * 60 * 60 * 1000).toISOString(),
+			assignedCompanyId: secondaryCompany,
+		},
+		{
+			id: randomUUID(),
+			title: "Community operations checklist draft",
+			sourceType: "document" as const,
+			summary: "A Google Doc outlines onboarding steps for volunteer hosts and moderators.",
+			stage: "assigned" as const,
+			recommendedWorkspace: primaryCompany,
+			capturedAtIso: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
+			assignedCompanyId: primaryCompany,
+		},
+	]
+
+	base.suggestions = [
+		"Map last week's journal entries into venture themes",
+		"Draft a role card for the retreat operations lead",
+		"Bundle your voice notes into a single venture brief",
+	]
+
+	base.cloverMessages = [createCloverWelcomeMessage(new Date(now - 90 * 1000).toISOString())]
+
+	base.isCloverProcessing = false
+
+	return base
 }

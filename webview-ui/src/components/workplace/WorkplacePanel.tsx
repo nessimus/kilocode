@@ -2,13 +2,16 @@ import { useMemo, useState } from "react"
 import { VSCodeButton, VSCodeTextField, VSCodeDropdown, VSCodeOption } from "@vscode/webview-ui-toolkit/react"
 
 import { useExtensionState } from "@src/context/ExtensionStateContext"
-import { useAppTranslation } from "@src/i18n/TranslationContext"
+import { vscode } from "@src/utils/vscode"
 
-const EMPTY_COMPANY_STATE = { companies: [] as any[], activeCompanyId: undefined as string | undefined }
+const EMPTY_COMPANY_STATE = {
+	companies: [] as any[],
+	activeCompanyId: undefined as string | undefined,
+	ownerProfileDefaults: undefined,
+}
 
 const WorkplacePanel = () => {
-	const { workplaceState, createCompany, createEmployee, selectCompany } = useExtensionState()
-	const { t } = useAppTranslation()
+	const { workplaceState, createCompany, createEmployee, selectCompany, setShowWelcome } = useExtensionState()
 
 	const [companyName, setCompanyName] = useState("")
 	const [companyMission, setCompanyMission] = useState("")
@@ -28,6 +31,7 @@ const WorkplacePanel = () => {
 		createCompany({ name: companyName.trim(), mission: companyMission.trim() || undefined })
 		setCompanyName("")
 		setCompanyMission("")
+		setShowWelcome(false)
 	}
 
 	const handleCreateEmployee = () => {
@@ -40,6 +44,22 @@ const WorkplacePanel = () => {
 		})
 		setEmployeeName("")
 		setEmployeeRole("")
+		setShowWelcome(false)
+	}
+
+	const handleSelectCompany = (companyId: string) => {
+		selectCompany(companyId)
+		setShowWelcome(false)
+	}
+
+	const openWorkforceHub = () => {
+		setShowWelcome(false)
+		vscode.postMessage({ type: "switchTab", tab: "profile" })
+	}
+
+	const openActionWorkspace = () => {
+		setShowWelcome(false)
+		vscode.postMessage({ type: "switchTab", tab: "workspace" })
 	}
 
 	return (
@@ -47,77 +67,86 @@ const WorkplacePanel = () => {
 			<div className="px-5 py-4 border-b border-[var(--vscode-editorGroup-border)] flex items-center justify-between gap-3">
 				<div>
 					<h3 className="text-base font-semibold text-[var(--vscode-foreground)] mb-1">
-						{t("workplace:title")}
+						Build Your Workforce
 					</h3>
-					<p className="text-sm text-[var(--vscode-descriptionForeground)] m-0">{t("workplace:subtitle")}</p>
+					<p className="text-sm text-[var(--vscode-descriptionForeground)] m-0">
+						Create your company, invite teammates, and choose who leads conversations.
+					</p>
 				</div>
 				{state.companies.length > 0 && (
-					<VSCodeDropdown
-						value={activeCompany?.id}
-						onChange={(event: any) => selectCompany(event.target.value as string)}
-						className="min-w-[180px]">
-						{state.companies.map((company) => (
-							<VSCodeOption key={company.id} value={company.id}>
-								{company.name}
-							</VSCodeOption>
-						))}
-					</VSCodeDropdown>
+					<div className="flex items-center gap-2">
+						<VSCodeDropdown
+							value={activeCompany?.id}
+							onChange={(event: any) => handleSelectCompany(event.target.value as string)}
+							className="min-w-[180px]">
+							{state.companies.map((company) => (
+								<VSCodeOption key={company.id} value={company.id}>
+									{company.name}
+								</VSCodeOption>
+							))}
+						</VSCodeDropdown>
+						<VSCodeButton appearance="secondary" onClick={openWorkforceHub}>
+							Open Workforce Hub
+						</VSCodeButton>
+						<VSCodeButton appearance="primary" onClick={openActionWorkspace}>
+							Open Action Workspace
+						</VSCodeButton>
+					</div>
 				)}
 			</div>
 
 			<div className="grid gap-6 px-5 py-4">
-				{state.companies.length === 0 && (
-					<div className="grid gap-3">
-						<p className="text-sm text-[var(--vscode-descriptionForeground)]">
-							{t("workplace:createCompanyHint")}
-						</p>
-						<div className="grid gap-2 sm:grid-cols-2">
-							<VSCodeTextField
-								value={companyName}
-								onInput={(event: any) => setCompanyName(event.target.value)}
-								placeholder={t("workplace:companyNamePlaceholder")}
-							/>
-							<VSCodeTextField
-								value={companyMission}
-								onInput={(event: any) => setCompanyMission(event.target.value)}
-								placeholder={t("workplace:companyMissionPlaceholder")}
-							/>
-						</div>
-						<VSCodeButton appearance="primary" onClick={handleCreateCompany}>
-							{t("workplace:createCompanyButton")}
-						</VSCodeButton>
+				<div className="grid gap-3">
+					<h4 className="text-sm font-semibold text-[var(--vscode-foreground)] uppercase tracking-wide">
+						Company Profile
+					</h4>
+					<div className="grid gap-2 sm:grid-cols-2">
+						<VSCodeTextField
+							value={companyName}
+							onInput={(event: any) => setCompanyName(event.target.value)}
+							placeholder="Company name"
+						/>
+						<VSCodeTextField
+							value={companyMission}
+							onInput={(event: any) => setCompanyMission(event.target.value)}
+							placeholder="Mission (optional)"
+						/>
 					</div>
-				)}
+					<VSCodeButton appearance="primary" onClick={handleCreateCompany}>
+						{state.companies.length ? "Add another company" : "Create company"}
+					</VSCodeButton>
+				</div>
 
 				{activeCompany && (
 					<div className="grid gap-5">
 						<div>
 							<h4 className="text-sm font-semibold text-[var(--vscode-foreground)] uppercase tracking-wide mb-2">
-								{t("workplace:employeesHeader", { company: activeCompany.name })}
+								Team Members
 							</h4>
 							<div className="grid gap-2">
-								{activeCompany.employees.map((employee) => (
-									<div
-										key={employee.id}
-										className="flex items-center justify-between rounded-md border border-[color-mix(in_srgb,var(--primary)_40%,transparent)] bg-[color-mix(in_srgb,var(--accent)_60%,transparent)] px-3 py-2">
-										<div>
-											<p className="text-sm font-medium text-[var(--vscode-foreground)] m-0">
-												{employee.name}
-											</p>
-											<p className="text-xs text-[var(--vscode-descriptionForeground)] m-0">
-												{employee.role}
-												{employee.isExecutiveManager && (
-													<span className="ml-1 text-[var(--vscode-textLink-foreground)]">
-														{t("workplace:executiveManagerTag")}
-													</span>
-												)}
-											</p>
+								{activeCompany.employees.length > 0 ? (
+									activeCompany.employees.map((employee) => (
+										<div
+											key={employee.id}
+											className="flex items-center justify-between rounded-md border border-[color-mix(in_srgb,var(--primary)_40%,transparent)] bg-[color-mix(in_srgb,var(--accent)_60%,transparent)] px-3 py-2">
+											<div>
+												<p className="text-sm font-medium text-[var(--vscode-foreground)] m-0">
+													{employee.name}
+												</p>
+												<p className="text-xs text-[var(--vscode-descriptionForeground)] m-0">
+													{employee.role}
+													{employee.isExecutiveManager && (
+														<span className="ml-1 text-[var(--vscode-textLink-foreground)]">
+															Executive Manager
+														</span>
+													)}
+												</p>
+											</div>
 										</div>
-									</div>
-								))}
-								{activeCompany.employees.length === 0 && (
+									))
+								) : (
 									<p className="text-xs text-[var(--vscode-descriptionForeground)] italic m-0">
-										{t("workplace:noEmployees")}
+										No teammates yet. Add one below.
 									</p>
 								)}
 							</div>
@@ -125,22 +154,22 @@ const WorkplacePanel = () => {
 
 						<div className="grid gap-2">
 							<h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--vscode-descriptionForeground)]">
-								{t("workplace:addEmployeeHeader")}
+								Invite a teammate
 							</h4>
 							<div className="grid gap-2 sm:grid-cols-2">
 								<VSCodeTextField
 									value={employeeName}
 									onInput={(event: any) => setEmployeeName(event.target.value)}
-									placeholder={t("workplace:employeeNamePlaceholder")}
+									placeholder="Name"
 								/>
 								<VSCodeTextField
 									value={employeeRole}
 									onInput={(event: any) => setEmployeeRole(event.target.value)}
-									placeholder={t("workplace:employeeRolePlaceholder")}
+									placeholder="Role"
 								/>
 							</div>
 							<VSCodeButton appearance="secondary" onClick={handleCreateEmployee}>
-								{t("workplace:addEmployeeButton")}
+								Add teammate
 							</VSCodeButton>
 						</div>
 					</div>

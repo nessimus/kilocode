@@ -17,6 +17,7 @@ import { getInsertContentDescription } from "./insert-content"
 import { getSearchAndReplaceDescription } from "./search-and-replace"
 import { getListCodeDefinitionNamesDescription } from "./list-code-definition-names"
 import { getBrowserActionDescription } from "./browser-action"
+import { getWebSearchDescription } from "./web-search"
 import { getAskFollowupQuestionDescription } from "./ask-followup-question"
 import { getAttemptCompletionDescription } from "./attempt-completion"
 import { getUseMcpToolDescription } from "./use-mcp-tool"
@@ -26,6 +27,7 @@ import { getNewTaskDescription } from "./new-task"
 import { getCodebaseSearchDescription } from "./codebase-search"
 import { getUpdateTodoListDescription } from "./update-todo-list"
 import { getRunSlashCommandDescription } from "./run-slash-command"
+import { getUpsertSopDescription } from "./upsert-sop"
 import { getGenerateImageDescription } from "./generate-image"
 import { CodeIndexManager } from "../../../services/code-index/manager"
 import { isMorphAvailable } from "../../tools/editFileTool"
@@ -34,6 +36,27 @@ import { isMorphAvailable } from "../../tools/editFileTool"
 import { getEditFileDescription } from "./edit-file"
 import { type ClineProviderState } from "../../webview/ClineProvider"
 // kilocode_change end
+import { getCreateEmployeeDescription } from "./create-employee"
+import { getArchiveEmployeeDescription } from "./archive-employee"
+import { getArchiveTeamDescription } from "./archive-team"
+import { getArchiveDepartmentDescription } from "./archive-department"
+import { getRemoveEmployeeFromTeamDescription } from "./remove-employee-from-team"
+import { getRemoveTeamFromDepartmentDescription } from "./remove-team-from-department"
+import { getUpdateEmployeeDescription } from "./update-employee"
+import { getCreateDepartmentDescription } from "./create-department"
+import { getUpdateDepartmentDescription } from "./update-department"
+import { getCreateTeamDescription } from "./create-team"
+import { getUpdateTeamDescription } from "./update-team"
+import { getAssignEmployeeToTeamDescription } from "./assign-employee-to-team"
+import { getAssignTeamToDepartmentDescription } from "./assign-team-to-department"
+import { getListCompaniesDescription } from "./list-companies"
+import { getListDepartmentsDescription } from "./list-departments"
+import { getListTeamsDescription } from "./list-teams"
+import { getListEmployeesDescription } from "./list-employees"
+import { getCreateActionItemDescription } from "./create-action-item"
+import { getUpdateActionItemDescription } from "./update-action-item"
+import { getDeleteActionItemDescription } from "./delete-action-item"
+import { getListActionItemsDescription } from "./list-action-items"
 
 // Map of tool names to their description functions
 const toolDescriptionMap: Record<string, (args: ToolArgs) => string | undefined> = {
@@ -51,6 +74,7 @@ const toolDescriptionMap: Record<string, (args: ToolArgs) => string | undefined>
 	search_files: (args) => getSearchFilesDescription(args),
 	list_files: (args) => getListFilesDescription(args),
 	list_code_definition_names: (args) => getListCodeDefinitionNamesDescription(args),
+	web_search: (args) => getWebSearchDescription(args),
 	browser_action: (args) => getBrowserActionDescription(args),
 	ask_followup_question: () => getAskFollowupQuestionDescription(),
 	attempt_completion: (args) => getAttemptCompletionDescription(args),
@@ -66,7 +90,29 @@ const toolDescriptionMap: Record<string, (args: ToolArgs) => string | undefined>
 		args.diffStrategy ? args.diffStrategy.getToolDescription({ cwd: args.cwd, toolOptions: args.toolOptions }) : "",
 	update_todo_list: (args) => getUpdateTodoListDescription(args),
 	run_slash_command: () => getRunSlashCommandDescription(),
+	upsert_sop: () => getUpsertSopDescription(),
 	generate_image: (args) => getGenerateImageDescription(args),
+	create_employee: (args) => getCreateEmployeeDescription(args),
+	update_employee: () => getUpdateEmployeeDescription(),
+	create_department: () => getCreateDepartmentDescription(),
+	update_department: () => getUpdateDepartmentDescription(),
+	create_team: () => getCreateTeamDescription(),
+	update_team: () => getUpdateTeamDescription(),
+	assign_employee_to_team: () => getAssignEmployeeToTeamDescription(),
+	assign_team_to_department: () => getAssignTeamToDepartmentDescription(),
+	archive_employee: () => getArchiveEmployeeDescription(),
+	archive_team: () => getArchiveTeamDescription(),
+	archive_department: () => getArchiveDepartmentDescription(),
+	remove_employee_from_team: () => getRemoveEmployeeFromTeamDescription(),
+	remove_team_from_department: () => getRemoveTeamFromDepartmentDescription(),
+	list_companies: () => getListCompaniesDescription(),
+	list_departments: () => getListDepartmentsDescription(),
+	list_teams: () => getListTeamsDescription(),
+	list_employees: () => getListEmployeesDescription(),
+	create_action_item: () => getCreateActionItemDescription(),
+	update_action_item: () => getUpdateActionItemDescription(),
+	delete_action_item: () => getDeleteActionItemDescription(),
+	list_action_items: () => getListActionItemsDescription(),
 }
 
 export function getToolDescriptionsForMode(
@@ -187,6 +233,7 @@ export {
 	getSearchFilesDescription,
 	getListFilesDescription,
 	getListCodeDefinitionNamesDescription,
+	getWebSearchDescription,
 	getBrowserActionDescription,
 	getAskFollowupQuestionDescription,
 	getAttemptCompletionDescription,
@@ -198,5 +245,7 @@ export {
 	getEditFileDescription, // kilocode_change: Morph fast apply
 	getCodebaseSearchDescription,
 	getRunSlashCommandDescription,
+	getUpsertSopDescription,
 	getGenerateImageDescription,
+	getCreateEmployeeDescription,
 }

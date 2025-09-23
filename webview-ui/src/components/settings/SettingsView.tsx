@@ -32,6 +32,7 @@ import {
 import { ensureBodyPointerEventsRestored } from "@/utils/fixPointerEvents"
 
 import type { ProviderSettings, ExperimentId, TelemetrySetting } from "@roo-code/types"
+import type { BrowserInteractionStrategy } from "@roo/browser"
 
 import { vscode } from "@src/utils/vscode"
 import { cn } from "@src/lib/utils"
@@ -171,6 +172,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 		autoCondenseContextPercent,
 		browserToolEnabled,
 		browserViewportSize,
+		browserInteractionStrategy,
 		enableCheckpoints,
 		diffEnabled,
 		experiments,
@@ -224,6 +226,12 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 		openRouterImageApiKey,
 		kiloCodeImageApiKey,
 		openRouterImageGenerationSelectedModel,
+		notificationEmail,
+		notificationEmailAppPassword,
+		notificationSmsNumber,
+		notificationSmsGateway,
+		notificationTelegramBotToken,
+		notificationTelegramChatId,
 	} = cachedState
 
 	const apiConfiguration = useMemo(() => cachedState.apiConfiguration ?? {}, [cachedState.apiConfiguration])
@@ -388,6 +396,10 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 			vscode.postMessage({ type: "autoCondenseContext", bool: autoCondenseContext })
 			vscode.postMessage({ type: "autoCondenseContextPercent", value: autoCondenseContextPercent })
 			vscode.postMessage({ type: "browserToolEnabled", bool: browserToolEnabled })
+			vscode.postMessage({
+				type: "browserInteractionStrategy",
+				text: (browserInteractionStrategy ?? "legacy") as string,
+			})
 			vscode.postMessage({ type: "soundEnabled", bool: soundEnabled })
 			vscode.postMessage({ type: "ttsEnabled", bool: ttsEnabled })
 			vscode.postMessage({ type: "ttsSpeed", value: ttsSpeed })
@@ -444,6 +456,15 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 			vscode.postMessage({ type: "systemNotificationsEnabled", bool: systemNotificationsEnabled }) // kilocode_change
 			vscode.postMessage({ type: "ghostServiceSettings", values: ghostServiceSettings }) // kilocode_change
 			vscode.postMessage({ type: "morphApiKey", text: morphApiKey }) // kilocode_change
+			vscode.postMessage({ type: "notificationEmail", text: (notificationEmail ?? "").trim() })
+			vscode.postMessage({ type: "notificationEmailAppPassword", text: notificationEmailAppPassword ?? "" })
+			vscode.postMessage({ type: "notificationSmsNumber", text: (notificationSmsNumber ?? "").trim() })
+			vscode.postMessage({
+				type: "notificationSmsGateway",
+				text: (notificationSmsGateway ?? "").trim() || "tmomail.net",
+			})
+			vscode.postMessage({ type: "notificationTelegramBotToken", text: notificationTelegramBotToken ?? "" })
+			vscode.postMessage({ type: "notificationTelegramChatId", text: (notificationTelegramChatId ?? "").trim() })
 			vscode.postMessage({ type: "openRouterImageApiKey", text: openRouterImageApiKey })
 			vscode.postMessage({ type: "kiloCodeImageApiKey", text: kiloCodeImageApiKey })
 			vscode.postMessage({
@@ -795,6 +816,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 							screenshotQuality={screenshotQuality}
 							remoteBrowserHost={remoteBrowserHost}
 							remoteBrowserEnabled={remoteBrowserEnabled}
+							browserInteractionStrategy={browserInteractionStrategy as BrowserInteractionStrategy}
 							setCachedStateField={setCachedStateField}
 						/>
 					)}
@@ -831,6 +853,12 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 							soundVolume={soundVolume}
 							systemNotificationsEnabled={systemNotificationsEnabled}
 							areSettingsCommitted={!isChangeDetected}
+							notificationEmail={notificationEmail}
+							notificationEmailAppPassword={notificationEmailAppPassword}
+							notificationSmsNumber={notificationSmsNumber}
+							notificationSmsGateway={notificationSmsGateway}
+							notificationTelegramBotToken={notificationTelegramBotToken}
+							notificationTelegramChatId={notificationTelegramChatId}
 							setCachedStateField={setCachedStateField}
 						/>
 					)}

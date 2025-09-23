@@ -12,6 +12,7 @@ const BottomButton = React.forwardRef<HTMLButtonElement, BottomButtonProps>(
 		return (
 			<button
 				ref={ref}
+				type="button"
 				className="vscode-button flex items-center gap-1.5 p-0.75 rounded-sm text-vscode-foreground cursor-pointer hover:bg-vscode-list-hoverBackground"
 				aria-label={ariaLabel}
 				title={title}

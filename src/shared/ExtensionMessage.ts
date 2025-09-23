@@ -13,6 +13,8 @@ import type {
 	OrganizationAllowList,
 	ShareVisibility,
 	QueuedMessage,
+	EndlessSurfaceRecord,
+	EndlessSurfaceState,
 } from "@roo-code/types"
 
 import { GitCommit } from "../utils/git"
@@ -20,25 +22,35 @@ import { GitCommit } from "../utils/git"
 import { McpServer } from "./mcp"
 import { McpMarketplaceCatalog, McpDownloadResponse } from "./kilocode/mcp"
 import type { WorkplaceState } from "./golden/workplace"
+import type { OuterGateState } from "./golden/outerGate"
 import { Mode } from "./modes"
 import { ModelRecord, RouterModels } from "./api"
 import { ProfileDataResponsePayload, BalanceDataResponsePayload } from "./WebviewMessage" // kilocode_change
+import { BrowserInteractionStrategy, BrowserStreamFrame } from "./browser"
 import { ClineRulesToggles } from "./cline-rules" // kilocode_change
 import { KiloCodeWrapperProperties } from "./kilocode/wrapper" // kilocode_change
+import type { HubSnapshot } from "./hub"
 
 // Command interface for frontend/backend communication
 export interface Command {
 	name: string
-	source: "global" | "project" | "built-in"
+	source: "global" | "project" | "built-in" | "project workflow" | "global workflow"
 	filePath?: string
 	description?: string
 	argumentHint?: string
+	variant?: "document" | "workflow"
+	displayName?: string
+	fileName?: string
 }
 
 // Type for marketplace installed metadata
 export interface MarketplaceInstalledMetadata {
 	project: Record<string, { type: string }>
 	global: Record<string, { type: string }>
+}
+
+export interface EndlessSurfaceClientState extends EndlessSurfaceState {
+	activeSurface?: EndlessSurfaceRecord
 }
 
 // Indexing status types
@@ -105,6 +117,10 @@ export interface ExtensionMessage {
 		| "remoteBrowserEnabled"
 		| "ttsStart"
 		| "ttsStop"
+		| "realtimeSessionCredentials"
+		| "realtimeSessionError"
+		| "realtimeSessionEnded"
+		| "realtimeTranscriptDelta"
 		| "maxReadFileLine"
 		| "fileSearchResults"
 		| "toggleApiConfigPin"
@@ -141,6 +157,8 @@ export interface ExtensionMessage {
 		| "usageDataResponse" // kilocode_change
 		| "commands"
 		| "insertTextIntoTextarea"
+		| "browserStreamFrame"
+		| "openSurface"
 	text?: string
 	payload?: ProfileDataResponsePayload | BalanceDataResponsePayload // kilocode_change: Add payload for profile and balance data
 	action?:
@@ -151,6 +169,7 @@ export interface ExtensionMessage {
 		| "promptsButtonClicked"
 		| "profileButtonClicked" // kilocode_change
 		| "marketplaceButtonClicked"
+		| "hubButtonClicked"
 		| "cloudButtonClicked"
 		| "didBecomeVisible"
 		| "focusInput"
@@ -166,6 +185,7 @@ export interface ExtensionMessage {
 		path?: string
 	}>
 	clineMessage?: ClineMessage
+	surfaceId?: string
 	routerModels?: RouterModels
 	openAiModels?: string[]
 	ollamaModels?: string[]
@@ -212,6 +232,7 @@ export interface ExtensionMessage {
 	value?: any
 	hasContent?: boolean // For checkRulesDirectoryResult
 	items?: MarketplaceItem[]
+	frame?: BrowserStreamFrame
 	userInfo?: CloudUserInfo
 	organizationAllowList?: OrganizationAllowList
 	tab?: string
@@ -333,6 +354,12 @@ export type ExtensionState = Pick<
 	| "codebaseIndexModels"
 	| "profileThresholds"
 	| "systemNotificationsEnabled" // kilocode_change
+	| "notificationEmail"
+	| "notificationEmailAppPassword"
+	| "notificationSmsNumber"
+	| "notificationSmsGateway"
+	| "notificationTelegramChatId"
+	| "notificationTelegramBotToken"
 	| "includeDiagnosticMessages"
 	| "maxDiagnosticMessages"
 	| "remoteControlEnabled"
@@ -381,6 +408,8 @@ export type ExtensionState = Pick<
 	machineId?: string
 
 	renderContext: "sidebar" | "editor"
+	browserInteractionStrategy?: BrowserInteractionStrategy
+	browserStreamFrames?: Record<string, BrowserStreamFrame>
 	settingsImportedAt?: number
 	historyPreviewCollapsed?: boolean
 	showTaskTimeline?: boolean // kilocode_change
@@ -398,6 +427,8 @@ export type ExtensionState = Pick<
 	marketplaceInstalledMetadata?: { project: Record<string, any>; global: Record<string, any> }
 	profileThresholds: Record<string, number>
 	workplaceState?: WorkplaceState
+	endlessSurface?: EndlessSurfaceClientState
+	outerGateState?: OuterGateState
 	hasOpenedModeSelector: boolean
 	openRouterImageApiKey?: string
 	kiloCodeImageApiKey?: string
@@ -408,6 +439,7 @@ export type ExtensionState = Pick<
 	mcpServers?: McpServer[]
 	hasSystemPromptOverride?: boolean
 	mdmCompliant?: boolean
+	hubSnapshot?: HubSnapshot
 }
 
 export interface ClineSayTool {
@@ -508,6 +540,7 @@ export type BrowserActionResult = {
 	logs?: string
 	currentUrl?: string
 	currentMousePosition?: string
+	sessionId?: string
 }
 
 export interface ClineAskUseMcpServer {
@@ -521,6 +554,7 @@ export interface ClineAskUseMcpServer {
 
 export interface ClineApiReqInfo {
 	request?: string
+	systemPrompt?: string
 	tokensIn?: number
 	tokensOut?: number
 	cacheWrites?: number

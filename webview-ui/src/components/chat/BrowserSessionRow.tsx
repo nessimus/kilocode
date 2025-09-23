@@ -32,7 +32,7 @@ const BrowserSessionRow = memo((props: BrowserSessionRowProps) => {
 	const [maxActionHeight, setMaxActionHeight] = useState(0)
 	const [consoleLogsExpanded, setConsoleLogsExpanded] = useState(false)
 
-	const { browserViewportSize = "900x600" } = useExtensionState()
+	const { browserViewportSize = "900x600", browserStreamFrames = {} } = useExtensionState()
 	const [viewportWidth, viewportHeight] = browserViewportSize.split("x").map(Number)
 	const aspectRatio = ((viewportHeight / viewportWidth) * 100).toFixed(2)
 	const defaultMousePosition = `${Math.round(viewportWidth / 2)},${Math.round(viewportHeight / 2)}`
@@ -65,6 +65,7 @@ const BrowserSessionRow = memo((props: BrowserSessionRowProps) => {
 				screenshot?: string
 				mousePosition?: string
 				consoleLogs?: string
+				sessionId?: string
 				messages: ClineMessage[] // messages up to and including the result
 			}
 			nextAction?: {
@@ -95,6 +96,7 @@ const BrowserSessionRow = memo((props: BrowserSessionRowProps) => {
 						screenshot: resultData.screenshot,
 						mousePosition: resultData.currentMousePosition,
 						consoleLogs: resultData.logs,
+						sessionId: resultData.sessionId,
 						messages: [...currentStateMessages],
 					},
 					nextAction:
@@ -161,10 +163,17 @@ const BrowserSessionRow = memo((props: BrowserSessionRowProps) => {
 					mousePosition: page.currentState.mousePosition,
 					consoleLogs: page.currentState.consoleLogs,
 					screenshot: page.currentState.screenshot,
+					sessionId: page.currentState.sessionId,
 				}
 			}
 		}
-		return { url: undefined, mousePosition: undefined, consoleLogs: undefined, screenshot: undefined }
+		return {
+			url: undefined,
+			mousePosition: undefined,
+			consoleLogs: undefined,
+			screenshot: undefined,
+			sessionId: undefined,
+		}
 	}, [pages])
 
 	const currentPage = pages[currentPageIndex]
@@ -178,13 +187,27 @@ const BrowserSessionRow = memo((props: BrowserSessionRowProps) => {
 					currentPage?.currentState.mousePosition || latestState.mousePosition || defaultMousePosition,
 				consoleLogs: currentPage?.currentState.consoleLogs,
 				screenshot: currentPage?.currentState.screenshot || latestState.screenshot,
+				sessionId: currentPage?.currentState.sessionId || latestState.sessionId,
 			}
 		: {
 				url: currentPage?.currentState.url || initialUrl,
 				mousePosition: currentPage?.currentState.mousePosition || defaultMousePosition,
 				consoleLogs: currentPage?.currentState.consoleLogs,
 				screenshot: currentPage?.currentState.screenshot,
+				sessionId: currentPage?.currentState.sessionId,
 			}
+
+	const streamingFrame = useMemo(() => {
+		if (!displayState.sessionId) {
+			return undefined
+		}
+
+		return browserStreamFrames[displayState.sessionId]
+	}, [browserStreamFrames, displayState.sessionId])
+
+	const activeScreenshot = streamingFrame?.screenshot ?? displayState.screenshot
+	const activeUrl = streamingFrame?.url ?? displayState.url
+	const frameMousePosition = streamingFrame?.mousePosition
 
 	const [actionContent, { height: actionHeight }] = useSize(
 		<div>
@@ -230,9 +253,10 @@ const BrowserSessionRow = memo((props: BrowserSessionRowProps) => {
 	}, [isBrowsing, currentPage?.nextAction?.messages])
 
 	// Use latest click position while browsing, otherwise use display state
+	const baseMousePosition = frameMousePosition || displayState.mousePosition
 	const mousePosition = isBrowsing
-		? latestClickPosition || displayState.mousePosition
-		: displayState.mousePosition || defaultMousePosition
+		? latestClickPosition || baseMousePosition || defaultMousePosition
+		: baseMousePosition || defaultMousePosition
 
 	const [browserSessionRow, { height: rowHeight }] = useSize(
 		<div style={{ padding: "10px 6px 10px 15px", marginBottom: -10 }}>
@@ -269,9 +293,7 @@ const BrowserSessionRow = memo((props: BrowserSessionRowProps) => {
 						display: "flex",
 						alignItems: "center",
 						justifyContent: "center",
-						color: displayState.url
-							? "var(--vscode-input-foreground)"
-							: "var(--vscode-descriptionForeground)",
+						color: activeUrl ? "var(--vscode-input-foreground)" : "var(--vscode-descriptionForeground)",
 						fontSize: "12px",
 					}}>
 					<div
@@ -282,7 +304,7 @@ const BrowserSessionRow = memo((props: BrowserSessionRowProps) => {
 							width: "100%",
 							textAlign: "center",
 						}}>
-						{displayState.url || "http"}
+						{activeUrl || "http"}
 					</div>
 				</div>
 
@@ -295,9 +317,9 @@ const BrowserSessionRow = memo((props: BrowserSessionRowProps) => {
 						position: "relative",
 						backgroundColor: "var(--vscode-input-background)",
 					}}>
-					{displayState.screenshot ? (
+					{activeScreenshot ? (
 						<img
-							src={displayState.screenshot}
+							src={activeScreenshot}
 							alt={t("chat:browser.screenshot")}
 							style={{
 								position: "absolute",
@@ -311,7 +333,7 @@ const BrowserSessionRow = memo((props: BrowserSessionRowProps) => {
 							onClick={() =>
 								vscode.postMessage({
 									type: "openImage",
-									text: displayState.screenshot,
+									text: activeScreenshot,
 								})
 							}
 						/>
@@ -329,7 +351,7 @@ const BrowserSessionRow = memo((props: BrowserSessionRowProps) => {
 							/>
 						</div>
 					)}
-					{displayState.mousePosition && (
+					{mousePosition && (
 						<BrowserCursor
 							style={{
 								position: "absolute",

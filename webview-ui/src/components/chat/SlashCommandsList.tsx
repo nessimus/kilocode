@@ -91,8 +91,8 @@ export const SlashCommandsList: React.FC<SlashCommandsListProps> = ({ commands, 
 
 	// Group commands by source
 	const builtInCommands = commands.filter((cmd) => cmd.source === "built-in")
-	const globalCommands = commands.filter((cmd) => cmd.source === "global")
-	const projectCommands = commands.filter((cmd) => cmd.source === "project")
+	const globalCommands = commands.filter((cmd) => cmd.source === "global" || cmd.source === "global workflow")
+	const projectCommands = commands.filter((cmd) => cmd.source === "project" || cmd.source === "project workflow")
 
 	return (
 		<>

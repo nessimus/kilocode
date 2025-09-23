@@ -5,6 +5,12 @@ import type { RooCodeEvents } from "./events.js"
 import type { RooCodeSettings } from "./global-settings.js"
 import type { ProviderSettingsEntry, ProviderSettings } from "./provider-settings.js"
 import type { IpcMessage, IpcServerEvents } from "./ipc.js"
+import type {
+	EndlessSurfaceRecord,
+	EndlessSurfaceSummary,
+	EndlessSurfaceNode,
+	EndlessSurfaceEdge,
+} from "./endless-surface.js"
 
 export type RooCodeAPIEvents = RooCodeEvents
 
@@ -133,6 +139,54 @@ export interface RooCodeAPI extends EventEmitter<RooCodeAPIEvents> {
 	 * @throws Error if the profile does not exist
 	 */
 	setActiveProfile(name: string): Promise<string | undefined>
+	/**
+	 * Lists all known Endless Surface summaries.
+	 */
+	listSurfaces(): Promise<EndlessSurfaceSummary[]>
+	/**
+	 * Creates a new Endless Surface board.
+	 */
+	createSurface(title?: string): Promise<EndlessSurfaceRecord>
+	/**
+	 * Deletes an Endless Surface board by id.
+	 */
+	deleteSurface(surfaceId: string): Promise<boolean>
+	/**
+	 * Brings the specified Endless Surface board into focus in the UI.
+	 */
+	openSurface(surfaceId: string): Promise<void>
+	/**
+	 * Retrieves the full Endless Surface record for the given id.
+	 */
+	getSurfaceData(surfaceId: string): Promise<EndlessSurfaceRecord | undefined>
+	/**
+	 * Persists an Endless Surface record.
+	 */
+	saveSurfaceRecord(record: EndlessSurfaceRecord): Promise<void>
+	/**
+	 * Creates a node within an Endless Surface board.
+	 */
+	createSurfaceNode(surfaceId: string, node: EndlessSurfaceNode): Promise<EndlessSurfaceRecord>
+	/**
+	 * Updates a node within an Endless Surface board.
+	 */
+	updateSurfaceNode(surfaceId: string, node: EndlessSurfaceNode): Promise<EndlessSurfaceRecord>
+	/**
+	 * Deletes a node within an Endless Surface board.
+	 */
+	deleteSurfaceNode(surfaceId: string, nodeId: string): Promise<EndlessSurfaceRecord>
+	/**
+	 * Creates an edge within an Endless Surface board.
+	 */
+	createSurfaceEdge(surfaceId: string, edge: EndlessSurfaceEdge): Promise<EndlessSurfaceRecord>
+	/**
+	 * Updates an edge within an Endless Surface board.
+	 */
+	updateSurfaceEdge(surfaceId: string, edge: EndlessSurfaceEdge): Promise<EndlessSurfaceRecord>
+	/**
+	 * Deletes an edge within an Endless Surface board.
+	 */
+	deleteSurfaceEdge(surfaceId: string, edgeId: string): Promise<EndlessSurfaceRecord>
 }
 
 export interface RooCodeIpcServer extends EventEmitter<IpcServerEvents> {

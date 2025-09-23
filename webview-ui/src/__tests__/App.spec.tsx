@@ -61,7 +61,7 @@ vi.mock("@src/components/history/HistoryView", () => ({
 vi.mock("../components/kilocodeMcp/marketplace/McpMarketplaceView", () => ({
 	__esModule: true,
 	default: function McpMarketplaceView() {
-		return <div data-testid="mcp-marketplace-view">MCP Marketplace View</div>
+		return <div data-testid="mcp-marketplace-view">Tool Library View</div>
 	},
 }))
 

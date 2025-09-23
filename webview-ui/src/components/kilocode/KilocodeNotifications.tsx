@@ -22,7 +22,15 @@ interface Notification {
 
 const USE_MODEL_BUTTON_LABEL = "Use model"
 
-export const KilocodeNotifications: React.FC = () => {
+export interface KilocodeNotificationsProps {
+	onHasNotificationsChange?: (hasNotifications: boolean) => void
+	className?: string
+}
+
+export const KilocodeNotifications: React.FC<KilocodeNotificationsProps> = ({
+	onHasNotificationsChange,
+	className,
+}) => {
 	const { dismissedNotificationIds, currentApiConfigName, apiConfiguration } = useExtensionState()
 	const { provider, providerModels, isLoading, isError } = useProviderModels(apiConfiguration)
 	const [notifications, setNotifications] = useState<Notification[]>([])
@@ -30,6 +38,11 @@ export const KilocodeNotifications: React.FC = () => {
 		(notification) => !(dismissedNotificationIds || []).includes(notification.id),
 	)
 	const [currentIndex, setCurrentIndex] = useState(0)
+	const hasNotifications = filteredNotifications.length > 0
+
+	useEffect(() => {
+		onHasNotificationsChange?.(hasNotifications)
+	}, [hasNotifications, onHasNotificationsChange])
 
 	useEffect(() => {
 		const handleMessage = (event: MessageEvent) => {
@@ -113,7 +126,7 @@ export const KilocodeNotifications: React.FC = () => {
 		suggestModelId !== apiConfiguration[modelIdKey]
 
 	return (
-		<div className="kilocode-notifications flex flex-col mb-4">
+		<div className={`kilocode-notifications flex flex-col mb-4 ${className ?? ""}`}>
 			<div className="bg-vscode-editor-background border border-vscode-panel-border rounded-lg p-3 gap-3">
 				<div className="flex items-center justify-between">
 					<h3 className="text-sm font-medium text-vscode-foreground m-0">{currentNotification.title}</h3>

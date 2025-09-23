@@ -15,6 +15,9 @@ import {
 	type TelemetrySetting,
 	TelemetryEventName,
 	ghostServiceSettingsSchema, // kilocode_change
+	EndlessSurfaceRecord,
+	EndlessSurfaceNode,
+	EndlessSurfaceEdge,
 } from "@roo-code/types"
 import { CloudService } from "@roo-code/cloud"
 import { TelemetryService } from "@roo-code/telemetry"
@@ -47,6 +50,7 @@ import { searchWorkspaceFiles } from "../../services/search/file-search"
 import { fileExistsAtPath } from "../../utils/fs"
 import { playTts, setTtsEnabled, setTtsSpeed, stopTts } from "../../utils/tts"
 import { showSystemNotification } from "../../integrations/notifications" // kilocode_change
+import { dispatchFollowupNotification } from "../../integrations/notifications/NotificationBridge"
 import { singleCompletionHandler } from "../../utils/single-completion-handler" // kilocode_change
 import { searchCommits } from "../../utils/git"
 import { exportSettings, importSettingsWithFeedback } from "../config/importExport"
@@ -62,7 +66,30 @@ import { getCommand } from "../../utils/commands"
 import { toggleWorkflow, toggleRule, createRuleFile, deleteRuleFile } from "./kilorules"
 import { mermaidFixPrompt } from "../prompts/utilities/mermaid" // kilocode_change
 import { editMessageHandler, fetchKilocodeNotificationsHandler } from "../kilocode/webview/webviewMessageHandlerUtils" // kilocode_change
-import { CreateCompanyPayload, CreateEmployeePayload } from "../../shared/golden/workplace"
+import {
+	ArchiveDepartmentPayload,
+	ArchiveEmployeePayload,
+	ArchiveTeamPayload,
+	AssignEmployeeToTeamPayload,
+	AssignTeamToDepartmentPayload,
+	CreateActionItemPayload,
+	CreateActionStatusPayload,
+	CreateCompanyPayload,
+	CreateDepartmentPayload,
+	CreateEmployeePayload,
+	CreateTeamPayload,
+	DeleteActionItemPayload,
+	RemoveEmployeeFromTeamPayload,
+	RemoveTeamFromDepartmentPayload,
+	StartActionItemsPayload,
+	UpdateActionItemPayload,
+	UpdateCompanyPayload,
+	UpdateDepartmentPayload,
+	UpdateEmployeePayload,
+	UpdateTeamPayload,
+	UpsertActionStatusPayload,
+} from "../../shared/golden/workplace"
+import type { HubAgentBlueprint, HubSettingsUpdate } from "../../shared/hub"
 
 const ALLOWED_VSCODE_SETTINGS = new Set(["terminal.integrated.inheritEnv"])
 
@@ -70,6 +97,16 @@ import { MarketplaceManager, MarketplaceItemType } from "../../services/marketpl
 import { setPendingTodoList } from "../tools/updateTodoListTool"
 import { UsageTracker } from "../../utils/usage-tracker"
 import { seeNewChanges } from "../checkpoints/kilocode/seeNewChanges" // kilocode_change
+import { RealtimeSessionManager } from "../realtime/RealtimeSessionManager"
+
+const ENABLE_WEBVIEW_DEBUG_LOGS = false
+
+const debugWebviewLog = (...args: unknown[]) => {
+	if (!ENABLE_WEBVIEW_DEBUG_LOGS) {
+		return
+	}
+	console.debug("[webviewMessageHandler]", ...args)
+}
 
 export const webviewMessageHandler = async (
 	provider: ClineProvider,
@@ -83,6 +120,18 @@ export const webviewMessageHandler = async (
 
 	const getCurrentCwd = () => {
 		return provider.getCurrentTask()?.cwd || provider.cwd
+	}
+
+	const getRealtimeManager = () => {
+		const providerWithRealtime = provider as ClineProvider & {
+			__kilocodeRealtimeSessionManager?: RealtimeSessionManager
+		}
+
+		if (!providerWithRealtime.__kilocodeRealtimeSessionManager) {
+			providerWithRealtime.__kilocodeRealtimeSessionManager = new RealtimeSessionManager()
+		}
+
+		return providerWithRealtime.__kilocodeRealtimeSessionManager
 	}
 	/**
 	 * Shared utility to find message indices based on timestamp
@@ -386,6 +435,10 @@ export const webviewMessageHandler = async (
 		}
 	}
 
+	console.log("[webviewMessageHandler] received message", message.type, {
+		workplaceCompanyId: (message as any)?.workplaceCompanyId,
+		workplaceEmployeeId: (message as any)?.workplaceEmployeeId,
+	})
 	switch (message.type) {
 		case "createCompany": {
 			const payload = message.workplaceCompanyPayload as CreateCompanyPayload | undefined
@@ -407,7 +460,68 @@ export const webviewMessageHandler = async (
 			}
 			break
 		}
+		case "createDepartment": {
+			const payload = message.workplaceDepartmentPayload as CreateDepartmentPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing department payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.createDepartment(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to create department: ${messageText}`)
+			}
+			break
+		}
+		case "updateDepartment": {
+			const payload = message.workplaceDepartmentUpdate as UpdateDepartmentPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing department update payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.updateDepartment(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to update department: ${messageText}`)
+			}
+			break
+		}
+		case "updateCompany": {
+			const payload = message.workplaceCompanyUpdate as UpdateCompanyPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing company update payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.updateCompany(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to update company: ${messageText}`)
+			}
+			break
+		}
 		case "selectCompany": {
+			console.log("[webviewMessageHandler] handling selectCompany", message.workplaceCompanyId)
 			const companyId = message.workplaceCompanyId
 			const service = provider.getWorkplaceService()
 			if (!service) {
@@ -416,6 +530,31 @@ export const webviewMessageHandler = async (
 			}
 			await service.setActiveCompany(companyId)
 			await provider.postStateToWebview()
+			break
+		}
+		case "setActiveEmployee": {
+			console.log("[webviewMessageHandler] handling setActiveEmployee", {
+				companyId: message.workplaceCompanyId,
+				employeeId: message.workplaceEmployeeId,
+			})
+			const companyId = message.workplaceCompanyId
+			const employeeId = message.workplaceEmployeeId
+			if (!companyId || !employeeId) {
+				console.warn("[webviewMessageHandler] Missing company or employee id for setActiveEmployee")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.setActiveEmployee(companyId, employeeId)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to activate employee: ${messageText}`)
+			}
 			break
 		}
 		case "createEmployee": {
@@ -436,6 +575,448 @@ export const webviewMessageHandler = async (
 				const messageText = error instanceof Error ? error.message : String(error)
 				await vscode.window.showErrorMessage(`Unable to add employee: ${messageText}`)
 			}
+			break
+		}
+		case "updateEmployee": {
+			const payload = message.workplaceEmployeeUpdate as UpdateEmployeePayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing employee update payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.updateEmployee(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to update employee: ${messageText}`)
+			}
+			break
+		}
+		case "archiveEmployee": {
+			const payload = message.workplaceEmployeeArchive as ArchiveEmployeePayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing employee archive payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.archiveEmployee(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to archive employee: ${messageText}`)
+			}
+			break
+		}
+		case "createTeam": {
+			const payload = message.workplaceTeamPayload as CreateTeamPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing team payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.createTeam(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to create team: ${messageText}`)
+			}
+			break
+		}
+		case "updateTeam": {
+			const payload = message.workplaceTeamUpdate as UpdateTeamPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing team update payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.updateTeam(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to update team: ${messageText}`)
+			}
+			break
+		}
+		case "archiveTeam": {
+			const payload = message.workplaceTeamArchive as ArchiveTeamPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing team archive payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.archiveTeam(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to archive team: ${messageText}`)
+			}
+			break
+		}
+		case "assignTeamToDepartment": {
+			const payload = message.workplaceTeamAssignment as AssignTeamToDepartmentPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing team assignment payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.assignTeamToDepartment(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to update team department: ${messageText}`)
+			}
+			break
+		}
+		case "removeTeamFromDepartment": {
+			const payload = message.workplaceTeamDepartmentRemoval as RemoveTeamFromDepartmentPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing team removal payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.removeTeamFromDepartment(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to remove team from department: ${messageText}`)
+			}
+			break
+		}
+		case "assignEmployeeToTeam": {
+			const payload = message.workplaceTeamEmployeeAssignment as AssignEmployeeToTeamPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing team employee assignment payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.assignEmployeeToTeam(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to assign employee to team: ${messageText}`)
+			}
+			break
+		}
+		case "removeEmployeeFromTeam": {
+			const payload = message.workplaceTeamEmployeeRemoval as RemoveEmployeeFromTeamPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing team employee removal payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.removeEmployeeFromTeam(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to remove employee from team: ${messageText}`)
+			}
+			break
+		}
+		case "archiveDepartment": {
+			const payload = message.workplaceDepartmentArchive as ArchiveDepartmentPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing department archive payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.archiveDepartment(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to archive department: ${messageText}`)
+			}
+			break
+		}
+		case "createActionItem": {
+			const payload = message.workplaceActionItemPayload as CreateActionItemPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing action item payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.createActionItem(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to create action item: ${messageText}`)
+			}
+			break
+		}
+		case "updateActionItem": {
+			const payload = message.workplaceActionItemUpdate as UpdateActionItemPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing action item update payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.updateActionItem(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to update action item: ${messageText}`)
+			}
+			break
+		}
+		case "deleteActionItem": {
+			const payload = message.workplaceActionItemDelete as DeleteActionItemPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing action item delete payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.deleteActionItem(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to delete action item: ${messageText}`)
+			}
+			break
+		}
+		case "startActionItems": {
+			const payload = message.workplaceActionStart as StartActionItemsPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing action start payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.startActionItems(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to start action items: ${messageText}`)
+			}
+			break
+		}
+		case "createActionStatus": {
+			const payload = message.workplaceActionStatusPayload as CreateActionStatusPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing action status payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.createActionStatus(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to create action status: ${messageText}`)
+			}
+			break
+		}
+		case "updateActionStatus": {
+			const payload = message.workplaceActionStatusUpdate as UpsertActionStatusPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing action status update payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.upsertActionStatus(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to update action status: ${messageText}`)
+			}
+			break
+		}
+		case "endlessSurfaceCreate": {
+			const surfaceService = provider.getEndlessSurfaceService()
+			if (!surfaceService) {
+				break
+			}
+			await surfaceService.createSurface(message.surfaceTitle)
+			break
+		}
+		case "endlessSurfaceDelete": {
+			const surfaceService = provider.getEndlessSurfaceService()
+			if (!surfaceService || !message.surfaceId) {
+				break
+			}
+			await surfaceService.deleteSurface(message.surfaceId)
+			break
+		}
+		case "endlessSurfaceUpdateMeta": {
+			const surfaceService = provider.getEndlessSurfaceService()
+			const surfaceId = message.surfaceId
+			if (!surfaceService || !surfaceId) {
+				break
+			}
+			const record = await surfaceService.getSurface(surfaceId)
+			if (!record) {
+				break
+			}
+			const updates = { ...(message.surfaceMetaUpdates ?? {}) }
+			if (message.surfaceAgentAccess) {
+				updates.agentAccess = message.surfaceAgentAccess
+			}
+			const filteredUpdates = Object.fromEntries(
+				Object.entries(updates).filter(([, value]) => value !== undefined),
+			)
+			const nextRecord: EndlessSurfaceRecord = {
+				...record,
+				meta: {
+					...record.meta,
+					...filteredUpdates,
+					updatedAt: Date.now(),
+				},
+			}
+			await surfaceService.updateSurface(nextRecord)
+			break
+		}
+		case "endlessSurfaceSetActive": {
+			const surfaceService = provider.getEndlessSurfaceService()
+			if (!surfaceService) {
+				break
+			}
+			await surfaceService.setActiveSurface(message.surfaceId)
+			break
+		}
+		case "endlessSurfaceSaveRecord": {
+			const surfaceService = provider.getEndlessSurfaceService()
+			const record = message.surfaceRecord
+			if (!surfaceService || !record) {
+				break
+			}
+			const nextRecord: EndlessSurfaceRecord = {
+				...record,
+				meta: {
+					...record.meta,
+					updatedAt: Date.now(),
+				},
+			}
+			await surfaceService.updateSurface(nextRecord)
+			break
+		}
+		case "endlessSurfaceCreateNode": {
+			const surfaceService = provider.getEndlessSurfaceService()
+			if (!surfaceService || !message.surfaceId || !message.surfaceNode) {
+				break
+			}
+			await surfaceService.createNode(message.surfaceId, message.surfaceNode)
+			break
+		}
+		case "endlessSurfaceUpdateNode": {
+			const surfaceService = provider.getEndlessSurfaceService()
+			if (!surfaceService || !message.surfaceId || !message.surfaceNode) {
+				break
+			}
+			await surfaceService.updateNode(message.surfaceId, message.surfaceNode)
+			break
+		}
+		case "endlessSurfaceDeleteNode": {
+			const surfaceService = provider.getEndlessSurfaceService()
+			if (!surfaceService || !message.surfaceId || !message.surfaceNodeId) {
+				break
+			}
+			await surfaceService.deleteNode(message.surfaceId, message.surfaceNodeId)
+			break
+		}
+		case "endlessSurfaceCreateEdge": {
+			const surfaceService = provider.getEndlessSurfaceService()
+			if (!surfaceService || !message.surfaceId || !message.surfaceEdge) {
+				break
+			}
+			await surfaceService.createEdge(message.surfaceId, message.surfaceEdge)
+			break
+		}
+		case "endlessSurfaceUpdateEdge": {
+			const surfaceService = provider.getEndlessSurfaceService()
+			if (!surfaceService || !message.surfaceId || !message.surfaceEdge) {
+				break
+			}
+			await surfaceService.updateEdge(message.surfaceId, message.surfaceEdge)
+			break
+		}
+		case "endlessSurfaceDeleteEdge": {
+			const surfaceService = provider.getEndlessSurfaceService()
+			if (!surfaceService || !message.surfaceId || !message.surfaceEdgeId) {
+				break
+			}
+			await surfaceService.deleteEdge(message.surfaceId, message.surfaceEdgeId)
+			break
+		}
+		case "endlessSurfaceRequestSnapshot": {
+			console.debug("[webviewMessageHandler] endlessSurfaceRequestSnapshot not yet implemented", {
+				surfaceId: message.surfaceId,
+			})
 			break
 		}
 		case "webviewDidLaunch":
@@ -1249,6 +1830,95 @@ export const webviewMessageHandler = async (
 			await updateGlobalState("systemNotificationsEnabled", systemNotificationsEnabled)
 			await provider.postStateToWebview()
 			break
+		case "notificationEmail":
+			await provider.contextProxy.setValue("notificationEmail", message.text ?? "")
+			await provider.postStateToWebview()
+			break
+		case "notificationEmailAppPassword":
+			await provider.contextProxy.setValue("notificationEmailAppPassword", message.text ?? "")
+			break
+		case "notificationSmsNumber":
+			await provider.contextProxy.setValue("notificationSmsNumber", message.text ?? "")
+			await provider.postStateToWebview()
+			break
+		case "notificationSmsGateway":
+			await provider.contextProxy.setValue("notificationSmsGateway", message.text ?? "")
+			await provider.postStateToWebview()
+			break
+		case "notificationTelegramBotToken":
+			await provider.contextProxy.setValue("notificationTelegramBotToken", message.text ?? "")
+			break
+		case "notificationTelegramChatId":
+			await provider.contextProxy.setValue("notificationTelegramChatId", message.text ?? "")
+			await provider.postStateToWebview()
+			break
+		case "testOutboundNotifications": {
+			const values = message.values ?? {}
+			const email =
+				typeof values.notificationEmail === "string"
+					? values.notificationEmail
+					: (provider.contextProxy.getValue("notificationEmail") as string | undefined)
+			const emailPassword =
+				typeof values.notificationEmailAppPassword === "string"
+					? values.notificationEmailAppPassword
+					: (provider.contextProxy.getValue("notificationEmailAppPassword") as string | undefined)
+			const smsNumber =
+				typeof values.notificationSmsNumber === "string"
+					? values.notificationSmsNumber
+					: (provider.contextProxy.getValue("notificationSmsNumber") as string | undefined)
+			const smsGateway =
+				typeof values.notificationSmsGateway === "string"
+					? values.notificationSmsGateway
+					: (provider.contextProxy.getValue("notificationSmsGateway") as string | undefined)
+
+			const telegramBotToken =
+				typeof values.notificationTelegramBotToken === "string"
+					? values.notificationTelegramBotToken
+					: (provider.contextProxy.getValue("notificationTelegramBotToken") as string | undefined)
+			const telegramChatId =
+				typeof values.notificationTelegramChatId === "string"
+					? values.notificationTelegramChatId
+					: (provider.contextProxy.getValue("notificationTelegramChatId") as string | undefined)
+
+			const dispatchResult = await dispatchFollowupNotification(
+				{ email, emailPassword, smsNumber, smsGateway, telegramBotToken, telegramChatId },
+				{
+					personaName: "Test AI employee",
+					companyName: undefined,
+					question: "This is a test alert from Golden Workplace.",
+					suggestions: ["Got it", "I'll respond soon"],
+				},
+			)
+
+			const { emailSent, smsSent, telegramSent, errors } = dispatchResult
+			if (!emailSent && !smsSent && !telegramSent) {
+				await vscode.window.showErrorMessage(
+					`Test notification failed: ${errors.join("; ") || "unknown error"}`,
+				)
+				break
+			}
+
+			const details: string[] = []
+			if (emailSent) {
+				details.push("email delivered")
+			} else {
+				details.push("email skipped")
+			}
+			if (smsSent) {
+				details.push("SMS delivered")
+			} else {
+				details.push("SMS skipped")
+			}
+			if (telegramSent) {
+				details.push("Telegram delivered")
+			} else if (telegramBotToken && telegramChatId) {
+				details.push("Telegram skipped")
+			}
+
+			const suffix = errors.length ? ` (warnings: ${errors.join("; ")})` : ""
+			await vscode.window.showInformationMessage(`Test notification sent: ${details.join(", ")}${suffix}`)
+			break
+		}
 		case "openInBrowser":
 			if (message.url) {
 				vscode.env.openExternal(vscode.Uri.parse(message.url))
@@ -1317,6 +1987,55 @@ export const webviewMessageHandler = async (
 		case "stopTts":
 			stopTts()
 			break
+		case "startRealtimeSession": {
+			const realtimeManager = getRealtimeManager()
+			const requestValues = (message.values ?? {}) as Record<string, unknown>
+			provider.log(`[*Realtime] startRealtimeSession request ${JSON.stringify(requestValues)}`)
+
+			try {
+				const session = await realtimeManager.startSession({
+					modeId: typeof requestValues.modeSlug === "string" ? requestValues.modeSlug : undefined,
+					systemPrompt: undefined,
+					enableScreenShare: Boolean(requestValues.enableScreenShare),
+				})
+
+				provider.log(
+					`[*Realtime] session ${session.sessionId} issued (model=${session.model}, expires=${new Date(session.expiresAt).toISOString()})`,
+				)
+				provider.log("[*Realtime] placeholder session used; realtime transport not yet connected")
+
+				await provider.postMessageToWebview({
+					type: "realtimeSessionCredentials",
+					values: session,
+				})
+				await provider.postMessageToWebview({
+					type: "realtimeSessionError",
+					text: "Realtime streaming is still being wired up. Check the output logs for details.",
+				})
+			} catch (error) {
+				const errorMessage = error instanceof Error ? error.message : String(error)
+				provider.log(`[*Realtime] startRealtimeSession failed: ${errorMessage}`)
+
+				await provider.postMessageToWebview({
+					type: "realtimeSessionError",
+					text: errorMessage,
+				})
+			}
+
+			break
+		}
+		case "stopRealtimeSession": {
+			const realtimeManager = getRealtimeManager()
+			const active = realtimeManager.getActiveSession()
+			provider.log(
+				`[*Realtime] stopRealtimeSession request${
+					active ? ` (session=${active.sessionId})` : " (no active session)"
+				}`,
+			)
+			await realtimeManager.stopSession()
+			await provider.postMessageToWebview({ type: "realtimeSessionEnded" })
+			break
+		}
 		case "diffEnabled":
 			const diffEnabled = message.bool ?? true
 			await updateGlobalState("diffEnabled", diffEnabled)
@@ -1330,6 +2049,10 @@ export const webviewMessageHandler = async (
 		case "browserViewportSize":
 			const browserViewportSize = message.text ?? "900x600"
 			await updateGlobalState("browserViewportSize", browserViewportSize)
+			await provider.postStateToWebview()
+			break
+		case "browserInteractionStrategy":
+			await updateGlobalState("browserInteractionStrategy", message.text ?? "legacy")
 			await provider.postStateToWebview()
 			break
 		case "remoteBrowserHost":
@@ -1729,6 +2452,78 @@ export const webviewMessageHandler = async (
 			await provider.postStateToWebview()
 			break
 		// kilocode_change end - terminalCommandApiConfigId
+		case "outerGateSend": {
+			const payloadText = message.text ?? ""
+			await provider.handleOuterGateMessage(payloadText, message.clientMessageId)
+			break
+		}
+		case "outerGateConnectNotion": {
+			await provider.importNotionIntegration({
+				...(message.notionToken ? { token: message.notionToken } : {}),
+				...(message.notionDatabaseId ? { databaseId: message.notionDatabaseId } : {}),
+				...(message.notionDataSourceId ? { dataSourceId: message.notionDataSourceId } : {}),
+				...(message.notionPageSize ? { pageSize: message.notionPageSize } : {}),
+				...(message.notionMaxPages ? { maxPages: message.notionMaxPages } : {}),
+			})
+			break
+		}
+		case "outerGateSyncNotion": {
+			await provider.importNotionIntegration({
+				...(message.notionDatabaseId ? { databaseId: message.notionDatabaseId } : {}),
+				...(message.notionDataSourceId ? { dataSourceId: message.notionDataSourceId } : {}),
+				...(message.notionPageSize ? { pageSize: message.notionPageSize } : {}),
+				...(message.notionMaxPages ? { maxPages: message.notionMaxPages } : {}),
+			})
+			break
+		}
+		case "outerGateConnectMiro": {
+			await provider.importMiroIntegration({
+				...(message.miroToken ? { token: message.miroToken } : {}),
+				...(message.miroBoardId ? { boardId: message.miroBoardId } : {}),
+				...(message.miroItemTypes ? { itemTypes: message.miroItemTypes } : {}),
+				...(message.miroMaxItems ? { maxItems: message.miroMaxItems } : {}),
+			})
+			break
+		}
+		case "outerGateSyncMiro": {
+			await provider.importMiroIntegration({
+				...(message.miroBoardId ? { boardId: message.miroBoardId } : {}),
+				...(message.miroItemTypes ? { itemTypes: message.miroItemTypes } : {}),
+				...(message.miroMaxItems ? { maxItems: message.miroMaxItems } : {}),
+			})
+			break
+		}
+		case "outerGateImportZip": {
+			const fileUris = await vscode.window.showOpenDialog({
+				canSelectMany: false,
+				openLabel: "Import",
+				filters: {
+					Archives: ["zip"],
+				},
+			})
+			if (!fileUris || fileUris.length === 0) {
+				break
+			}
+			await provider.importZipIntegration(fileUris[0].fsPath)
+			break
+		}
+		case "outerGateSessionsNew": {
+			await provider.createCloverSession({
+				companyId: message.cloverSessionCompanyId,
+				companyName: message.cloverSessionCompanyName,
+			})
+			break
+		}
+		case "outerGateSessionsActivate": {
+			if (message.cloverSessionId) {
+				await provider.activateCloverSession(message.cloverSessionId)
+			}
+			break
+		}
+		case "outerGateSessionsLoadMore": {
+			await provider.loadMoreCloverSessions(message.cloverSessionCursor, message.cloverSessionLimit)
+			break
+		}
 		// kilocode_change start - ghostServiceSettings
 		case "ghostServiceSettings":
 			if (!message.values) {
@@ -3208,24 +4003,62 @@ export const webviewMessageHandler = async (
 		case "requestCommands": {
 			try {
 				const { getCommands } = await import("../../services/command/commands")
-				const commands = await getCommands(getCurrentCwd())
+				const cwd = getCurrentCwd() || ""
+				const commands = await getCommands(cwd)
 
-				// Convert to the format expected by the frontend
-				const commandList = commands.map((command) => ({
+				let workflowCommandList: Array<{
+					name: string
+					displayName: string
+					source: "project workflow" | "global workflow"
+					filePath: string
+					variant: "workflow"
+				}> = []
+
+				try {
+					if (provider.context) {
+						const [{ refreshWorkflowToggles }, sopUtils] = await Promise.all([
+							import("../context/instructions/workflows"),
+							import("../slash-commands/sopWorkflowUtils"),
+						])
+						const workflowState = await refreshWorkflowToggles(provider.context, cwd)
+						const entries = sopUtils.collectEnabledWorkflowSops(
+							workflowState.localWorkflowToggles,
+							workflowState.globalWorkflowToggles,
+						)
+						workflowCommandList = entries.map((entry) => ({
+							name: sopUtils.getPrimaryWorkflowSlug(entry),
+							displayName: entry.fileName,
+							source: sopUtils.formatWorkflowSourceLabel(entry.source),
+							filePath: entry.fullPath,
+							variant: "workflow" as const,
+						}))
+					}
+				} catch (workflowError) {
+					provider.log(
+						`Error fetching workflow SOPs: ${JSON.stringify(
+							workflowError,
+							Object.getOwnPropertyNames(workflowError ?? {}),
+							2,
+						)}`,
+					)
+				}
+
+				const documentCommandList = commands.map((command) => ({
 					name: command.name,
+					displayName: command.name,
 					source: command.source,
 					filePath: command.filePath,
 					description: command.description,
 					argumentHint: command.argumentHint,
+					variant: "document" as const,
 				}))
 
 				await provider.postMessageToWebview({
 					type: "commands",
-					commands: commandList,
+					commands: [...documentCommandList, ...workflowCommandList],
 				})
 			} catch (error) {
 				provider.log(`Error fetching commands: ${JSON.stringify(error, Object.getOwnPropertyNames(error), 2)}`)
-				// Send empty array on error
 				await provider.postMessageToWebview({
 					type: "commands",
 					commands: [],
@@ -3374,17 +4207,59 @@ export const webviewMessageHandler = async (
 
 				// Refresh commands list
 				const { getCommands } = await import("../../services/command/commands")
-				const commands = await getCommands(getCurrentCwd() || "")
-				const commandList = commands.map((command) => ({
+				const cwd = getCurrentCwd() || ""
+				const commands = await getCommands(cwd)
+
+				let workflowCommandList: Array<{
+					name: string
+					displayName: string
+					source: "project workflow" | "global workflow"
+					filePath: string
+					variant: "workflow"
+				}> = []
+
+				try {
+					if (provider.context) {
+						const [{ refreshWorkflowToggles }, sopUtils] = await Promise.all([
+							import("../context/instructions/workflows"),
+							import("../slash-commands/sopWorkflowUtils"),
+						])
+						const workflowState = await refreshWorkflowToggles(provider.context, cwd)
+						const entries = sopUtils.collectEnabledWorkflowSops(
+							workflowState.localWorkflowToggles,
+							workflowState.globalWorkflowToggles,
+						)
+						workflowCommandList = entries.map((entry) => ({
+							name: sopUtils.getPrimaryWorkflowSlug(entry),
+							displayName: entry.fileName,
+							source: sopUtils.formatWorkflowSourceLabel(entry.source),
+							filePath: entry.fullPath,
+							variant: "workflow" as const,
+						}))
+					}
+				} catch (workflowError) {
+					provider.log(
+						`Error refreshing workflow SOPs: ${JSON.stringify(
+							workflowError,
+							Object.getOwnPropertyNames(workflowError ?? {}),
+							2,
+						)}`,
+					)
+				}
+
+				const documentCommandList = commands.map((command) => ({
 					name: command.name,
+					displayName: command.name,
 					source: command.source,
 					filePath: command.filePath,
 					description: command.description,
 					argumentHint: command.argumentHint,
+					variant: "document" as const,
 				}))
+
 				await provider.postMessageToWebview({
 					type: "commands",
-					commands: commandList,
+					commands: [...documentCommandList, ...workflowCommandList],
 				})
 			} catch (error) {
 				provider.log(`Error creating command: ${JSON.stringify(error, Object.getOwnPropertyNames(error), 2)}`)
@@ -3407,6 +4282,66 @@ export const webviewMessageHandler = async (
 		case "showMdmAuthRequiredNotification": {
 			// Show notification that organization requires authentication
 			vscode.window.showWarningMessage(t("common:mdm.info.organization_requires_auth"))
+			break
+		}
+
+		case "hubCreateRoom": {
+			const options = {
+				title: message.text,
+				autonomous: message.hubAutonomous,
+				participants: message.hubParticipants as HubAgentBlueprint[] | undefined,
+			}
+
+			provider.getConversationHub().createRoom(options)
+			break
+		}
+		case "hubAddAgent": {
+			const roomId = message.hubRoomId
+			const blueprint = message.hubAgent as HubAgentBlueprint | undefined
+			if (roomId && blueprint) {
+				void provider.getConversationHub().addAgent(roomId, blueprint)
+			}
+			break
+		}
+		case "hubSendMessage": {
+			const roomId = message.hubRoomId
+			if (roomId && typeof message.text === "string") {
+				provider.getConversationHub().sendUserMessage(roomId, message.text)
+			}
+			break
+		}
+		case "hubSetActiveRoom": {
+			if (message.hubRoomId) {
+				provider.getConversationHub().setActiveRoom(message.hubRoomId)
+			}
+			break
+		}
+		case "hubRemoveParticipant": {
+			const roomId = message.hubRoomId
+			const participantId = message.participantId
+			if (roomId && participantId) {
+				provider.getConversationHub().removeParticipant(roomId, participantId)
+			}
+			break
+		}
+		case "hubUpdateSettings": {
+			const roomId = message.hubRoomId
+			const settings = message.hubSettings as HubSettingsUpdate | undefined
+			if (roomId && settings) {
+				provider.getConversationHub().updateSettings(roomId, settings)
+			}
+			break
+		}
+		case "hubStop": {
+			if (message.hubRoomId) {
+				provider.getConversationHub().stopRoom(message.hubRoomId)
+			}
+			break
+		}
+		case "hubTriggerAgent": {
+			if (message.hubRoomId && message.agentId) {
+				provider.getConversationHub().triggerAgent(message.hubRoomId, message.agentId)
+			}
 			break
 		}
 

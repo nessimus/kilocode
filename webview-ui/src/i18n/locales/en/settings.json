@@ -550,6 +550,26 @@
 			"label": "Enable text-to-speech",
 			"description": "When enabled, Kilo Code will read aloud its responses using text-to-speech.",
 			"speedLabel": "Speed"
+		},
+		"outbound": {
+			"title": "Outbound alerts",
+			"description": "Send AI employee follow-up questions to your phone and inbox so you can respond away from the workspace.",
+			"emailLabel": "Gmail address",
+			"emailPlaceholder": "[email protected]",
+			"emailHelp": "Use the Gmail account that should send and receive notifications.",
+			"appPasswordLabel": "Gmail app password",
+			"appPasswordHelp": "Create a 16-character app password at myaccount.google.com > Security > App passwords and paste it here.",
+			"smsLabel": "Mobile number",
+			"smsPlaceholder": "5551234567",
+			"gatewayLabel": "SMS gateway domain",
+			"gatewayPlaceholder": "tmomail.net (Mint/T-Mobile)",
+			"smsHelp": "Texts are delivered through your carrier's email-to-SMS gateway. Confirm the domain with your carrier if messages stop arriving.",
+			"testButton": "Send test notification",
+			"testHint": "Add Gmail credentials for email/SMS or provide Telegram bot details to enable the test.",
+			"telegramLabel": "Telegram alerts",
+			"telegramDescription": "Create a bot with @BotFather, paste the bot token here, then send /start from the chat you want to use and paste the chat ID.",
+			"telegramTokenPlaceholder": "Bot token (e.g., 123456:ABCDEF...)",
+			"telegramChatPlaceholder": "Chat ID (e.g., 123456789)"
 		}
 	},
 	"contextManagement": {

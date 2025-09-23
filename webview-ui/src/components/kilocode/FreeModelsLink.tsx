@@ -36,7 +36,7 @@ export const OpenRouterMarkupInfoView = ({
 	)
 }
 
-export const FreeModelsInfoView = ({ origin, modelId }: { origin: "chat" | "settings"; modelId?: string }) => {
+export const FreeModelsInfoView = ({ origin, modelId }: { origin: "lobby" | "settings"; modelId?: string }) => {
 	const { t } = useAppTranslation()
 	return (
 		<WarningBox>
@@ -52,7 +52,7 @@ export const FreeModelsLink = ({
 	modelId,
 }: {
 	className: string
-	origin: "chat" | "settings" | "invalid_model"
+	origin: "lobby" | "settings" | "invalid_model"
 	modelId?: string
 }) => {
 	const { t } = useAppTranslation()

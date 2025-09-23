@@ -10,11 +10,37 @@ import {
 	type QueuedMessage,
 	marketplaceItemSchema,
 	CommitRange, // kilocode_change
+	type EndlessSurfaceAgentAccess,
+	type EndlessSurfaceEdge,
+	type EndlessSurfaceNode,
+	type EndlessSurfaceRecord,
 } from "@roo-code/types"
 
 import { Mode } from "./modes"
-import type { CreateCompanyPayload, CreateEmployeePayload } from "./golden/workplace"
-
+import type { HubAgentBlueprint, HubSettingsUpdate } from "./hub"
+import type {
+	ArchiveDepartmentPayload,
+	ArchiveEmployeePayload,
+	ArchiveTeamPayload,
+	AssignEmployeeToTeamPayload,
+	AssignTeamToDepartmentPayload,
+	CreateActionItemPayload,
+	CreateActionStatusPayload,
+	CreateCompanyPayload,
+	CreateDepartmentPayload,
+	CreateEmployeePayload,
+	CreateTeamPayload,
+	DeleteActionItemPayload,
+	RemoveEmployeeFromTeamPayload,
+	RemoveTeamFromDepartmentPayload,
+	UpdateActionItemPayload,
+	UpdateCompanyPayload,
+	UpdateDepartmentPayload,
+	UpdateEmployeePayload,
+	UpdateTeamPayload,
+	UpsertActionStatusPayload,
+	StartActionItemsPayload,
+} from "./golden/workplace"
 export type ClineAskResponse =
 	| "yesButtonClicked"
 	| "noButtonClicked"
@@ -105,6 +131,8 @@ export interface WebviewMessage {
 		| "playSound"
 		| "playTts"
 		| "stopTts"
+		| "startRealtimeSession"
+		| "stopRealtimeSession"
 		| "soundEnabled"
 		| "ttsEnabled"
 		| "ttsSpeed"
@@ -114,14 +142,35 @@ export interface WebviewMessage {
 		| "browserViewportSize"
 		| "screenshotQuality"
 		| "remoteBrowserHost"
+		| "browserInteractionStrategy"
 		| "openMcpSettings"
 		| "openProjectMcpSettings"
 		| "restartMcpServer"
 		| "refreshAllMcpServers"
 		| "toggleToolAlwaysAllow"
 		| "createCompany"
+		| "createDepartment"
+		| "updateDepartment"
+		| "updateCompany"
 		| "createEmployee"
+		| "updateEmployee"
+		| "archiveEmployee"
+		| "createTeam"
+		| "updateTeam"
+		| "archiveTeam"
+		| "assignTeamToDepartment"
+		| "removeTeamFromDepartment"
+		| "assignEmployeeToTeam"
+		| "removeEmployeeFromTeam"
+		| "archiveDepartment"
 		| "selectCompany"
+		| "setActiveEmployee"
+		| "createActionItem"
+		| "updateActionItem"
+		| "deleteActionItem"
+		| "startActionItems"
+		| "createActionStatus"
+		| "updateActionStatus"
 		| "toggleToolEnabledForPrompt"
 		| "toggleMcpServer"
 		| "updateMcpTimeout"
@@ -163,6 +212,15 @@ export interface WebviewMessage {
 		| "enhancementApiConfigId"
 		| "commitMessageApiConfigId" // kilocode_change
 		| "terminalCommandApiConfigId" // kilocode_change
+		| "outerGateSend"
+		| "outerGateConnectNotion"
+		| "outerGateSyncNotion"
+		| "outerGateConnectMiro"
+		| "outerGateSyncMiro"
+		| "outerGateImportZip"
+		| "outerGateSessionsNew"
+		| "outerGateSessionsActivate"
+		| "outerGateSessionsLoadMore"
 		| "ghostServiceSettings" // kilocode_change
 		| "includeTaskHistoryInEnhance"
 		| "updateExperimental"
@@ -275,12 +333,60 @@ export interface WebviewMessage {
 		| "openRouterImageApiKey"
 		| "kiloCodeImageApiKey"
 		| "openRouterImageGenerationSelectedModel"
+		| "notificationEmail"
+		| "notificationEmailAppPassword"
+		| "notificationSmsNumber"
+		| "notificationSmsGateway"
+		| "notificationTelegramChatId"
+		| "notificationTelegramBotToken"
+		| "testOutboundNotifications"
 		| "queueMessage"
 		| "removeQueuedMessage"
 		| "editQueuedMessage"
+		| "action"
+		| "hubCreateRoom"
+		| "hubAddAgent"
+		| "hubSendMessage"
+		| "hubSetActiveRoom"
+		| "hubRemoveParticipant"
+		| "hubUpdateSettings"
+		| "hubStop"
+		| "hubTriggerAgent"
+		| "endlessSurfaceCreate"
+		| "endlessSurfaceDelete"
+		| "endlessSurfaceUpdateMeta"
+		| "endlessSurfaceSetActive"
+		| "endlessSurfaceSaveRecord"
+		| "endlessSurfaceCreateNode"
+		| "endlessSurfaceUpdateNode"
+		| "endlessSurfaceDeleteNode"
+		| "endlessSurfaceCreateEdge"
+		| "endlessSurfaceUpdateEdge"
+		| "endlessSurfaceDeleteEdge"
+		| "endlessSurfaceRequestSnapshot"
 	text?: string
+	clientMessageId?: string
+	cloverSessionId?: string
+	cloverSessionCompanyId?: string
+	cloverSessionCompanyName?: string
+	cloverSessionCursor?: string
+	cloverSessionLimit?: number
 	editedMessageContent?: string
-	tab?: "settings" | "history" | "mcp" | "modes" | "chat" | "marketplace" | "cloud"
+	tab?:
+		| "settings"
+		| "history"
+		| "mcp"
+		| "modes"
+		| "lobby"
+		| "marketplace"
+		| "cloud"
+		| "profile"
+		| "account"
+		| "workspace"
+		| "workforce"
+		| "hub"
+		| "brainstorm"
+		| "outerGate"
 	disabled?: boolean
 	context?: string
 	dataUri?: string
@@ -289,6 +395,15 @@ export interface WebviewMessage {
 	images?: string[]
 	bool?: boolean
 	value?: number
+	notionToken?: string
+	notionDatabaseId?: string
+	notionDataSourceId?: string
+	notionPageSize?: number
+	notionMaxPages?: number
+	miroToken?: string
+	miroBoardId?: string
+	miroItemTypes?: string[]
+	miroMaxItems?: number
 	commands?: string[]
 	audioType?: AudioType
 	// kilocode_change begin
@@ -323,6 +438,20 @@ export interface WebviewMessage {
 	modeConfig?: ModeConfig
 	timeout?: number
 	payload?: WebViewMessagePayload
+	action?:
+		| "chatButtonClicked"
+		| "mcpButtonClicked"
+		| "settingsButtonClicked"
+		| "historyButtonClicked"
+		| "promptsButtonClicked"
+		| "profileButtonClicked"
+		| "marketplaceButtonClicked"
+		| "cloudButtonClicked"
+		| "didBecomeVisible"
+		| "focusInput"
+		| "switchTab"
+		| "focusChatInput"
+		| "hubButtonClicked"
 	source?: "global" | "project"
 	requestId?: string
 	ids?: string[]
@@ -336,9 +465,45 @@ export interface WebviewMessage {
 	url?: string // For openExternal
 	mpItem?: MarketplaceItem
 	mpInstallOptions?: InstallMarketplaceItemOptions
+	hubRoomId?: string
+	hubAgent?: HubAgentBlueprint
+	hubParticipants?: HubAgentBlueprint[]
+	hubSettings?: HubSettingsUpdate
+	hubAutonomous?: boolean
+	participantId?: string
+	agentId?: string
 	workplaceCompanyPayload?: CreateCompanyPayload
+	workplaceCompanyUpdate?: UpdateCompanyPayload
+	workplaceDepartmentPayload?: CreateDepartmentPayload
+	workplaceDepartmentUpdate?: UpdateDepartmentPayload
 	workplaceEmployeePayload?: CreateEmployeePayload
+	workplaceEmployeeUpdate?: UpdateEmployeePayload
+	workplaceEmployeeArchive?: ArchiveEmployeePayload
+	workplaceTeamPayload?: CreateTeamPayload
+	workplaceTeamUpdate?: UpdateTeamPayload
+	workplaceTeamArchive?: ArchiveTeamPayload
+	workplaceTeamAssignment?: AssignTeamToDepartmentPayload
+	workplaceTeamDepartmentRemoval?: RemoveTeamFromDepartmentPayload
+	workplaceTeamEmployeeAssignment?: AssignEmployeeToTeamPayload
+	workplaceTeamEmployeeRemoval?: RemoveEmployeeFromTeamPayload
+	workplaceDepartmentArchive?: ArchiveDepartmentPayload
 	workplaceCompanyId?: string
+	workplaceEmployeeId?: string
+	workplaceActionItemPayload?: CreateActionItemPayload
+	workplaceActionItemUpdate?: UpdateActionItemPayload
+	workplaceActionItemDelete?: DeleteActionItemPayload
+	workplaceActionStatusPayload?: CreateActionStatusPayload
+	workplaceActionStatusUpdate?: UpsertActionStatusPayload
+	workplaceActionStart?: StartActionItemsPayload
+	surfaceRecord?: EndlessSurfaceRecord
+	surfaceId?: string
+	surfaceTitle?: string
+	surfaceMetaUpdates?: Partial<EndlessSurfaceRecord["meta"]>
+	surfaceAgentAccess?: EndlessSurfaceAgentAccess
+	surfaceNode?: EndlessSurfaceNode
+	surfaceNodeId?: string
+	surfaceEdge?: EndlessSurfaceEdge
+	surfaceEdgeId?: string
 	config?: Record<string, any> // Add config to the payload
 	visibility?: ShareVisibility // For share visibility
 	hasContent?: boolean // For checkRulesDirectoryResult

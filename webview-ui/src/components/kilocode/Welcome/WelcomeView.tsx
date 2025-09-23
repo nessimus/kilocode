@@ -1,72 +1,28 @@
-import { useCallback, useState } from "react"
-import { useExtensionState } from "../../../context/ExtensionStateContext"
-import { validateApiConfiguration } from "../../../utils/validate"
-import { vscode } from "../../../utils/vscode"
 import { Tab, TabContent } from "../../common/Tab"
-import { useAppTranslation } from "../../../i18n/TranslationContext"
-import { ButtonPrimary } from "../common/ButtonPrimary"
-import { ButtonLink } from "../common/ButtonLink"
-import ApiOptions from "../../settings/ApiOptions"
-import KiloCodeAuth from "../common/KiloCodeAuth"
-import { getKiloCodeBackendSignInUrl } from "../helpers"
+import WorkplacePanel from "../../workplace/WorkplacePanel"
 
 const WelcomeView = () => {
-	const {
-		apiConfiguration,
-		currentApiConfigName,
-		setApiConfiguration,
-		uriScheme,
-		uiKind,
-		kiloCodeWrapperProperties,
-	} = useExtensionState()
-	const [errorMessage, setErrorMessage] = useState<string | undefined>()
-	const [manualConfig, setManualConfig] = useState(false)
-	const { t } = useAppTranslation()
-
-	const handleSubmit = useCallback(() => {
-		const error = apiConfiguration ? validateApiConfiguration(apiConfiguration) : undefined
-
-		if (error) {
-			setErrorMessage(error)
-			return
-		}
-
-		setErrorMessage(undefined)
-		vscode.postMessage({ type: "upsertApiConfiguration", text: currentApiConfigName, apiConfiguration })
-	}, [apiConfiguration, currentApiConfigName])
-
-	const isSettingUpKiloCode =
-		!apiConfiguration?.apiProvider ||
-		(apiConfiguration?.apiProvider === "kilocode" && !apiConfiguration?.kilocodeToken)
-
 	return (
 		<Tab>
-			<TabContent className="flex flex-col gap-5">
-				{manualConfig ? (
-					<>
-						<ApiOptions
-							fromWelcomeView
-							apiConfiguration={apiConfiguration || {}}
-							uriScheme={uriScheme}
-							setApiConfigurationField={(field, value) => setApiConfiguration({ [field]: value })}
-							errorMessage={errorMessage}
-							setErrorMessage={setErrorMessage}
-							hideKiloCodeButton
-						/>
-						{isSettingUpKiloCode ? (
-							<ButtonLink
-								href={getKiloCodeBackendSignInUrl(uriScheme, uiKind, kiloCodeWrapperProperties)}>
-								{t("kilocode:settings.provider.login")}
-							</ButtonLink>
-						) : (
-							<ButtonPrimary onClick={handleSubmit}>{t("welcome:start")}</ButtonPrimary>
-						)}
-					</>
-				) : (
-					<div className="bg-vscode-sideBar-background p-4">
-						<KiloCodeAuth onManualConfigClick={() => setManualConfig(true)} />
+			<TabContent className="flex flex-col gap-6 p-0">
+				<section className="bg-vscode-sideBar-background px-6 py-8 text-center border-b border-[var(--vscode-panel-border)]">
+					<div className="mx-auto max-w-xl">
+						<div className="w-16 h-16 mx-auto mb-4 flex items-center justify-center rounded-lg border border-[var(--vscode-panel-border)] text-2xl font-semibold">
+							GW
+						</div>
+						<h1 className="text-2xl font-semibold text-[var(--vscode-foreground)] mb-2">
+							Welcome to Golden Workplace
+						</h1>
+						<p className="text-sm text-[var(--vscode-descriptionForeground)] leading-relaxed">
+							Spin up companies, agents, and tooling locally. Start by defining your first team below—once
+							you create an executive manager you can jump straight into the Workforce Hub.
+						</p>
 					</div>
-				)}
+				</section>
+
+				<section className="px-6 pb-8">
+					<WorkplacePanel />
+				</section>
 			</TabContent>
 		</Tab>
 	)

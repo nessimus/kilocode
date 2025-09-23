@@ -12,10 +12,13 @@ import { TelemetryEventName } from "@roo-code/types"
 import { initializeSourceMaps, exposeSourceMapsForDebugging } from "./utils/sourceMapInitializer"
 import { ExtensionStateContextProvider, useExtensionState } from "./context/ExtensionStateContext"
 import ChatView, { ChatViewRef } from "./components/chat/ChatView"
+import HubView from "./components/hub/HubView"
 import HistoryView from "./components/history/HistoryView"
 import SettingsView, { SettingsViewRef } from "./components/settings/SettingsView"
 import WelcomeView from "./components/kilocode/Welcome/WelcomeView" // kilocode_change
 import ProfileView from "./components/kilocode/profile/ProfileView" // kilocode_change
+import ActionWorkspaceView from "./components/workplace/ActionWorkspaceView"
+import WorkforceView from "./components/workplace/WorkforceView"
 import McpView from "./components/mcp/McpView"
 import { MarketplaceView } from "./components/marketplace/MarketplaceView"
 import ModesView from "./components/modes/ModesView"
@@ -31,8 +34,65 @@ import { useAddNonInteractiveClickListener } from "./components/ui/hooks/useNonI
 import { TooltipProvider } from "./components/ui/tooltip"
 import { STANDARD_TOOLTIP_DELAY } from "./components/ui/standard-tooltip"
 import { useKiloIdentity } from "./utils/kilocode/useKiloIdentity"
+import OuterGateView from "./components/kilocode/outerGate/OuterGateView"
+import BrainstormHubPage from "./components/surfaces/BrainstormHubPage"
+import SurfaceDetailPage from "./components/surfaces/SurfaceDetailPage"
+import type { BrainstormSurfaceSummary } from "./components/surfaces/types"
 
-type Tab = "settings" | "history" | "mcp" | "modes" | "chat" | "marketplace" | "account" | "cloud" | "profile" // kilocode_change: add "profile"
+type Tab =
+	| "settings"
+	| "history"
+	| "mcp"
+	| "modes"
+	| "lobby"
+	| "hub"
+	| "marketplace"
+	| "account"
+	| "cloud"
+	| "profile"
+	| "workspace"
+	| "workforce"
+	| "outerGate"
+	| "brainstorm"
+
+type ViewRoute = { page: "lobby" } | { page: "brainstorm" } | { page: "surface"; surfaceId: string }
+
+const normalizePath = (path: string) => {
+	if (!path) {
+		return "/"
+	}
+	const trimmed = path.split("?")[0]?.split("#")[0] ?? "/"
+	if (trimmed === "") {
+		return "/"
+	}
+	return trimmed.endsWith("/") && trimmed !== "/" ? trimmed.slice(0, -1) : trimmed
+}
+
+const parsePath = (pathname: string): ViewRoute => {
+	const normalized = normalizePath(pathname)
+	const surfaceMatch = normalized.match(/^\/surfaces\/([^/]+)$/)
+	if (surfaceMatch) {
+		return { page: "surface", surfaceId: decodeURIComponent(surfaceMatch[1]) }
+	}
+	if (normalized === "/brainstorm") {
+		return { page: "brainstorm" }
+	}
+	if (normalized === "/lobby" || normalized === "/") {
+		return { page: "lobby" }
+	}
+	return { page: "lobby" }
+}
+
+const buildPath = (route: ViewRoute) => {
+	switch (route.page) {
+		case "brainstorm":
+			return "/brainstorm"
+		case "surface":
+			return `/surfaces/${encodeURIComponent(route.surfaceId)}`
+		default:
+			return "/lobby"
+	}
+}
 
 interface HumanRelayDialogState {
 	isOpen: boolean
@@ -61,13 +121,14 @@ const MemoizedCheckpointRestoreDialog = React.memo(CheckpointRestoreDialog)
 const MemoizedHumanRelayDialog = React.memo(HumanRelayDialog)
 
 const tabsByMessageAction: Partial<Record<NonNullable<ExtensionMessage["action"]>, Tab>> = {
-	chatButtonClicked: "chat",
+	chatButtonClicked: "lobby",
 	settingsButtonClicked: "settings",
 	promptsButtonClicked: "modes",
 	mcpButtonClicked: "mcp",
 	historyButtonClicked: "history",
 	profileButtonClicked: "profile",
 	marketplaceButtonClicked: "marketplace",
+	hubButtonClicked: "hub",
 	// cloudButtonClicked: "cloud", // kilocode_change: no cloud
 }
 
@@ -84,14 +145,46 @@ const App = () => {
 		renderContext,
 		mdmCompliant,
 		apiConfiguration, // kilocode_change
+		endlessSurface,
+		createSurface,
+		setActiveSurface,
 	} = useExtensionState()
 
 	// Create a persistent state manager
 	const marketplaceStateManager = useMemo(() => new MarketplaceViewStateManager(), [])
 
-	const [showAnnouncement, setShowAnnouncement] = useState(false)
-	const [tab, setTab] = useState<Tab>("chat")
+	const surfaces = useMemo<BrainstormSurfaceSummary[]>(() => {
+		return (endlessSurface?.surfaces ?? []).map((surface) => ({
+			id: surface.id,
+			title: surface.title,
+			description: surface.description,
+			createdAt: new Date(surface.createdAt).toISOString(),
+			updatedAt: new Date(surface.updatedAt).toISOString(),
+			owner: surface.owner,
+			tags: surface.tags,
+			emoji: surface.emoji,
+		}))
+	}, [endlessSurface?.surfaces])
 
+	const activeSurfaceId = endlessSurface?.activeSurfaceId
+
+	const [showAnnouncement, setShowAnnouncement] = useState(false)
+	const [tab, setTab] = useState<Tab>("outerGate")
+	const [route, setRoute] = useState<ViewRoute>(() =>
+		parsePath(typeof window !== "undefined" ? window.location.pathname : "/"),
+	)
+	const [brainstormSearch, setBrainstormSearch] = useState("")
+	const pendingSurfaceCreation = useRef(false)
+
+	const handleCreateSurface = useCallback(async () => {
+		pendingSurfaceCreation.current = true
+		try {
+			await createSurface()
+		} catch (error) {
+			pendingSurfaceCreation.current = false
+			console.error("Failed to create surface", error)
+		}
+	}, [createSurface])
 	const [humanRelayDialogState, setHumanRelayDialogState] = useState<HumanRelayDialogState>({
 		isOpen: false,
 		requestId: "",
@@ -115,6 +208,23 @@ const App = () => {
 	const settingsRef = useRef<SettingsViewRef>(null)
 	const chatViewRef = useRef<ChatViewRef & { focusInput: () => void }>(null) // kilocode_change
 
+	const navigate = useCallback((nextRoute: ViewRoute, options?: { replace?: boolean }) => {
+		const nextPath = buildPath(nextRoute)
+		const currentPath = typeof window !== "undefined" ? normalizePath(window.location.pathname) : "/"
+		if (typeof window !== "undefined" && nextPath !== currentPath) {
+			try {
+				if (options?.replace) {
+					window.history.replaceState({}, "", nextPath)
+				} else {
+					window.history.pushState({}, "", nextPath)
+				}
+			} catch (error) {
+				console.warn("Failed to update history state", error)
+			}
+		}
+		setRoute(nextRoute)
+	}, [])
+
 	const switchTab = useCallback(
 		(newTab: Tab) => {
 			// Only check MDM compliance if mdmCompliant is explicitly false (meaning there's an MDM policy and user is non-compliant)
@@ -128,13 +238,19 @@ const App = () => {
 			setCurrentSection(undefined)
 			setCurrentMarketplaceTab(undefined)
 
+			if (newTab === "brainstorm") {
+				navigate({ page: "brainstorm" })
+			} else if (route.page !== "lobby" && (route.page === "brainstorm" || route.page === "surface")) {
+				navigate({ page: "lobby" })
+			}
+
 			if (settingsRef.current?.checkUnsaveChanges) {
 				settingsRef.current.checkUnsaveChanges(() => setTab(newTab))
 			} else {
 				setTab(newTab)
 			}
 		},
-		[mdmCompliant],
+		[mdmCompliant, navigate, route.page],
 	)
 
 	const [currentSection, setCurrentSection] = useState<string | undefined>(undefined)
@@ -147,8 +263,8 @@ const App = () => {
 			if (message.type === "action" && message.action) {
 				// kilocode_change begin
 				if (message.action === "focusChatInput") {
-					if (tab !== "chat") {
-						switchTab("chat")
+					if (tab !== "lobby") {
+						switchTab("lobby")
 					}
 					chatViewRef.current?.focusInput()
 					return
@@ -198,15 +314,53 @@ const App = () => {
 				})
 			}
 
+			if (message.type === "openSurface" && message.surfaceId) {
+				void setActiveSurface(message.surfaceId)
+				navigate({ page: "surface", surfaceId: message.surfaceId })
+			}
+
 			if (message.type === "acceptInput") {
 				chatViewRef.current?.acceptInput()
 			}
 		},
 		// kilocode_change: add tab
-		[tab, switchTab],
+		[tab, switchTab, navigate, setActiveSurface],
 	)
 
 	useEvent("message", onMessage)
+
+	useEffect(() => {
+		if (typeof window === "undefined") {
+			return
+		}
+		const handlePopState = () => {
+			setRoute(parsePath(window.location.pathname))
+		}
+		window.addEventListener("popstate", handlePopState)
+		return () => window.removeEventListener("popstate", handlePopState)
+	}, [])
+
+	useEffect(() => {
+		if (typeof window === "undefined") {
+			return
+		}
+		const currentPath = normalizePath(window.location.pathname)
+		if (currentPath === "/") {
+			navigate({ page: "lobby" }, { replace: true })
+		}
+	}, [navigate])
+
+	useEffect(() => {
+		if (route.page === "brainstorm" || route.page === "surface") {
+			if (tab !== "brainstorm") {
+				setTab("brainstorm")
+			}
+			return
+		}
+		if (tab === "brainstorm" && route.page === "lobby") {
+			setTab("lobby")
+		}
+	}, [route, tab])
 
 	useEffect(() => {
 		if (shouldShowAnnouncement) {
@@ -263,6 +417,13 @@ const App = () => {
 		}
 	}, [tab])
 
+	useEffect(() => {
+		if (pendingSurfaceCreation.current && activeSurfaceId) {
+			navigate({ page: "surface", surfaceId: activeSurfaceId })
+			pendingSurfaceCreation.current = false
+		}
+	}, [activeSurfaceId, navigate])
+
 	if (!didHydrateState) {
 		return null
 	}
@@ -273,18 +434,21 @@ const App = () => {
 		<WelcomeView />
 	) : (
 		<>
-			{tab === "modes" && <ModesView onDone={() => switchTab("chat")} />}
-			{tab === "mcp" && <McpView onDone={() => switchTab("chat")} />}
-			{tab === "history" && <HistoryView onDone={() => switchTab("chat")} />}
+			{tab === "outerGate" && <OuterGateView />}
+			{tab === "modes" && <ModesView onDone={() => switchTab("lobby")} />}
+			{tab === "mcp" && <McpView onDone={() => switchTab("lobby")} />}
+			{tab === "history" && <HistoryView onDone={() => switchTab("lobby")} />}
 			{tab === "settings" && (
-				<SettingsView ref={settingsRef} onDone={() => switchTab("chat")} targetSection={currentSection} /> // kilocode_change
+				<SettingsView ref={settingsRef} onDone={() => switchTab("lobby")} targetSection={currentSection} /> // kilocode_change
 			)}
 			{/* kilocode_change: add profileview */}
-			{tab === "profile" && <ProfileView onDone={() => switchTab("chat")} />}
+			{tab === "profile" && <ProfileView onDone={() => switchTab("lobby")} />}
+			{tab === "workspace" && <ActionWorkspaceView onDone={() => switchTab("lobby")} />}
+			{tab === "workforce" && <WorkforceView onDone={() => switchTab("lobby")} />}
 			{tab === "marketplace" && (
 				<MarketplaceView
 					stateManager={marketplaceStateManager}
-					onDone={() => switchTab("chat")}
+					onDone={() => switchTab("lobby")}
 					// kilocode_change: targetTab="mode"
 					targetTab="mode"
 				/>
@@ -295,19 +459,37 @@ const App = () => {
 					userInfo={cloudUserInfo}
 					isAuthenticated={cloudIsAuthenticated}
 					cloudApiUrl={cloudApiUrl}
-					onDone={() => switchTab("chat")}
+					onDone={() => switchTab("lobby")}
 				/>
 			)} */}
 			{/* kilocode_change: we have our own profile view */}
 			{/* {tab === "account" && (
-				<AccountView userInfo={cloudUserInfo} isAuthenticated={false} onDone={() => switchTab("chat")} />
+				<AccountView userInfo={cloudUserInfo} isAuthenticated={false} onDone={() => switchTab("lobby")} />
 			)} */}
 			<ChatView
 				ref={chatViewRef}
-				isHidden={tab !== "chat"}
+				isHidden={tab !== "lobby"}
 				showAnnouncement={showAnnouncement}
 				hideAnnouncement={() => setShowAnnouncement(false)}
 			/>
+			<HubView isHidden={tab !== "hub"} targetSection={currentSection} />
+			{route.page === "brainstorm" && tab === "brainstorm" && (
+				<BrainstormHubPage
+					surfaces={surfaces}
+					searchTerm={brainstormSearch}
+					onSearchChange={setBrainstormSearch}
+					onCreateSurface={() => {
+						void handleCreateSurface()
+					}}
+					onOpenSurface={(surfaceId) => {
+						void setActiveSurface(surfaceId)
+						navigate({ page: "surface", surfaceId })
+					}}
+				/>
+			)}
+			{route.page === "surface" && tab === "brainstorm" && (
+				<SurfaceDetailPage surfaceId={route.surfaceId} onBack={() => navigate({ page: "brainstorm" })} />
+			)}
 			<MemoizedHumanRelayDialog
 				isOpen={humanRelayDialogState.isOpen}
 				requestId={humanRelayDialogState.requestId}
@@ -376,8 +558,8 @@ const App = () => {
 				/>
 			)}
 			{/* kilocode_change */}
-			{/* Chat, modes and history view contain their own bottom controls */}
-			{!["chat", "modes", "history"].includes(tab) && (
+			{/* Lobby, modes and history view contain their own bottom controls */}
+			{!["lobby", "modes", "history", "outerGate"].includes(tab) && (
 				<div className="fixed inset-0 top-auto">
 					<BottomControls />
 				</div>
