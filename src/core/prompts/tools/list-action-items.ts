@@ -16,6 +16,7 @@ List open goals, projects, or tasks for a company. Use this to inspect the curre
 - Combine filters to zero in on the right slice (for example company + status + owner).
 - When you’re about to update several items, run this first to confirm their ids and current state.
 - Results include status name, kind, owner, due date, and priority where available.
+- When results are found, the output includes each relevant company's available status ids so you can pick a valid \`status_id\` for updates.
 
 **Example:**
 <list_action_items>

@@ -63,6 +63,10 @@ interface WebSpeechRecognition {
 
 type WebSpeechRecognitionConstructor = new () => WebSpeechRecognition
 
+type CursorMediaTrackConstraints = MediaTrackConstraints & {
+	cursor?: "always" | "motion" | "never"
+}
+
 // kilocode_change start: pull slash commands from Cline
 import SlashCommandMenu from "@/components/chat/SlashCommandMenu"
 import {
@@ -402,13 +406,13 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				if (!getDisplayMedia) {
 					throw new Error("getDisplayMedia not available")
 				}
-				screenStream = await getDisplayMedia({
-					video: {
-						frameRate: { ideal: 15, max: 30 },
-						cursor: "always",
-					},
-					audio: false,
-				})
+					screenStream = await getDisplayMedia({
+						video: {
+							frameRate: { ideal: 15, max: 30 },
+							cursor: "always",
+						} as CursorMediaTrackConstraints,
+						audio: false,
+					})
 				logRealtime("request:screen-granted", {
 					trackCount: screenStream.getTracks().length,
 				})

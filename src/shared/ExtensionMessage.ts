@@ -82,6 +82,7 @@ export interface ExtensionMessage {
 	type:
 		| "action"
 		| "state"
+		| "outerGateState"
 		| "selectedImages"
 		| "theme"
 		| "workspaceUpdated"
@@ -159,6 +160,7 @@ export interface ExtensionMessage {
 		| "insertTextIntoTextarea"
 		| "browserStreamFrame"
 		| "openSurface"
+		| "workplaceCompanyMutationResult"
 	text?: string
 	payload?: ProfileDataResponsePayload | BalanceDataResponsePayload // kilocode_change: Add payload for profile and balance data
 	action?:
@@ -186,6 +188,9 @@ export interface ExtensionMessage {
 	}>
 	clineMessage?: ClineMessage
 	surfaceId?: string
+	companyId?: string
+	mutation?: "setFavorite" | "delete"
+	isFavorite?: boolean
 	routerModels?: RouterModels
 	openAiModels?: string[]
 	ollamaModels?: string[]
@@ -427,6 +432,8 @@ export type ExtensionState = Pick<
 	marketplaceInstalledMetadata?: { project: Record<string, any>; global: Record<string, any> }
 	profileThresholds: Record<string, number>
 	workplaceState?: WorkplaceState
+	workplaceRootConfigured: boolean
+	workplaceRootUri?: string
 	endlessSurface?: EndlessSurfaceClientState
 	outerGateState?: OuterGateState
 	hasOpenedModeSelector: boolean
@@ -462,6 +469,7 @@ export interface ClineSayTool {
 		| "generateImage"
 		| "imageGenerated"
 		| "runSlashCommand"
+		| "upsert_sop"
 	path?: string
 	diff?: string
 	content?: string

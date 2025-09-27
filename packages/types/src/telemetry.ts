@@ -43,6 +43,7 @@ export enum TelemetryEventName {
 	MODE_SWITCH = "Mode Switched",
 	MODE_SELECTOR_OPENED = "Mode Selector Opened",
 	TOOL_USED = "Tool Used",
+	CLOVER_WORKPLACE_AUTOMATION = "Clover Workplace Automation",
 
 	CHECKPOINT_CREATED = "Checkpoint Created",
 	CHECKPOINT_RESTORED = "Checkpoint Restored",
@@ -175,7 +176,7 @@ export type TelemetryEvent = {
 
 export const rooCodeTelemetryEventSchema = z.discriminatedUnion("type", [
 	z.object({
-		type: z.enum([
+			type: z.enum([
 			// kilocode_change start
 			TelemetryEventName.COMMIT_MSG_GENERATED, // kilocode_change
 			TelemetryEventName.INLINE_ASSIST_QUICK_TASK, // kilocode_change
@@ -192,6 +193,7 @@ export const rooCodeTelemetryEventSchema = z.discriminatedUnion("type", [
 			TelemetryEventName.MODE_SWITCH,
 			TelemetryEventName.MODE_SELECTOR_OPENED,
 			TelemetryEventName.TOOL_USED,
+			TelemetryEventName.CLOVER_WORKPLACE_AUTOMATION,
 			TelemetryEventName.CHECKPOINT_CREATED,
 			TelemetryEventName.CHECKPOINT_RESTORED,
 			TelemetryEventName.CHECKPOINT_DIFFED,

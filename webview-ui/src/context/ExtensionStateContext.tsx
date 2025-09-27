@@ -33,7 +33,7 @@ import { experimentDefault } from "@roo/experiments"
 import { RouterModels } from "@roo/api"
 import { McpMarketplaceCatalog } from "../../../src/shared/kilocode/mcp" // kilocode_change
 import type { HubSnapshot, HubAgentBlueprint, HubSettingsUpdate } from "@roo/hub"
-import { defaultOuterGateState } from "@roo/golden/outerGate"
+import { defaultOuterGateState, type OuterGateInsightUpdate } from "@roo/golden/outerGate"
 
 import { vscode } from "@src/utils/vscode"
 import { convertTextMateToHljs } from "@src/utils/textMateToHljs"
@@ -49,18 +49,26 @@ import type {
 	CreateCompanyPayload,
 	CreateDepartmentPayload,
 	CreateEmployeePayload,
+	CreateShiftPayload,
 	CreateTeamPayload,
 	DeleteActionItemPayload,
+	DeleteShiftPayload,
 	RemoveEmployeeFromTeamPayload,
 	RemoveTeamFromDepartmentPayload,
 	StartActionItemsPayload,
+	StartWorkdayPayload,
 	UpdateActionItemPayload,
 	UpdateCompanyPayload,
 	UpdateEmployeePayload,
 	UpdateDepartmentPayload,
+	UpdateShiftPayload,
 	UpdateTeamPayload,
 	UpsertActionStatusPayload,
+	SetCompanyFavoritePayload,
+	DeleteCompanyPayload,
 	WorkplaceState,
+	HaltWorkdayPayload,
+	UpdateEmployeeSchedulePayload,
 } from "@roo/golden/workplace"
 
 export interface ExtensionStateContextType extends ExtensionState {
@@ -227,6 +235,8 @@ export interface ExtensionStateContextType extends ExtensionState {
 	workplaceState: WorkplaceState
 	createCompany: (payload: CreateCompanyPayload) => void
 	updateCompany: (payload: UpdateCompanyPayload) => void
+	setCompanyFavorite: (payload: SetCompanyFavoritePayload) => void
+	deleteCompany: (payload: DeleteCompanyPayload) => void
 	createDepartment: (payload: CreateDepartmentPayload) => void
 	updateDepartment: (payload: UpdateDepartmentPayload) => void
 	createTeam: (payload: CreateTeamPayload) => void
@@ -248,6 +258,12 @@ export interface ExtensionStateContextType extends ExtensionState {
 	createActionStatus: (payload: CreateActionStatusPayload) => void
 	updateActionStatus: (payload: UpsertActionStatusPayload) => void
 	startActionItems: (payload: StartActionItemsPayload) => void
+	startWorkday: (payload: StartWorkdayPayload) => void
+	haltWorkday: (payload: HaltWorkdayPayload) => void
+	updateEmployeeSchedule: (payload: UpdateEmployeeSchedulePayload) => void
+	createShift: (payload: CreateShiftPayload) => void
+	updateShift: (payload: UpdateShiftPayload) => void
+	deleteShift: (payload: DeleteShiftPayload) => void
 	setShowWelcome: (value: boolean) => void
 	hubSnapshot?: HubSnapshot
 	createHubRoom: (title?: string, options?: { autonomous?: boolean; participants?: HubAgentBlueprint[] }) => void
@@ -258,6 +274,9 @@ export interface ExtensionStateContextType extends ExtensionState {
 	updateHubSettings: (roomId: string, settings: HubSettingsUpdate) => void
 	sendOuterGateMessage: (text: string) => void
 	triggerOuterGateAction: (slug: string) => void
+	requestOuterGatePassionMap: () => void
+	updateOuterGateInsight: (id: string, updates: OuterGateInsightUpdate) => void
+	deleteOuterGateInsight: (id: string) => void
 	outerGateConnectNotion: (payload: {
 		token?: string
 		databaseId?: string
@@ -403,8 +422,9 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		openRouterImageApiKey: "",
 		kiloCodeImageApiKey: "",
 		openRouterImageGenerationSelectedModel: "",
-		workplaceState: { companies: [], ownerProfileDefaults: undefined },
-		hubSnapshot: { rooms: [], activeRoomId: undefined },
+			workplaceState: { companies: [], ownerProfileDefaults: undefined },
+			workplaceRootConfigured: false,
+			hubSnapshot: { rooms: [], activeRoomId: undefined },
 		outerGateState: defaultOuterGateState,
 	})
 
@@ -516,11 +536,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 
 	const triggerOuterGateAction = useCallback((slug: string) => {
 		switch (slug) {
-			case "create-workspace": {
-				const payload = { type: "action", action: "switchTab", tab: "workspace" }
-				window.postMessage(payload, "*")
-				break
-			}
+			case "create-workspace":
 			case "create-company": {
 				window.postMessage({ type: "outerGateOpenCreateCompanyModal" }, "*")
 				break
@@ -542,6 +558,10 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 			default:
 				break
 		}
+	}, [])
+
+	const requestOuterGatePassionMap = useCallback(() => {
+		vscode.postMessage({ type: "outerGateGeneratePassionMap" })
 	}, [])
 
 	const outerGateConnectNotion = useCallback(
@@ -607,11 +627,11 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		(event: MessageEvent) => {
 			const message: ExtensionMessage = event.data
 			switch (message.type) {
-				case "state": {
-					const newState = message.state!
-					setState((prevState) => mergeExtensionState(prevState, newState))
-					setShowWelcome(!checkExistKey(newState.apiConfiguration))
-					setDidHydrateState(true)
+			case "state": {
+				const newState = message.state!
+				setState((prevState) => mergeExtensionState(prevState, newState))
+				setShowWelcome(!checkExistKey(newState.apiConfiguration))
+				setDidHydrateState(true)
 					// Update alwaysAllowFollowupQuestions if present in state message
 					if ((newState as any).alwaysAllowFollowupQuestions !== undefined) {
 						setAlwaysAllowFollowupQuestions((newState as any).alwaysAllowFollowupQuestions)
@@ -628,11 +648,22 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 					if (newState.marketplaceItems !== undefined) {
 						setMarketplaceItems(newState.marketplaceItems)
 					}
-					if (newState.marketplaceInstalledMetadata !== undefined) {
-						setMarketplaceInstalledMetadata(newState.marketplaceInstalledMetadata)
-					}
-					break
+				if (newState.marketplaceInstalledMetadata !== undefined) {
+					setMarketplaceInstalledMetadata(newState.marketplaceInstalledMetadata)
 				}
+				break
+			}
+				case "outerGateState": {
+					if ("outerGateState" in message && message.outerGateState) {
+						setState((prevState) =>
+							({
+								...prevState,
+								outerGateState: message.outerGateState ?? prevState.outerGateState ?? defaultOuterGateState,
+							} as ExtensionState),
+						)
+					}
+				break
+			}
 				case "theme": {
 					if (message.text) {
 						setTheme(convertTextMateToHljs(JSON.parse(message.text)))
@@ -842,13 +873,52 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 						? company.activeEmployeeId
 						: activeEmployees[0]?.id
 
+				const sanitizedShifts = (company.shifts ?? [])
+					.filter((shift) => activeEmployeeIds.has(shift.employeeId))
+					.map((shift) => ({ ...shift }))
+					.sort((a, b) => a.start.localeCompare(b.start))
+
+				const workdayState = (() => {
+					if (!company.workday) {
+						return undefined
+					}
+					const scheduleMap = new Map(
+						(company.workday.employeeSchedules ?? []).map((schedule) => [schedule.employeeId, schedule]),
+					)
+					const fallbackTimestamp = company.updatedAt ?? company.createdAt ?? company.workday.startedAt ?? new Date(0).toISOString()
+					const employeeSchedules = activeEmployees.map((employee) => {
+						const existing = scheduleMap.get(employee.id)
+						return {
+							employeeId: employee.id,
+							availability: existing?.availability ?? "available",
+							timezone: existing?.timezone,
+							weeklyHoursTarget: existing?.weeklyHoursTarget,
+							workdays: existing?.workdays,
+							dailyStartMinute: existing?.dailyStartMinute,
+							dailyEndMinute: existing?.dailyEndMinute,
+							lastUpdatedAt: existing?.lastUpdatedAt ?? fallbackTimestamp,
+						}
+					})
+					const activeIds = (company.workday.activeEmployeeIds ?? []).filter((id) => activeEmployeeIds.has(id))
+					const bypassedIds = (company.workday.bypassedEmployeeIds ?? []).filter((id) => activeEmployeeIds.has(id))
+					return {
+						...company.workday,
+						employeeSchedules,
+						activeEmployeeIds: activeIds,
+						bypassedEmployeeIds: bypassedIds,
+					}
+				})()
+
 				return {
 					...company,
+					isFavorite: company.isFavorite ?? false,
 					employees: activeEmployees,
 					teams: sanitizedTeams,
 					departments: sanitizedDepartments,
+					shifts: sanitizedShifts,
 					executiveManagerId: resolvedExecutiveId,
 					activeEmployeeId: resolvedActiveEmployeeId,
+					workday: workdayState,
 				}
 			}),
 		}
@@ -1037,6 +1107,10 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		updateHubSettings,
 		createCompany: (payload) => vscode.postMessage({ type: "createCompany", workplaceCompanyPayload: payload }),
 		updateCompany: (payload) => vscode.postMessage({ type: "updateCompany", workplaceCompanyUpdate: payload }),
+		setCompanyFavorite: (payload) =>
+			vscode.postMessage({ type: "setCompanyFavorite", workplaceCompanyFavorite: payload }),
+		deleteCompany: (payload) =>
+			vscode.postMessage({ type: "deleteCompany", workplaceCompanyDelete: payload }),
 		createDepartment: (payload) =>
 			vscode.postMessage({ type: "createDepartment", workplaceDepartmentPayload: payload }),
 		updateDepartment: (payload) =>
@@ -1085,9 +1159,29 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		updateActionStatus: (payload) =>
 			vscode.postMessage({ type: "updateActionStatus", workplaceActionStatusUpdate: payload }),
 		startActionItems: (payload) => vscode.postMessage({ type: "startActionItems", workplaceActionStart: payload }),
+		startWorkday: (payload) =>
+			vscode.postMessage({ type: "startWorkday", workplaceWorkdayStart: payload }),
+		haltWorkday: (payload) => vscode.postMessage({ type: "haltWorkday", workplaceWorkdayHalt: payload }),
+		updateEmployeeSchedule: (payload) =>
+			vscode.postMessage({ type: "updateEmployeeSchedule", workplaceEmployeeScheduleUpdate: payload }),
+		createShift: (payload) =>
+			vscode.postMessage({ type: "createShift", workplaceShiftCreate: payload }),
+		updateShift: (payload) =>
+			vscode.postMessage({ type: "updateShift", workplaceShiftUpdate: payload }),
+		deleteShift: (payload) =>
+			vscode.postMessage({ type: "deleteShift", workplaceShiftDelete: payload }),
 		setShowWelcome,
 		sendOuterGateMessage,
 		triggerOuterGateAction,
+		requestOuterGatePassionMap,
+		updateOuterGateInsight: (id, insightUpdates) =>
+			vscode.postMessage({
+				type: "outerGateUpdateInsight",
+				outerGateInsightId: id,
+				outerGateInsightUpdates: insightUpdates,
+			}),
+		deleteOuterGateInsight: (id) =>
+			vscode.postMessage({ type: "outerGateDeleteInsight", outerGateInsightId: id }),
 		outerGateConnectNotion,
 		outerGateSyncNotion,
 		outerGateConnectMiro,

@@ -12,15 +12,23 @@ import {
 	CreateCompanyPayload,
 	CreateDepartmentPayload,
 	CreateEmployeePayload,
+	CreateShiftPayload,
 	CreateTeamPayload,
+	DeleteCompanyPayload,
 	DeleteActionItemPayload,
+	DeleteShiftPayload,
+	HaltWorkdayPayload,
 	RemoveEmployeeFromTeamPayload,
+	StartWorkdayPayload,
 	UpdateActionItemPayload,
 	UpdateCompanyPayload,
 	UpdateDepartmentPayload,
 	UpdateEmployeePayload,
+	UpdateShiftPayload,
+	UpdateEmployeeSchedulePayload,
 	UpdateTeamPayload,
 	UpsertActionStatusPayload,
+	SetCompanyFavoritePayload,
 	StartActionItemsPayload,
 	WorkplaceActionStartScope,
 	WorkplaceActionItem,
@@ -30,10 +38,17 @@ import {
 	WorkplaceDepartment,
 	WorkplaceOwnerProfile,
 	WorkplacePersonaMode,
+	WorkplaceDayOfWeek,
+	WorkplaceEmployeeAvailability,
+	WorkplaceEmployeeWorkSchedule,
+	WorkplaceShift,
+	WorkplaceShiftRecurrence,
 	WorkplaceState,
+	WorkplaceWorkdayState,
 	RemoveTeamFromDepartmentPayload,
 	cloneWorkplaceState,
 	createDefaultActionStatuses,
+	createDefaultWorkdayState,
 	createExecutiveManagerProfile,
 	withGeneratedIds,
 } from "../../shared/golden/workplace"
@@ -48,8 +63,33 @@ const debugLog = (...args: unknown[]) => {
 	console.debug("[WorkplaceService]", ...args)
 }
 
+const sanitizeOptionalText = (value?: string) => {
+	if (typeof value !== "string") {
+		return undefined
+	}
+	const trimmed = value.trim()
+	return trimmed.length > 0 ? trimmed : undefined
+}
+
+const DAY_OF_WEEK_VALUES: WorkplaceDayOfWeek[] = [
+	"sunday",
+	"monday",
+	"tuesday",
+	"wednesday",
+	"thursday",
+	"friday",
+	"saturday",
+]
+
+const DAY_OF_WEEK_SET = new Set<WorkplaceDayOfWeek>(DAY_OF_WEEK_VALUES)
+
+export interface WorkplaceStateObserver {
+	onStatePersisted(state: WorkplaceState): void | Promise<void>
+}
+
 export class WorkplaceService {
 	private state: WorkplaceState
+	private stateObserver?: WorkplaceStateObserver
 
 	constructor(private readonly context: vscode.ExtensionContext) {
 		const stored = this.context.globalState.get<WorkplaceState>(STORAGE_KEY)
@@ -113,6 +153,217 @@ export class WorkplaceService {
 		this.state.ownerProfileDefaults = this.sanitizeOwnerProfile(next)
 	}
 
+	private normalizeMinutes(value?: number): number | undefined {
+		if (typeof value !== "number" || Number.isNaN(value)) {
+			return undefined
+		}
+		const rounded = Math.round(value)
+		if (rounded < 0 || rounded >= 24 * 60) {
+			return undefined
+		}
+		return rounded
+	}
+
+	private normalizeIsoTimestamp(value?: string): string | undefined {
+		if (typeof value !== "string") {
+			return undefined
+		}
+		const trimmed = value.trim()
+		if (!trimmed) {
+			return undefined
+		}
+		const date = new Date(trimmed)
+		if (Number.isNaN(date.getTime())) {
+			return undefined
+		}
+		return date.toISOString()
+	}
+
+	private sanitizeShiftRecurrence(recurrence: unknown): WorkplaceShiftRecurrence | undefined {
+		if (!recurrence || typeof recurrence !== "object") {
+			return undefined
+		}
+		const record = recurrence as Partial<WorkplaceShiftRecurrence> & { [key: string]: unknown }
+		if (record.type !== "weekly") {
+			return undefined
+		}
+		const interval = typeof record.interval === "number" && Number.isFinite(record.interval)
+			? Math.min(12, Math.max(1, Math.trunc(record.interval)))
+			: 1
+		const weekdays = Array.isArray(record.weekdays)
+			? Array.from(
+				new Set(
+					record.weekdays.filter((day): day is WorkplaceDayOfWeek => DAY_OF_WEEK_SET.has(day as WorkplaceDayOfWeek)),
+				),
+			  )
+			: []
+		const until = this.normalizeIsoTimestamp((record as any).until)
+		return {
+			type: "weekly",
+			interval,
+			weekdays,
+			...(until ? { until } : {}),
+		}
+	}
+
+	private sanitizeCompanyShifts(company: WorkplaceCompany): WorkplaceShift[] {
+		const shifts = Array.isArray((company as any).shifts) ? ((company as any).shifts as unknown[]) : []
+		const activeEmployeeIds = new Set(
+			company.employees.filter((employee) => !employee.deletedAt).map((employee) => employee.id),
+		)
+		const seen = new Set<string>()
+		const nowIso = new Date().toISOString()
+		const sanitized: WorkplaceShift[] = []
+		for (const entry of shifts) {
+			if (!entry || typeof entry !== "object") {
+				continue
+			}
+			const raw = entry as Partial<WorkplaceShift> & { [key: string]: unknown }
+			const id = typeof raw.id === "string" && raw.id.trim().length > 0 ? raw.id.trim() : uuid()
+			if (seen.has(id)) {
+				continue
+			}
+			const employeeId = typeof raw.employeeId === "string" ? raw.employeeId : undefined
+			if (!employeeId || !activeEmployeeIds.has(employeeId)) {
+				continue
+			}
+			const start = this.normalizeIsoTimestamp(raw.start as string | undefined)
+			const end = this.normalizeIsoTimestamp(raw.end as string | undefined)
+			if (!start || !end) {
+				continue
+			}
+			if (new Date(end).getTime() <= new Date(start).getTime()) {
+				continue
+			}
+			const recurrence = this.sanitizeShiftRecurrence(raw.recurrence)
+			const name = sanitizeOptionalText(raw.name as string | undefined)
+			const description = sanitizeOptionalText(raw.description as string | undefined)
+			const timezone = sanitizeOptionalText(raw.timezone as string | undefined)
+			const createdAt = this.normalizeIsoTimestamp(raw.createdAt as string | undefined) ?? nowIso
+			const updatedAt = this.normalizeIsoTimestamp(raw.updatedAt as string | undefined) ?? createdAt
+			sanitized.push({
+				id,
+				companyId: company.id,
+				employeeId,
+				name,
+				description,
+				timezone,
+				start,
+				end,
+				recurrence,
+				createdAt,
+				updatedAt,
+			})
+			seen.add(id)
+		}
+		sanitized.sort((a, b) => a.start.localeCompare(b.start))
+		company.shifts = sanitized
+		return sanitized
+	}
+
+	private sanitizeWorkdayState(company: WorkplaceCompany): WorkplaceWorkdayState {
+		const nowIso = new Date().toISOString()
+		const existing = company.workday ?? createDefaultWorkdayState()
+		const activeEmployees = company.employees.filter((employee) => !employee.deletedAt)
+		const activeEmployeeIds = new Set(activeEmployees.map((employee) => employee.id))
+		const scheduleLookup = new Map(
+			(existing.employeeSchedules ?? []).map((schedule) => [schedule.employeeId, schedule]),
+		)
+
+		const sanitizedSchedules: WorkplaceEmployeeWorkSchedule[] = activeEmployees.map((employee) => {
+			const current = scheduleLookup.get(employee.id)
+			const normalizedAvailability: WorkplaceEmployeeAvailability = (() => {
+				const availability = current?.availability
+				if (availability === "suspended" || availability === "on_call" || availability === "flexible") {
+					return availability
+				}
+				return "available"
+			})()
+			const normalizedWorkdays = Array.isArray(current?.workdays)
+				? current!.workdays.filter((day): day is WorkplaceDayOfWeek => DAY_OF_WEEK_SET.has(day as WorkplaceDayOfWeek))
+				: undefined
+			return {
+				employeeId: employee.id,
+				availability: normalizedAvailability,
+				timezone: current?.timezone,
+				weeklyHoursTarget:
+					typeof current?.weeklyHoursTarget === "number" && Number.isFinite(current.weeklyHoursTarget)
+						? current.weeklyHoursTarget
+						: undefined,
+				workdays: normalizedWorkdays,
+				dailyStartMinute: this.normalizeMinutes(current?.dailyStartMinute),
+				dailyEndMinute: this.normalizeMinutes(current?.dailyEndMinute),
+				lastUpdatedAt: current?.lastUpdatedAt ?? nowIso,
+			}
+		})
+
+		const sanitizedScheduleMap = new Map(sanitizedSchedules.map((schedule) => [schedule.employeeId, schedule]))
+		const sanitizedActiveIds = (existing.activeEmployeeIds ?? [])
+			.filter((id): id is string => typeof id === "string" && activeEmployeeIds.has(id))
+			.filter((id) => sanitizedScheduleMap.get(id)?.availability !== "suspended")
+		const sanitizedBypassedIds = (existing.bypassedEmployeeIds ?? [])
+			.filter((id): id is string => typeof id === "string" && activeEmployeeIds.has(id))
+
+		const status: WorkplaceWorkdayState["status"] =
+			existing.status === "active" || existing.status === "paused" ? existing.status : "idle"
+
+		const sanitized: WorkplaceWorkdayState = {
+			status,
+			startedAt: existing.startedAt,
+			haltedAt: existing.haltedAt,
+			autoStartActionItems:
+				typeof existing.autoStartActionItems === "boolean"
+					? existing.autoStartActionItems
+					: true,
+			activeEmployeeIds: sanitizedActiveIds,
+			bypassedEmployeeIds: sanitizedBypassedIds,
+			employeeSchedules: sanitizedSchedules,
+			lastActivationReason: existing.lastActivationReason,
+		}
+
+		company.workday = sanitized
+		return sanitized
+	}
+
+	private resolveActiveEmployeesForWorkday(
+		company: WorkplaceCompany,
+		explicitIds?: string[] | undefined,
+	): string[] {
+		const workday = this.sanitizeWorkdayState(company)
+		const eligibleEmployees = company.employees.filter((employee) => !employee.deletedAt)
+		const employeeOrder = eligibleEmployees.map((employee) => employee.id)
+		const validIds = new Set(employeeOrder)
+
+		let baseline: Set<string>
+		if (explicitIds && explicitIds.length) {
+			baseline = new Set(explicitIds.filter((id) => validIds.has(id)))
+		} else {
+			baseline = new Set(
+				workday.employeeSchedules
+					.filter((schedule) =>
+							(schedule.availability === "available" || schedule.availability === "flexible") &&
+							validIds.has(schedule.employeeId),
+					)
+					.map((schedule) => schedule.employeeId),
+			)
+		}
+
+		for (const schedule of workday.employeeSchedules) {
+			if (schedule.availability === "flexible" && validIds.has(schedule.employeeId)) {
+				baseline.add(schedule.employeeId)
+			}
+		}
+
+		const ordered: string[] = []
+		for (const id of employeeOrder) {
+			if (baseline.has(id)) {
+				ordered.push(id)
+			}
+		}
+
+		return ordered
+	}
+
 	private logState(action: string, details?: Record<string, unknown>) {
 		if (!ENABLE_WORKPLACE_DEBUG_LOGS) {
 			return
@@ -135,6 +386,10 @@ export class WorkplaceService {
 			},
 			...(details ?? {}),
 		})
+	}
+
+	public attachStateObserver(observer: WorkplaceStateObserver | undefined): void {
+		this.stateObserver = observer
 	}
 
 	public getState(): WorkplaceState {
@@ -216,6 +471,11 @@ export class WorkplaceService {
 		let mutated = false
 		this.state.companies = this.state.companies.map((company) => {
 			const nowIso = new Date().toISOString()
+			const isFavorite = company.isFavorite === true
+			if (company.isFavorite !== isFavorite) {
+				mutated = true
+			}
+			company.isFavorite = isFavorite
 
 			company.employees =
 				company.employees?.map((employee) => {
@@ -338,6 +598,12 @@ export class WorkplaceService {
 				}
 			})
 
+			const beforeShiftSnapshot = JSON.stringify(company.shifts ?? [])
+			const sanitizedShiftList = this.sanitizeCompanyShifts(company)
+			if (beforeShiftSnapshot !== JSON.stringify(sanitizedShiftList)) {
+				mutated = true
+			}
+
 			if (!company.actionItems) {
 				company.actionItems = []
 				mutated = true
@@ -373,7 +639,8 @@ export class WorkplaceService {
 				mutated = true
 			}
 
-			return company
+				this.sanitizeWorkdayState(company)
+				return company
 		})
 
 		if (!this.state.ownerProfileDefaults) {
@@ -414,7 +681,14 @@ export class WorkplaceService {
 	public async createCompany(payload: CreateCompanyPayload): Promise<WorkplaceState> {
 		const { updateDefaultOwnerProfile, ...restPayload } = payload
 		const ownerProfile = this.resolveOwnerProfileForNewCompany(restPayload.ownerProfile)
-		const company = withGeneratedIds.company({ ...restPayload, ownerProfile })
+		const sanitizedEmoji = sanitizeOptionalText(restPayload.emoji)
+		const sanitizedDescription = sanitizeOptionalText(restPayload.description)
+		const company = withGeneratedIds.company({
+			...restPayload,
+			emoji: sanitizedEmoji,
+			description: sanitizedDescription,
+			ownerProfile,
+		})
 		const executiveDraft = createExecutiveManagerProfile(payload.name)
 		const executive = withGeneratedIds.employee({ ...executiveDraft, isExecutiveManager: true })
 
@@ -425,6 +699,7 @@ export class WorkplaceService {
 		company.actionRelations = []
 		company.ownerProfile = ownerProfile
 		company.employees.push(executive)
+		this.sanitizeWorkdayState(company)
 		const shouldUpdateDefaults = updateDefaultOwnerProfile !== false || !this.state.ownerProfileDefaults
 		if (shouldUpdateDefaults) {
 			this.updateOwnerProfileDefaults(ownerProfile)
@@ -444,9 +719,21 @@ export class WorkplaceService {
 			throw new Error(`Company ${payload.id} not found`)
 		}
 
-		company.name = payload.name
-		company.mission = payload.mission
-		company.vision = payload.vision
+		if (typeof payload.name === "string") {
+			company.name = payload.name
+		}
+		if (payload.mission !== undefined) {
+			company.mission = payload.mission
+		}
+		if (payload.vision !== undefined) {
+			company.vision = payload.vision
+		}
+		if (payload.emoji !== undefined) {
+			company.emoji = sanitizeOptionalText(payload.emoji)
+		}
+		if (payload.description !== undefined) {
+			company.description = sanitizeOptionalText(payload.description)
+		}
 
 		if (payload.ownerProfile) {
 			company.ownerProfile = this.sanitizeOwnerProfile(payload.ownerProfile)
@@ -463,6 +750,49 @@ export class WorkplaceService {
 		company.updatedAt = new Date().toISOString()
 		await this.persist()
 		this.logState("updateCompany", { companyId: payload.id })
+		return this.getState()
+	}
+
+	public async setCompanyFavorite(payload: SetCompanyFavoritePayload): Promise<WorkplaceState> {
+		const company = this.state.companies.find((entry) => entry.id === payload.companyId)
+		if (!company) {
+			throw new Error(`Company ${payload.companyId} not found`)
+		}
+
+		const nextFavorite = payload.isFavorite === true
+		if (company.isFavorite === nextFavorite) {
+			return this.getState()
+		}
+
+		company.isFavorite = nextFavorite
+		company.updatedAt = new Date().toISOString()
+		await this.persist()
+		this.logState("setCompanyFavorite", { companyId: company.id, isFavorite: nextFavorite })
+		return this.getState()
+	}
+
+	public async deleteCompany(payload: DeleteCompanyPayload): Promise<WorkplaceState> {
+		const index = this.state.companies.findIndex((entry) => entry.id === payload.companyId)
+		if (index === -1) {
+			throw new Error(`Company ${payload.companyId} not found`)
+		}
+
+		this.state.companies.splice(index, 1)
+
+		if (this.state.activeCompanyId === payload.companyId) {
+			const nextCompany = this.state.companies[0]
+			this.state.activeCompanyId = nextCompany?.id
+			this.state.activeEmployeeId = this.resolveActiveEmployeeId(nextCompany)
+		} else {
+			const activeCompany = this.state.companies.find((entry) => entry.id === this.state.activeCompanyId)
+			this.state.activeEmployeeId = this.resolveActiveEmployeeId(activeCompany)
+		}
+
+		await this.persist()
+		this.logState("deleteCompany", {
+			companyId: payload.companyId,
+			nextActiveCompanyId: this.state.activeCompanyId,
+		})
 		return this.getState()
 	}
 
@@ -494,6 +824,7 @@ export class WorkplaceService {
 		}
 
 		company.employees.push(employee)
+		this.sanitizeWorkdayState(company)
 		company.updatedAt = new Date().toISOString()
 		if (!company.activeEmployeeId) {
 			company.activeEmployeeId = employee.id
@@ -838,6 +1169,7 @@ export class WorkplaceService {
 		if (this.state.activeCompanyId === company.id) {
 			this.state.activeEmployeeId = nextActiveId
 		}
+		this.sanitizeWorkdayState(company)
 		company.updatedAt = now
 		await this.persist()
 		this.logState("archiveEmployee", {
@@ -1235,6 +1567,305 @@ export class WorkplaceService {
 		return this.getState()
 	}
 
+	public async startWorkday(payload: StartWorkdayPayload): Promise<WorkplaceState> {
+		const company = this.state.companies.find((entry) => entry.id === payload.companyId)
+		if (!company) {
+			throw new Error(`Company ${payload.companyId} not found`)
+		}
+
+		const workday = this.sanitizeWorkdayState(company)
+		const now = new Date().toISOString()
+		const activeEmployeeIds = this.resolveActiveEmployeesForWorkday(company, payload.employeeIds)
+		const reason = payload.reason?.trim()
+
+		workday.status = "active"
+		workday.startedAt = now
+		workday.haltedAt = undefined
+		workday.lastActivationReason = reason && reason.length > 0 ? reason : undefined
+		workday.activeEmployeeIds = activeEmployeeIds
+		if (payload.employeeIds && payload.employeeIds.length > 0) {
+			const requestedSet = new Set(payload.employeeIds)
+			workday.bypassedEmployeeIds = workday.employeeSchedules
+				.filter(
+					(schedule) =>
+							schedule.availability !== "available" &&
+							schedule.availability !== "flexible" &&
+							!requestedSet.has(schedule.employeeId),
+				)
+				.map((schedule) => schedule.employeeId)
+		} else {
+			workday.bypassedEmployeeIds = workday.employeeSchedules
+				.filter(
+					(schedule) => schedule.availability !== "available" && schedule.availability !== "flexible",
+				)
+				.map((schedule) => schedule.employeeId)
+		}
+		company.workday = workday
+		company.updatedAt = now
+		await this.persist()
+		this.logState("startWorkday", {
+			companyId: company.id,
+			employeeIds: activeEmployeeIds,
+			initiatedBy: payload.initiatedBy,
+			reason: workday.lastActivationReason,
+		})
+
+		let latestState: WorkplaceState | undefined
+		if (workday.autoStartActionItems && activeEmployeeIds.length > 0) {
+			for (const employeeId of activeEmployeeIds) {
+				latestState = await this.startActionItems({
+					companyId: company.id,
+					scope: "employee",
+					employeeId,
+					initiatedBy: payload.initiatedBy ?? "workday",
+				})
+			}
+		}
+
+		return latestState ?? this.getState()
+	}
+
+	public async haltWorkday(payload: HaltWorkdayPayload): Promise<WorkplaceState> {
+		const company = this.state.companies.find((entry) => entry.id === payload.companyId)
+		if (!company) {
+			throw new Error(`Company ${payload.companyId} not found`)
+		}
+
+		const workday = this.sanitizeWorkdayState(company)
+		const now = new Date().toISOString()
+		const previousActive = [...workday.activeEmployeeIds]
+		const reason = payload.reason?.trim()
+
+		if (payload.suspendActiveEmployees && previousActive.length) {
+			const scheduleMap = new Map(workday.employeeSchedules.map((schedule) => [schedule.employeeId, schedule]))
+			for (const employeeId of previousActive) {
+				const schedule = scheduleMap.get(employeeId)
+				if (schedule && schedule.availability !== "suspended") {
+					schedule.availability = "suspended"
+					schedule.lastUpdatedAt = now
+				}
+			}
+		}
+
+		workday.status = "paused"
+		workday.haltedAt = now
+		workday.activeEmployeeIds = []
+		if (reason && reason.length > 0) {
+			workday.lastActivationReason = reason
+		}
+		company.workday = workday
+		this.sanitizeWorkdayState(company)
+		company.updatedAt = now
+		await this.persist()
+		this.logState("haltWorkday", {
+			companyId: company.id,
+			initiatedBy: payload.initiatedBy,
+			reason: workday.lastActivationReason,
+			previousActive,
+			suspended: payload.suspendActiveEmployees === true,
+		})
+
+		return this.getState()
+	}
+
+	public async updateEmployeeSchedule(payload: UpdateEmployeeSchedulePayload): Promise<WorkplaceState> {
+		const company = this.state.companies.find((entry) => entry.id === payload.companyId)
+		if (!company) {
+			throw new Error(`Company ${payload.companyId} not found`)
+		}
+
+		const employee = company.employees.find((entry) => entry.id === payload.employeeId && !entry.deletedAt)
+		if (!employee) {
+			throw new Error(`Employee ${payload.employeeId} not found in company ${payload.companyId}`)
+		}
+
+		const workday = this.sanitizeWorkdayState(company)
+		const scheduleMap = new Map(workday.employeeSchedules.map((schedule) => [schedule.employeeId, schedule]))
+		const now = new Date().toISOString()
+		const timezone = sanitizeOptionalText(payload.timezone)
+		const workdays = Array.isArray(payload.workdays)
+			? payload.workdays.filter((day): day is WorkplaceDayOfWeek => DAY_OF_WEEK_SET.has(day))
+			: undefined
+
+		let schedule = scheduleMap.get(employee.id)
+		if (!schedule) {
+			schedule = {
+				employeeId: employee.id,
+				availability: payload.availability,
+				lastUpdatedAt: now,
+			}
+			workday.employeeSchedules.push(schedule)
+		} else {
+			schedule.availability = payload.availability
+			schedule.lastUpdatedAt = now
+		}
+
+		schedule.timezone = timezone
+		schedule.weeklyHoursTarget =
+			typeof payload.weeklyHoursTarget === "number" && Number.isFinite(payload.weeklyHoursTarget)
+				? payload.weeklyHoursTarget
+				: undefined
+		if (workdays) {
+			schedule.workdays = workdays
+		} else if (payload.workdays !== undefined) {
+			schedule.workdays = []
+		}
+		if (payload.dailyStartMinute !== undefined) {
+			schedule.dailyStartMinute = this.normalizeMinutes(payload.dailyStartMinute)
+		}
+		if (payload.dailyEndMinute !== undefined) {
+			schedule.dailyEndMinute = this.normalizeMinutes(payload.dailyEndMinute)
+		}
+
+		company.workday = workday
+		this.sanitizeWorkdayState(company)
+		company.updatedAt = now
+		await this.persist()
+		this.logState("updateEmployeeSchedule", {
+			companyId: company.id,
+			employeeId: employee.id,
+			availability: schedule.availability,
+		})
+
+		return this.getState()
+	}
+
+	public async createShift(payload: CreateShiftPayload): Promise<WorkplaceState> {
+		const company = this.state.companies.find((entry) => entry.id === payload.companyId)
+		if (!company) {
+			throw new Error(`Company ${payload.companyId} not found`)
+		}
+
+		const employee = company.employees.find((entry) => entry.id === payload.shift.employeeId && !entry.deletedAt)
+		if (!employee) {
+			throw new Error(`Employee ${payload.shift.employeeId} not found in company ${payload.companyId}`)
+		}
+
+		const start = this.normalizeIsoTimestamp(payload.shift.start)
+		const end = this.normalizeIsoTimestamp(payload.shift.end)
+		if (!start || !end) {
+			throw new Error("Shift start and end times must be valid ISO timestamps")
+		}
+		if (new Date(end).getTime() <= new Date(start).getTime()) {
+			throw new Error("Shift end time must come after the start time")
+		}
+
+		const id = typeof payload.shift.id === "string" && payload.shift.id.trim().length > 0 ? payload.shift.id.trim() : uuid()
+		const now = new Date().toISOString()
+		const recurrence =
+			payload.shift.recurrence && payload.shift.recurrence.type === "weekly"
+				? this.sanitizeShiftRecurrence(payload.shift.recurrence)
+				: undefined
+
+		const shift: WorkplaceShift = {
+			id,
+			companyId: company.id,
+			employeeId: employee.id,
+			name: sanitizeOptionalText(payload.shift.name),
+			description: sanitizeOptionalText(payload.shift.description),
+			timezone: sanitizeOptionalText(payload.shift.timezone),
+			start,
+			end,
+			recurrence,
+			createdAt: now,
+			updatedAt: now,
+		}
+
+		company.shifts = company.shifts ?? []
+		company.shifts.push(shift)
+		this.sanitizeCompanyShifts(company)
+		company.updatedAt = now
+		await this.persist()
+		this.logState("createShift", {
+			companyId: company.id,
+			shiftId: shift.id,
+			employeeId: shift.employeeId,
+		})
+
+		return this.getState()
+	}
+
+	public async updateShift(payload: UpdateShiftPayload): Promise<WorkplaceState> {
+		const company = this.state.companies.find((entry) => entry.id === payload.companyId)
+		if (!company) {
+			throw new Error(`Company ${payload.companyId} not found`)
+		}
+
+		company.shifts = company.shifts ?? []
+		const index = company.shifts.findIndex((entry) => entry.id === payload.shift.id)
+		if (index === -1) {
+			throw new Error(`Shift ${payload.shift.id} not found in company ${payload.companyId}`)
+		}
+
+		const employee = company.employees.find((entry) => entry.id === payload.shift.employeeId && !entry.deletedAt)
+		if (!employee) {
+			throw new Error(`Employee ${payload.shift.employeeId} not found in company ${payload.companyId}`)
+		}
+
+		const start = this.normalizeIsoTimestamp(payload.shift.start)
+		const end = this.normalizeIsoTimestamp(payload.shift.end)
+		if (!start || !end) {
+			throw new Error("Shift start and end times must be valid ISO timestamps")
+		}
+		if (new Date(end).getTime() <= new Date(start).getTime()) {
+			throw new Error("Shift end time must come after the start time")
+		}
+
+		const recurrence =
+			payload.shift.recurrence && payload.shift.recurrence.type === "weekly"
+				? this.sanitizeShiftRecurrence(payload.shift.recurrence)
+				: undefined
+		const existing = company.shifts[index]
+		const now = new Date().toISOString()
+		const updated: WorkplaceShift = {
+			...existing,
+			employeeId: employee.id,
+			name: sanitizeOptionalText(payload.shift.name),
+			description: sanitizeOptionalText(payload.shift.description),
+			timezone: sanitizeOptionalText(payload.shift.timezone),
+			start,
+			end,
+			recurrence,
+			updatedAt: now,
+		}
+
+		company.shifts[index] = updated
+		this.sanitizeCompanyShifts(company)
+		company.updatedAt = now
+		await this.persist()
+		this.logState("updateShift", {
+			companyId: company.id,
+			shiftId: updated.id,
+			employeeId: updated.employeeId,
+		})
+
+		return this.getState()
+	}
+
+	public async deleteShift(payload: DeleteShiftPayload): Promise<WorkplaceState> {
+		const company = this.state.companies.find((entry) => entry.id === payload.companyId)
+		if (!company) {
+			throw new Error(`Company ${payload.companyId} not found`)
+		}
+
+		company.shifts = company.shifts ?? []
+		const index = company.shifts.findIndex((entry) => entry.id === payload.shiftId)
+		if (index === -1) {
+			throw new Error(`Shift ${payload.shiftId} not found in company ${payload.companyId}`)
+		}
+
+		company.shifts.splice(index, 1)
+		this.sanitizeCompanyShifts(company)
+		company.updatedAt = new Date().toISOString()
+		await this.persist()
+		this.logState("deleteShift", {
+			companyId: company.id,
+			shiftId: payload.shiftId,
+		})
+
+		return this.getState()
+	}
+
 	public async createActionStatus(payload: CreateActionStatusPayload): Promise<WorkplaceState> {
 		const company = this.state.companies.find((entry) => entry.id === payload.companyId)
 		if (!company) {
@@ -1286,6 +1917,10 @@ export class WorkplaceService {
 	private async persist(): Promise<void> {
 		await this.context.globalState.update(STORAGE_KEY, this.state)
 		this.logState("persist")
+		const snapshot = cloneWorkplaceState(this.state)
+		if (this.stateObserver?.onStatePersisted) {
+			await this.stateObserver.onStatePersisted(snapshot)
+		}
 	}
 
 	private resolveInProgressStatusId(company: WorkplaceCompany): string | undefined {

@@ -52,6 +52,20 @@ export const poolSearchRequestSchema = z.object({
 
 export type PoolSearchRequest = z.infer<typeof poolSearchRequestSchema>
 
+export const poolAnalysisQuerySchema = z.object({
+	limit: z.coerce.number().int().positive().max(500).optional(),
+	status: z.enum(poolItemStatusValues).optional(),
+	since: z.string().datetime().optional(),
+	includeFiles: z
+		.union([z.literal("true"), z.literal("false")])
+		.optional()
+		.transform((value) => (value === undefined ? undefined : value === "true")),
+	includeMessages: z
+		.union([z.literal("true"), z.literal("false")])
+		.optional()
+		.transform((value) => (value === undefined ? undefined : value === "true")),
+})
+
 export type PoolItemStatus = (typeof poolItemStatusValues)[number]
 export type PoolSpeaker = (typeof poolSpeakerValues)[number]
 
@@ -97,6 +111,32 @@ export interface PoolItemsResponse {
 	items: PoolItem[]
 	hasMore: boolean
 	nextCursor?: string
+}
+
+export interface PoolAnalysisItem {
+	id: string
+	kind: PoolItemKind
+	status: PoolItemStatus
+	accountId: string
+	userId: string
+	createdAt: string
+	embedding: number[]
+	text: string
+	sessionId?: string
+	messageTimestamp?: string
+	tokens?: number
+	references?: string[]
+	filename?: string
+	mimeType?: string
+	sizeBytes?: number
+	source?: string
+}
+
+export interface PoolAnalysisResponse {
+	items: PoolAnalysisItem[]
+	totalItems: number
+	embeddingDimension: number
+	generatedAt: string
 }
 
 export const poolSessionContextSchema = z.object({

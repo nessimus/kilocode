@@ -30,6 +30,13 @@ const BottomControls: React.FC<BottomControlsProps> = ({ showApiConfig = false }
 		}
 	}
 
+	const openChatsHub = () => {
+		vscode.postMessage({ type: "action", action: "switchTab", tab: "chatsHub" })
+		if (typeof window !== "undefined") {
+			window.postMessage({ type: "action", action: "switchTab", tab: "chatsHub" }, "*")
+		}
+	}
+
 	const openBrainstorm = () => {
 		vscode.postMessage({ type: "action", action: "switchTab", tab: "brainstorm" })
 		if (typeof window !== "undefined") {
@@ -46,6 +53,7 @@ const BottomControls: React.FC<BottomControlsProps> = ({ showApiConfig = false }
 
 	const outerGateLabel = t("common:outerGate.title", { defaultValue: "Outer Gates" }) as string
 	const agentHubLabel = t("common:hub.title", { defaultValue: "Agent Hub" }) as string
+	const chatsHubLabel = t("common:chatsHub.title", { defaultValue: "Chats Hub" }) as string
 	const brainstormHubLabel = t("common:brainstorm.title", { defaultValue: "Brainstorm Hub" }) as string
 	const actionHubLabel = t("common:actionHub.title", { defaultValue: "Action Items Hub" }) as string
 
@@ -64,6 +72,12 @@ const BottomControls: React.FC<BottomControlsProps> = ({ showApiConfig = false }
 					title={agentHubLabel}
 					ariaLabel={agentHubLabel}
 					onClick={openHub}
+				/>
+				<BottomButton
+					iconClass="codicon-comment-discussion"
+					title={chatsHubLabel}
+					ariaLabel={chatsHubLabel}
+					onClick={openChatsHub}
 				/>
 				<BottomButton
 					iconClass="codicon-lightbulb"

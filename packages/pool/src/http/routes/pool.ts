@@ -5,6 +5,7 @@ import { PoolDigestScheduler } from "../../services/poolDigestScheduler.js"
 import { PoolDigestService } from "../../services/poolDigestService.js"
 import { PoolRepository } from "../../services/poolRepository.js"
 import {
+	poolAnalysisQuerySchema,
 	poolFileRequestSchema,
 	poolItemsQuerySchema,
 	poolMessagesRequestSchema,
@@ -188,6 +189,41 @@ export function createPoolRouter(
 				lastActivityAt: digest.lastActivityAt,
 				metadata: digest.metadata,
 			})
+		} catch (error) {
+			handleError(res, error)
+		}
+	})
+
+	router.get("/analysis/passions", async (req, res) => {
+		try {
+			const limitParam = Array.isArray(req.query.limit) ? req.query.limit[0] : req.query.limit
+			const statusParam = Array.isArray(req.query.status) ? req.query.status[0] : req.query.status
+			const sinceParam = Array.isArray(req.query.since) ? req.query.since[0] : req.query.since
+			const includeFilesParam = Array.isArray(req.query.includeFiles)
+				? req.query.includeFiles[0]
+				: req.query.includeFiles
+			const includeMessagesParam = Array.isArray(req.query.includeMessages)
+				? req.query.includeMessages[0]
+				: req.query.includeMessages
+
+			const parsed = poolAnalysisQuerySchema.parse({
+				limit: limitParam,
+				status: statusParam,
+				since: sinceParam,
+				includeFiles: includeFilesParam,
+				includeMessages: includeMessagesParam,
+			})
+
+			const sinceDate = parsed.since ? new Date(parsed.since) : undefined
+			const result = await repository.listAnalysisItems(req.accountId!, {
+				limit: parsed.limit,
+				status: parsed.status,
+				since: sinceDate,
+				includeFiles: parsed.includeFiles,
+				includeMessages: parsed.includeMessages,
+			})
+
+			res.json(result)
 		} catch (error) {
 			handleError(res, error)
 		}

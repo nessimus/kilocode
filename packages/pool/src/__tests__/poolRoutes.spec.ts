@@ -3,6 +3,8 @@ import request from "supertest"
 
 import { createPoolServer } from "../http/server.js"
 import type {
+	PoolAnalysisItem,
+	PoolAnalysisResponse,
 	PoolDigestMetadata,
 	PoolDigestPayload,
 	PoolFileInput,
@@ -34,6 +36,7 @@ class FakePoolRepository {
 	private messages: Array<PoolMessageInput & { accountId: string; userId: string }> = []
 	private files: Array<PoolFileInput & { accountId: string; userId: string; createdAt: string }> = []
 	private sessions: Map<string, FakeSessionRecord> = new Map()
+	private analysisItems: PoolAnalysisItem[] = []
 
 	async insertMessages(accountId: string, userId: string, messages: PoolMessageInput[]) {
 		this.messages.push(...messages.map((message) => ({ ...message, accountId, userId })))
@@ -172,13 +175,14 @@ class FakePoolRepository {
 		}
 
 		const lastMessage = session.messages.at(-1)
+		const firstUserMessage = session.firstUserMessage?.trim()
 		return {
 			id: session.id,
 			accountId: session.accountId,
 			userId: session.userId,
 			companyId: session.companyId,
 			companyName: session.companyName,
-			title: session.firstUserMessage ?? session.companyName ?? "Untitled Chat",
+			title: firstUserMessage || "Untitled Chat",
 			preview: lastMessage?.text ?? session.firstUserMessage ?? "No messages yet.",
 			firstUserMessage: session.firstUserMessage,
 			messageCount: session.messages.length,
@@ -283,6 +287,24 @@ class FakePoolRepository {
 
 		return matches
 	}
+
+	setAnalysisItems(items: PoolAnalysisItem[]) {
+		this.analysisItems = items
+	}
+
+	async listAnalysisItems(
+		accountId: string,
+		options: { limit?: number } = {},
+	): Promise<PoolAnalysisResponse> {
+		const filtered = this.analysisItems.filter((item) => item.accountId === accountId)
+		const limit = options.limit && options.limit > 0 ? options.limit : filtered.length
+		return {
+			items: filtered.slice(0, limit),
+			totalItems: filtered.length,
+			embeddingDimension: filtered[0]?.embedding.length ?? 0,
+			generatedAt: new Date("2025-09-24T00:00:00Z").toISOString(),
+		}
+	}
 }
 
 class FakeDigestService {
@@ -356,6 +378,7 @@ describe("pool routes", () => {
 		;(repository as any).messages = []
 		;(repository as any).files = []
 		;(repository as any).sessions = new Map()
+		;(repository as any).analysisItems = []
 		digestService.ensured = []
 		digestScheduler.scheduled = []
 	})
@@ -446,6 +469,47 @@ describe("pool routes", () => {
 		expect(response.body.tokenCount).toBe(12)
 		expect(digestService.ensured[0]).toEqual({ accountId: "acct", userId: "user", reason: "manual" })
 		expect(digestScheduler.scheduled.at(-1)).toEqual({ accountId: "acct", userId: "user", reason: "manual" })
+	})
+
+	it("returns analysis items for the passion map", async () => {
+		repository.setAnalysisItems([
+			{
+				id: "msg-1",
+				kind: "message",
+				status: "captured",
+				accountId: "acct",
+				userId: "user",
+				createdAt: new Date("2025-09-23T16:00:00Z").toISOString(),
+				embedding: Array.from({ length: 4 }, (_, index) => (index + 1) / 10),
+				text: "Passion project around eco retreats",
+				sessionId: "sess-1",
+			},
+			{
+				id: "file-1",
+				kind: "file",
+				status: "ready",
+				accountId: "acct",
+				userId: "user",
+				createdAt: new Date("2025-09-23T14:00:00Z").toISOString(),
+				embedding: Array.from({ length: 4 }, (_, index) => (index + 2) / 10),
+				text: "Retreat survey results",
+				filename: "survey.csv",
+				mimeType: "text/csv",
+				sizeBytes: 2048,
+				source: "upload",
+			},
+		])
+
+		const response = await request(server.app)
+			.get("/pool/analysis/passions")
+			.set("x-account-id", "acct")
+			.set("x-user-id", "user")
+			.expect(200)
+
+		expect(response.body.items).toHaveLength(2)
+		expect(response.body.items[0].text).toContain("Passion project")
+		expect(response.body.embeddingDimension).toBeGreaterThan(0)
+		expect(new Date(response.body.generatedAt).toString()).not.toBe("Invalid Date")
 	})
 
 	it("creates sessions and persists messages via session routes", async () => {

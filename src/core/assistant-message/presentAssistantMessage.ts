@@ -1,7 +1,7 @@
 import cloneDeep from "clone-deep"
 import { serializeError } from "serialize-error"
 
-import type { ToolName, ClineAsk, ToolProgressStatus } from "@roo-code/types"
+import type { ToolName, ClineAsk, ToolProgressStatus, ToolResultMessagePayload } from "@roo-code/types"
 import { TelemetryService } from "@roo-code/telemetry"
 
 import { defaultModeSlug, getModeBySlug } from "../../shared/modes"
@@ -33,8 +33,10 @@ import { updateTodoListTool } from "../tools/updateTodoListTool"
 import { runSlashCommandTool } from "../tools/runSlashCommandTool"
 import { upsertSopTool } from "../tools/upsertSopTool"
 import { generateImageTool } from "../tools/generateImageTool"
+import { createCompanyTool } from "../tools/createCompanyTool"
 import { createEmployeeTool } from "../tools/createEmployeeTool"
 import { updateEmployeeTool } from "../tools/updateEmployeeTool"
+import { updateCompanyTool } from "../tools/updateCompanyTool"
 import { createDepartmentTool } from "../tools/createDepartmentTool"
 import { updateDepartmentTool } from "../tools/updateDepartmentTool"
 import { createTeamTool } from "../tools/createTeamTool"
@@ -46,6 +48,7 @@ import { archiveTeamTool } from "../tools/archiveTeamTool"
 import { archiveDepartmentTool } from "../tools/archiveDepartmentTool"
 import { removeEmployeeFromTeamTool } from "../tools/removeEmployeeFromTeamTool"
 import { removeTeamFromDepartmentTool } from "../tools/removeTeamFromDepartmentTool"
+import { deleteCompanyTool } from "../tools/deleteCompanyTool"
 import { listCompaniesTool } from "../tools/listCompaniesTool"
 import { listDepartmentsTool } from "../tools/listDepartmentsTool"
 import { listTeamsTool } from "../tools/listTeamsTool"
@@ -65,6 +68,119 @@ import { codebaseSearchTool } from "../tools/codebaseSearchTool"
 import { experiments, EXPERIMENT_IDS } from "../../shared/experiments"
 import { applyDiffToolLegacy } from "../tools/applyDiffTool"
 import { reportExcessiveRecursion, yieldPromise } from "../kilocode"
+
+const TOOL_PARAM_VALUE_PREVIEW_LENGTH = 300
+const TOOL_PARAM_LIMIT = 20
+const TOOL_RESULT_PREVIEW_LENGTH = 8000
+
+const ADDITIONAL_PARAMETERS_LABEL = "Additional Parameters"
+
+function truncateValue(value: string, limit: number): { text: string; truncated: boolean; overflow: number } {
+	if (value.length <= limit) {
+		return { text: value, truncated: false, overflow: 0 }
+	}
+
+	const overflow = value.length - limit
+	return {
+		text: `${value.slice(0, limit)}… (+${overflow} chars)`,
+		truncated: true,
+		overflow,
+	}
+}
+
+function toTitleCaseKey(value: string): string {
+	return value
+		.split(/[_\s]+/)
+		.filter(Boolean)
+		.map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+		.join(" ")
+}
+
+function formatToolDisplayName(toolName: string): string {
+	if (!toolName) {
+		return "Tool"
+	}
+
+	const displayName = toTitleCaseKey(toolName)
+	return displayName.length > 0 ? displayName : "Tool"
+}
+
+function summarizeToolParams(
+	params: Partial<Record<ToolParamName, string>> | undefined,
+): ToolResultMessagePayload["params"] {
+	if (!params) {
+		return undefined
+	}
+
+	const entries = Object.entries(params).filter(([_, value]) => value !== undefined && value !== null && value !== "")
+
+	if (entries.length === 0) {
+		return undefined
+	}
+
+	const limitedEntries = entries.slice(0, TOOL_PARAM_LIMIT)
+
+	const summaries = limitedEntries.map(([key, value]) => {
+		const { text } = truncateValue(String(value ?? ""), TOOL_PARAM_VALUE_PREVIEW_LENGTH)
+		return {
+			key,
+			label: toTitleCaseKey(key),
+			value: text,
+		}
+	})
+
+	if (entries.length > TOOL_PARAM_LIMIT) {
+		const remaining = entries.length - TOOL_PARAM_LIMIT
+		summaries.push({
+			key: "__additional__",
+			label: ADDITIONAL_PARAMETERS_LABEL,
+			value: `+${remaining} more not shown`,
+		})
+	}
+
+	return summaries
+}
+
+function normalizeToolResponse(content: ToolResponse): {
+	text?: string
+	truncated: boolean
+	images?: string[]
+} {
+	if (typeof content === "string") {
+		const { text, truncated } = truncateValue(content, TOOL_RESULT_PREVIEW_LENGTH)
+		return {
+			text: text || undefined,
+			truncated,
+			images: undefined,
+		}
+	}
+
+	const textSegments: string[] = []
+	const images: string[] = []
+
+	for (const block of content) {
+		if (block.type === "text") {
+			textSegments.push(block.text ?? "")
+		} else if (block.type === "image") {
+			const source = block.source
+			if (source?.type === "base64") {
+				const data = source.data
+				if (typeof data === "string" && data.length > 0) {
+					images.push(data)
+				}
+			}
+		}
+	}
+
+	const combinedText = textSegments.join("\n\n")
+	const { text, truncated } = truncateValue(combinedText, TOOL_RESULT_PREVIEW_LENGTH)
+
+	return {
+		text: text || undefined,
+		truncated,
+		images: images.length > 0 ? images : undefined,
+	}
+}
 
 /**
  * Processes and presents assistant message content to the user interface.
@@ -269,10 +385,19 @@ export async function presentAssistantMessage(cline: Task, recursionDepth: numbe
 						return `[${block.name} for '${block.params.command}'${block.params.args ? ` with args: ${block.params.args}` : ""}]`
 					case "generate_image":
 						return `[${block.name} for '${block.params.path}']`
+					case "create_company": {
+						const targetName = block.params.name ?? (block.params.companies ? "company" : "(unnamed)")
+						return `[${block.name} for '${targetName}']`
+					}
 					case "create_employee":
 						return `[${block.name} for '${block.params.name}'${
 							block.params.role ? ` as ${block.params.role}` : ""
 						}]`
+					case "update_company": {
+						const company =
+							block.params.company_id ?? (block.params.company_updates ? "multiple" : "(unspecified)")
+						return `[${block.name} for company '${company}']`
+					}
 					case "update_employee": {
 						const employee =
 							block.params.employee_id ?? (block.params.employee_updates ? "multiple" : "(unspecified)")
@@ -313,6 +438,10 @@ export async function presentAssistantMessage(cline: Task, recursionDepth: numbe
 						const department =
 							block.params.department_id ?? (block.params.assignments ? "multiple" : "(detach)")
 						return `[${block.name} assigning team '${team}' to department '${department}']`
+					}
+					case "delete_company": {
+						const company = block.params.company_id ?? (block.params.companies ? "multiple" : "(unspecified)")
+						return `[${block.name} request for company '${company}']`
 					}
 					case "archive_employee": {
 						const employee =
@@ -391,6 +520,35 @@ export async function presentAssistantMessage(cline: Task, recursionDepth: numbe
 				} else {
 					cline.userMessageContent.push(...content)
 				}
+
+				const normalizedResult = normalizeToolResponse(content)
+				const displayText = normalizedResult.text && normalizedResult.text.trim().length > 0
+					? normalizedResult.text
+					: "(tool did not return anything)"
+
+				const toolResultPayload: ToolResultMessagePayload = {
+					toolName: block.name,
+					displayName: formatToolDisplayName(block.name),
+					description: toolDescription(),
+					params: summarizeToolParams(block.params),
+					resultText: displayText,
+					resultTruncated: normalizedResult.truncated,
+					resultImages: normalizedResult.images,
+				}
+
+				cline
+					.say(
+						"tool_result",
+						displayText,
+						normalizedResult.images,
+						false,
+						undefined,
+						undefined,
+						{ metadata: { toolResult: toolResultPayload } },
+					)
+					.catch((error) => {
+						console.error("[Task#presentAssistantMessage] Failed to present tool result:", error)
+					})
 
 				// Once a tool result has been collected, ignore all other tool
 				// uses since we should only ever present one tool result per
@@ -703,8 +861,14 @@ export async function presentAssistantMessage(cline: Task, recursionDepth: numbe
 				case "generate_image":
 					await generateImageTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
 					break
+				case "create_company":
+					await createCompanyTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					break
 				case "create_employee":
 					await createEmployeeTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					break
+				case "update_company":
+					await updateCompanyTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
 					break
 				case "update_employee":
 					await updateEmployeeTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
@@ -755,6 +919,9 @@ export async function presentAssistantMessage(cline: Task, recursionDepth: numbe
 					break
 				case "list_action_items":
 					await listActionItemsTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					break
+				case "delete_company":
+					await deleteCompanyTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
 					break
 				case "archive_employee":
 					await archiveEmployeeTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)

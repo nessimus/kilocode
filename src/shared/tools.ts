@@ -74,6 +74,11 @@ export const toolParamNames = [
 	"action_item_id",
 	"action_item_ids",
 	"name",
+	"emoji",
+	"vision",
+	"mission",
+	"owner_profile",
+	"update_default_owner_profile",
 	"role",
 	"personality",
 	"mbti_type",
@@ -81,6 +86,8 @@ export const toolParamNames = [
 	"profile_image_url",
 	"custom_attributes",
 	"is_executive_manager",
+	"companies",
+	"company_updates",
 	"employees",
 	"employee_updates",
 	"departments",
@@ -241,6 +248,42 @@ export interface EditFileToolUse extends ToolUse {
 export interface GenerateImageToolUse extends ToolUse {
 	name: "generate_image"
 	params: Partial<Pick<Record<ToolParamName, string>, "prompt" | "path" | "image">>
+}
+
+export interface CreateCompanyToolUse extends ToolUse {
+	name: "create_company"
+	params: Required<Pick<Record<ToolParamName, string>, "name">> &
+		Partial<
+			Pick<
+				Record<ToolParamName, string>,
+				| "vision"
+				| "mission"
+				| "owner_profile"
+				| "update_default_owner_profile"
+				| "companies"
+			>
+		>
+}
+
+export interface UpdateCompanyToolUse extends ToolUse {
+	name: "update_company"
+	params: Required<Pick<Record<ToolParamName, string>, "company_id">> &
+		Partial<
+			Pick<
+				Record<ToolParamName, string>,
+				| "name"
+				| "vision"
+				| "mission"
+				| "owner_profile"
+				| "update_default_owner_profile"
+				| "company_updates"
+			>
+		>
+}
+
+export interface DeleteCompanyToolUse extends ToolUse {
+	name: "delete_company"
+	params: Partial<Pick<Record<ToolParamName, string>, "company_id" | "companies">>
 }
 
 export interface CreateEmployeeToolUse extends ToolUse {
@@ -468,12 +511,15 @@ export const TOOL_DISPLAY_NAMES: Record<ToolName, string> = {
 	run_slash_command: "run slash command",
 	upsert_sop: "create or update SOP",
 	generate_image: "generate images",
+	create_company: "create company",
+	update_company: "update company",
 	create_employee: "create workplace employee",
 	update_employee: "update workplace employee",
 	create_department: "create department",
 	update_department: "update department",
 	create_team: "create team",
 	update_team: "update team",
+	delete_company: "request company deletion",
 	assign_employee_to_team: "assign employee to team",
 	assign_team_to_department: "assign team to department",
 	archive_employee: "archive workplace employee",
@@ -517,12 +563,15 @@ export const TOOL_GROUPS: Record<ToolGroup, ToolGroupConfig> = {
 			"search_and_replace",
 			"new_rule", // kilocode_change
 			"generate_image",
+			"create_company",
+			"update_company",
 			"create_employee",
 			"update_employee",
 			"create_department",
 			"update_department",
 			"create_team",
 			"update_team",
+			"delete_company",
 			"assign_employee_to_team",
 			"assign_team_to_department",
 			"archive_employee",

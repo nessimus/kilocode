@@ -18,6 +18,7 @@ import {
 
 import { Mode } from "./modes"
 import type { HubAgentBlueprint, HubSettingsUpdate } from "./hub"
+import type { OuterGateInsightUpdate } from "./golden/outerGate"
 import type {
 	ArchiveDepartmentPayload,
 	ArchiveEmployeePayload,
@@ -29,17 +30,25 @@ import type {
 	CreateCompanyPayload,
 	CreateDepartmentPayload,
 	CreateEmployeePayload,
+	CreateShiftPayload,
 	CreateTeamPayload,
+	DeleteCompanyPayload,
 	DeleteActionItemPayload,
+	DeleteShiftPayload,
 	RemoveEmployeeFromTeamPayload,
 	RemoveTeamFromDepartmentPayload,
 	UpdateActionItemPayload,
 	UpdateCompanyPayload,
 	UpdateDepartmentPayload,
 	UpdateEmployeePayload,
+	UpdateShiftPayload,
 	UpdateTeamPayload,
 	UpsertActionStatusPayload,
 	StartActionItemsPayload,
+	SetCompanyFavoritePayload,
+	StartWorkdayPayload,
+	HaltWorkdayPayload,
+	UpdateEmployeeSchedulePayload,
 } from "./golden/workplace"
 export type ClineAskResponse =
 	| "yesButtonClicked"
@@ -152,6 +161,8 @@ export interface WebviewMessage {
 		| "createDepartment"
 		| "updateDepartment"
 		| "updateCompany"
+		| "setCompanyFavorite"
+		| "deleteCompany"
 		| "createEmployee"
 		| "updateEmployee"
 		| "archiveEmployee"
@@ -171,6 +182,12 @@ export interface WebviewMessage {
 		| "startActionItems"
 		| "createActionStatus"
 		| "updateActionStatus"
+		| "startWorkday"
+		| "haltWorkday"
+		| "updateEmployeeSchedule"
+		| "createShift"
+		| "updateShift"
+		| "deleteShift"
 		| "toggleToolEnabledForPrompt"
 		| "toggleMcpServer"
 		| "updateMcpTimeout"
@@ -221,6 +238,9 @@ export interface WebviewMessage {
 		| "outerGateSessionsNew"
 		| "outerGateSessionsActivate"
 		| "outerGateSessionsLoadMore"
+		| "outerGateGeneratePassionMap"
+		| "outerGateUpdateInsight"
+		| "outerGateDeleteInsight"
 		| "ghostServiceSettings" // kilocode_change
 		| "includeTaskHistoryInEnhance"
 		| "updateExperimental"
@@ -371,6 +391,8 @@ export interface WebviewMessage {
 	cloverSessionCompanyName?: string
 	cloverSessionCursor?: string
 	cloverSessionLimit?: number
+	outerGateInsightId?: string
+	outerGateInsightUpdates?: OuterGateInsightUpdate
 	editedMessageContent?: string
 	tab?:
 		| "settings"
@@ -378,6 +400,7 @@ export interface WebviewMessage {
 		| "mcp"
 		| "modes"
 		| "lobby"
+		| "chatsHub"
 		| "marketplace"
 		| "cloud"
 		| "profile"
@@ -474,6 +497,8 @@ export interface WebviewMessage {
 	agentId?: string
 	workplaceCompanyPayload?: CreateCompanyPayload
 	workplaceCompanyUpdate?: UpdateCompanyPayload
+	workplaceCompanyFavorite?: SetCompanyFavoritePayload
+	workplaceCompanyDelete?: DeleteCompanyPayload
 	workplaceDepartmentPayload?: CreateDepartmentPayload
 	workplaceDepartmentUpdate?: UpdateDepartmentPayload
 	workplaceEmployeePayload?: CreateEmployeePayload
@@ -495,6 +520,12 @@ export interface WebviewMessage {
 	workplaceActionStatusPayload?: CreateActionStatusPayload
 	workplaceActionStatusUpdate?: UpsertActionStatusPayload
 	workplaceActionStart?: StartActionItemsPayload
+	workplaceWorkdayStart?: StartWorkdayPayload
+	workplaceWorkdayHalt?: HaltWorkdayPayload
+	workplaceEmployeeScheduleUpdate?: UpdateEmployeeSchedulePayload
+	workplaceShiftCreate?: CreateShiftPayload
+	workplaceShiftUpdate?: UpdateShiftPayload
+	workplaceShiftDelete?: DeleteShiftPayload
 	surfaceRecord?: EndlessSurfaceRecord
 	surfaceId?: string
 	surfaceTitle?: string

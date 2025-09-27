@@ -40,6 +40,8 @@ const MBTI_PLACEHOLDER_VALUE = "__mbti_not_set__"
 
 interface OwnerFormState {
 	companyName: string
+	companyEmoji: string
+	companyDescription: string
 	ownerName: string
 	ownerFirstName: string
 	ownerLastName: string
@@ -81,6 +83,8 @@ const buildOwnerFormState = (company?: WorkplaceCompany, defaults?: WorkplaceOwn
 
 	return {
 		companyName: company?.name ?? "",
+		companyEmoji: company?.emoji ?? "",
+		companyDescription: company?.description ?? "",
 		ownerName: resolvedName,
 		ownerFirstName: derivedFirstName,
 		ownerLastName: derivedLastName,
@@ -180,10 +184,14 @@ const IdentityDesigner = () => {
 		const lastName = ownerForm.ownerLastName.trim()
 		const fullNameFromParts = [firstName, lastName].filter(Boolean).join(" ")
 		const normalizedName = ownerForm.ownerName.trim() || fullNameFromParts
+		const emojiValue = ownerForm.companyEmoji.trim()
+		const descriptionValue = ownerForm.companyDescription.trim()
 
 		updateCompany({
 			id: activeCompany.id,
 			name: ownerForm.companyName.trim(),
+			emoji: emojiValue ? emojiValue : "",
+			description: descriptionValue ? descriptionValue : "",
 			mission: ownerForm.mission.trim() || undefined,
 			vision: ownerForm.vision.trim() || undefined,
 			ownerProfile: {
@@ -211,9 +219,13 @@ const IdentityDesigner = () => {
 		const lastName = ownerForm.ownerLastName.trim()
 		const fullNameFromParts = [firstName, lastName].filter(Boolean).join(" ")
 		const normalizedName = ownerForm.ownerName.trim() || fullNameFromParts
+		const emojiValue = ownerForm.companyEmoji.trim()
+		const descriptionValue = ownerForm.companyDescription.trim()
 
 		createCompany({
 			name: ownerForm.companyName.trim(),
+			emoji: emojiValue ? emojiValue : undefined,
+			description: descriptionValue ? descriptionValue : undefined,
 			mission: ownerForm.mission.trim() || undefined,
 			vision: ownerForm.vision.trim() || undefined,
 			ownerProfile: {
@@ -328,6 +340,31 @@ const IdentityDesigner = () => {
 									setOwnerForm((prev) => ({ ...prev, ownerName: event.target.value }))
 								}
 								placeholder="Alex Founder"
+							/>
+						</div>
+					</div>
+
+					<div className="flex flex-col gap-3 md:flex-row md:items-start">
+						<div className="flex flex-col gap-2 md:w-[140px]">
+							<label className="text-sm font-medium text-[var(--vscode-foreground)]">Company emoji</label>
+							<Input
+								value={ownerForm.companyEmoji}
+								onChange={(event) =>
+									setOwnerForm((prev) => ({ ...prev, companyEmoji: event.target.value }))
+								}
+								placeholder="🚀"
+								maxLength={4}
+							/>
+						</div>
+						<div className="flex flex-1 flex-col gap-2">
+							<label className="text-sm font-medium text-[var(--vscode-foreground)]">Company description</label>
+							<Textarea
+								value={ownerForm.companyDescription}
+								onChange={(event) =>
+									setOwnerForm((prev) => ({ ...prev, companyDescription: event.target.value }))
+								}
+								placeholder="Summarize what this company is building."
+								rows={3}
 							/>
 						</div>
 					</div>

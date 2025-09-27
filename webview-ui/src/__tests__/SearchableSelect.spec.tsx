@@ -316,4 +316,49 @@ describe("SearchableSelect", () => {
 		expect(preventDefaultSpy).toHaveBeenCalled()
 		expect(stopPropagationSpy).toHaveBeenCalled()
 	})
+
+	it("shows a creatable option and calls onCreateOption for new entries", async () => {
+		const user = userEvent.setup()
+		const onCreateOption = vi.fn().mockResolvedValue(undefined)
+		render(
+			<SearchableSelect
+				{...defaultProps}
+				onCreateOption={onCreateOption}
+				createOptionLabel={(value) => `Add ${value}`}
+			/>,
+		)
+
+		const trigger = screen.getByRole("combobox")
+		await user.click(trigger)
+
+		const searchInput = screen.getByPlaceholderText("Search options...")
+		await user.type(searchInput, "New Status")
+
+		const createOption = await screen.findByText("Add New Status")
+		await user.click(createOption)
+
+		await waitFor(() => {
+			expect(onCreateOption).toHaveBeenCalledWith("New Status")
+		})
+	})
+
+	it("hides the creatable option when matching label already exists", async () => {
+		const user = userEvent.setup()
+		render(
+			<SearchableSelect
+				{...defaultProps}
+				onCreateOption={vi.fn()}
+			/>,
+		)
+
+		const trigger = screen.getByRole("combobox")
+		await user.click(trigger)
+
+		const searchInput = screen.getByPlaceholderText("Search options...")
+		await user.type(searchInput, "option 2")
+
+		await waitFor(() => {
+			expect(screen.queryByText('Create "option 2"')).not.toBeInTheDocument()
+		})
+	})
 })

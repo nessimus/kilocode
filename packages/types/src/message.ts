@@ -171,12 +171,33 @@ export const clineSays = [
 	"condense_context",
 	"condense_context_error",
 	"codebase_search_result",
+	"tool_result",
 	"user_edit_todos",
 ] as const
 
 export const clineSaySchema = z.enum(clineSays)
 
 export type ClineSay = z.infer<typeof clineSaySchema>
+
+const toolResultParamSummarySchema = z.object({
+	key: z.string(),
+	label: z.string(),
+	value: z.string(),
+})
+
+export type ToolResultParamSummary = z.infer<typeof toolResultParamSummarySchema>
+
+export const toolResultMessagePayloadSchema = z.object({
+	toolName: z.string(),
+	displayName: z.string(),
+	description: z.string().optional(),
+	params: z.array(toolResultParamSummarySchema).optional(),
+	resultText: z.string().optional(),
+	resultTruncated: z.boolean().optional(),
+	resultImages: z.array(z.string()).optional(),
+})
+
+export type ToolResultMessagePayload = z.infer<typeof toolResultMessagePayloadSchema>
 
 /**
  * ToolProgressStatus
@@ -232,6 +253,7 @@ export const clineMessageSchema = z.object({
 				})
 				.optional(),
 			kiloCode: kiloCodeMetaDataSchema.optional(),
+			toolResult: toolResultMessagePayloadSchema.optional(),
 		})
 		.optional(),
 })

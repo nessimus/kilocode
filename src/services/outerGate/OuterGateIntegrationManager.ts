@@ -239,6 +239,54 @@ export class OuterGateIntegrationManager {
 		}
 	}
 
+	public getStoredInsightById(id: string): StoredInsight | undefined {
+		return this.storage.getInsight(id)
+	}
+
+	public listStoredInsights(): StoredInsight[] {
+		const toTimestamp = (entry: StoredInsight) => {
+			const reference = entry.capturedAtIso ?? entry.upsertedAtIso
+			if (!reference) {
+				return 0
+			}
+			const parsed = Date.parse(reference)
+			return Number.isNaN(parsed) ? 0 : parsed
+		}
+
+		return this.storage
+			.listInsights()
+			.slice()
+			.sort((a, b) => toTimestamp(b) - toTimestamp(a))
+			.map((insight) => ({ ...insight }))
+	}
+
+	public async upsertInsights(insights: StoredInsight[]): Promise<void> {
+		await this.storage.upsertInsights(insights)
+	}
+
+	public async updateStoredInsight(
+		id: string,
+		updates: Partial<Omit<StoredInsight, "id" | "integrationId">>,
+	): Promise<StoredInsight | undefined> {
+		const existing = this.storage.getInsight(id)
+		if (!existing) {
+			return undefined
+		}
+
+		const merged: StoredInsight = {
+			...existing,
+			...updates,
+			upsertedAtIso: updates.upsertedAtIso ?? new Date().toISOString(),
+		}
+
+		await this.storage.upsertInsights([merged])
+		return merged
+	}
+
+	public async deleteStoredInsight(id: string): Promise<boolean> {
+		return await this.storage.removeInsight(id)
+	}
+
 	public async importNotion(options: {
 		token?: string
 		databaseId?: string

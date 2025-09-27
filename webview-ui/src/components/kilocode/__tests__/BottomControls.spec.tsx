@@ -6,6 +6,7 @@ import { vscode } from "@/utils/vscode"
 const translations: Record<string, string> = {
 	"common:outerGate.title": "Outer Gates",
 	"common:hub.title": "Agent Hub",
+	"common:chatsHub.title": "Chats Hub",
 	"common:brainstorm.title": "Brainstorm Hub",
 	"common:actionHub.title": "Action Items Hub",
 	"common:feedback.title": "Feedback",
@@ -42,20 +43,41 @@ describe("BottomControls", () => {
 
 		const outerGateButton = screen.getByRole("button", { name: "Outer Gates" })
 		const agentButton = screen.getByRole("button", { name: "Agent Hub" })
+		const chatsHubButton = screen.getByRole("button", { name: "Chats Hub" })
 		const brainstormButton = screen.getByRole("button", { name: "Brainstorm Hub" })
 		const actionHubButton = screen.getByRole("button", { name: "Action Items Hub" })
 
 		expect(outerGateButton).toBeInTheDocument()
 		expect(agentButton).toBeInTheDocument()
+		expect(chatsHubButton).toBeInTheDocument()
 		expect(brainstormButton).toBeInTheDocument()
 		expect(actionHubButton).toBeInTheDocument()
 		expect(outerGateButton.getAttribute("aria-label")).toBe("Outer Gates")
 		expect(agentButton.getAttribute("aria-label")).toBe("Agent Hub")
+		expect(chatsHubButton.getAttribute("aria-label")).toBe("Chats Hub")
 		expect(brainstormButton.getAttribute("aria-label")).toBe("Brainstorm Hub")
 		expect(actionHubButton.getAttribute("aria-label")).toBe("Action Items Hub")
 		expect(outerGateButton.nextElementSibling).toBe(agentButton)
-		expect(agentButton.nextElementSibling).toBe(brainstormButton)
+		expect(agentButton.nextElementSibling).toBe(chatsHubButton)
+		expect(chatsHubButton.nextElementSibling).toBe(brainstormButton)
 		expect(brainstormButton.nextElementSibling).toBe(actionHubButton)
+	})
+
+	it("requests Chats Hub navigation on click", () => {
+		render(<BottomControls />)
+		const chatsHubButton = screen.getByRole("button", { name: "Chats Hub" })
+		const postMessageSpy = vi.spyOn(window, "postMessage")
+
+		fireEvent.click(chatsHubButton)
+
+		expect(vscode.postMessage).toHaveBeenCalledWith({
+			type: "action",
+			action: "switchTab",
+			tab: "chatsHub",
+		})
+		expect(postMessageSpy).toHaveBeenCalledWith({ type: "action", action: "switchTab", tab: "chatsHub" }, "*")
+
+		postMessageSpy.mockRestore()
 	})
 
 	it("requests Brainstorm Hub navigation on click", () => {

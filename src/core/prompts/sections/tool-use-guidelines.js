@@ -1,0 +1,43 @@
+export function getToolUseGuidelinesSection(codeIndexManager) {
+    const isCodebaseSearchAvailable = codeIndexManager &&
+        codeIndexManager.isFeatureEnabled &&
+        codeIndexManager.isFeatureConfigured &&
+        codeIndexManager.isInitialized;
+    // Build guidelines array with automatic numbering
+    let itemNumber = 1;
+    const guidelinesList = [];
+    // First guideline is always the same
+    guidelinesList.push(`${itemNumber++}. In <thinking> tags, assess what information you already have and what information you need to proceed with the task.`);
+    // Conditional codebase search guideline
+    if (isCodebaseSearchAvailable) {
+        guidelinesList.push(`${itemNumber++}. **CRITICAL: For ANY exploration of code you haven't examined yet in this conversation, you MUST use the \`codebase_search\` tool FIRST before any other search or file exploration tools.** This applies throughout the entire conversation, not just at the beginning. The codebase_search tool uses semantic search to find relevant code based on meaning rather than just keywords, making it far more effective than regex-based search_files for understanding implementations. Even if you've already explored some code, any new area of exploration requires codebase_search first.`);
+        guidelinesList.push(`${itemNumber++}. Choose the most appropriate tool based on the task and the tool descriptions provided. After using codebase_search for initial exploration of any new code area, you may then use more specific tools like search_files (for regex patterns), list_files, or read_file for detailed examination. For example, using the list_files tool is more effective than running a command like \`ls\` in the terminal. It's critical that you think about each available tool and use the one that best fits the current step in the task.`);
+    }
+    else {
+        guidelinesList.push(`${itemNumber++}. Choose the most appropriate tool based on the task and the tool descriptions provided. Assess if you need additional information to proceed, and which of the available tools would be most effective for gathering this information. For example using the list_files tool is more effective than running a command like \`ls\` in the terminal. It's critical that you think about each available tool and use the one that best fits the current step in the task.`);
+    }
+    guidelinesList.push(`${itemNumber++}. Before starting any multi-step or high-risk action, call \`run_slash_command\` to load a relevant SOP (workflow or document). If no SOP exists, explicitly note that you checked before proceeding.`);
+    // Remaining guidelines
+    guidelinesList.push(`${itemNumber++}. If multiple actions are needed, use one tool at a time per message to accomplish the task iteratively, with each tool use being informed by the result of the previous tool use. Do not assume the outcome of any tool use. Each step must be informed by the previous step's result.`);
+    guidelinesList.push(`${itemNumber++}. Formulate your tool use using the XML format specified for each tool.`);
+    guidelinesList.push(`${itemNumber++}. After each tool use, the user will respond with the result of that tool use. This result will provide you with the necessary information to continue your task or make further decisions. This response may include:
+  - Information about whether the tool succeeded or failed, along with any reasons for failure.
+  - Linter errors that may have arisen due to the changes you made, which you'll need to address.
+  - New terminal output in reaction to the changes, which you may need to consider or act upon.
+  - Any other relevant feedback or information related to the tool use.`);
+    guidelinesList.push(`${itemNumber++}. Move work forward autonomously. State the tool you are invoking and run it immediately unless the user has explicitly paused you. Only stop to ask for confirmation when the action is unusually risky, irreversible, or the system rejects the request.`);
+    guidelinesList.push(`${itemNumber++}. When the user confirms a successful outcome without an existing SOP, offer to capture it with \`upsert_sop\` so the workflow or document can be reused later.`);
+    // Join guidelines and add the footer
+    return `# Tool Use Guidelines
+
+${guidelinesList.join("\n")}
+
+It is crucial to proceed step-by-step, using the output of each tool call to decide your next move. This approach allows you to:
+1. Confirm the success of each step before proceeding.
+2. Address any issues or errors that arise immediately.
+3. Adapt your approach based on new information or unexpected results.
+4. Ensure that each action builds correctly on the previous ones.
+
+By carefully reviewing tool results and system feedback, you can react accordingly and make informed decisions about how to proceed with the task while minimizing unnecessary interruptions for the user.`;
+}
+//# sourceMappingURL=tool-use-guidelines.js.map

@@ -11,12 +11,93 @@ export interface OuterGateInsight {
 	assignedCompanyId?: string
 }
 
+export interface OuterGateInsightUpdate {
+	title?: string
+	summary?: string | null
+	stage?: OuterGateInsightStage
+	recommendedWorkspace?: string | null
+	assignedCompanyId?: string | null
+}
+
+export interface OuterGateInsightEventChange {
+	field: "title" | "summary" | "stage" | "recommendedWorkspace" | "assignedCompanyId" | "capturedAtIso" | "sourceType"
+	from?: string
+	to?: string
+}
+
+export interface OuterGateInsightEvent {
+	type: "created" | "updated"
+	insight: OuterGateInsight
+	note?: string
+	changes?: OuterGateInsightEventChange[]
+}
+
+export type OuterGateAutomationCallStatus = "succeeded" | "failed"
+
+export interface OuterGateAutomationCallInput {
+	label: string
+	value: string
+}
+
+export interface OuterGateAutomationCall {
+	name: string
+	title?: string
+	status: OuterGateAutomationCallStatus
+	summary?: string
+	inputs?: OuterGateAutomationCallInput[]
+	outputLines?: string[]
+	error?: string
+}
+
 export interface OuterGateAnalysisPool {
 	totalCaptured: number
 	processing: number
 	ready: number
 	assignedThisWeek: number
 	lastUpdatedIso: string
+}
+
+export type OuterGatePassionStatus = "captured" | "processing" | "ready" | "archived"
+
+export interface OuterGatePassionPoint {
+	id: string
+	label: string
+	kind: "message" | "file"
+	status: OuterGatePassionStatus
+	clusterId: string
+	coordinates: { x: number; y: number }
+	heat: number
+	createdAtIso: string
+	snippet: string
+	sessionId?: string
+	tokens?: number
+	metadata?: {
+		filename?: string
+		mimeType?: string
+		sizeBytes?: number
+		source?: string
+		references?: string[]
+	}
+}
+
+export interface OuterGatePassionCluster {
+	id: string
+	label: string
+	color: string
+	size: number
+	topKeywords: string[]
+	passionScore: number
+	centroid: { x: number; y: number }
+}
+
+export interface OuterGatePassionMapState {
+	status: "idle" | "loading" | "ready" | "error"
+	points: OuterGatePassionPoint[]
+	clusters: OuterGatePassionCluster[]
+	generatedAtIso?: string
+	lastRequestedIso?: string
+	summary?: string
+	error?: string
 }
 
 export interface OuterGateQuickAction {
@@ -29,7 +110,7 @@ export interface OuterGateQuickAction {
 export interface OuterGateIntegration {
 	id: string
 	name: string
-	status: "connected" | "not_connected" | "coming_soon"
+	status: "connected" | "not_connected" | "coming_soon" | "error"
 	providerIcon?: string
 	description?: string
 }
@@ -86,6 +167,9 @@ export interface OuterGateCloverMessage {
 	timestamp: string
 	tokens?: number
 	references?: string[]
+	systemPromptPreview?: string
+	insightEvent?: OuterGateInsightEvent
+	automationCall?: OuterGateAutomationCall
 }
 
 export interface OuterGateCloverSessionSummary {
@@ -118,6 +202,7 @@ export interface OuterGateState {
 	isCloverProcessing?: boolean
 	cloverSessions: OuterGateCloverSessionState
 	activeCloverSessionId?: string
+	passionMap: OuterGatePassionMapState
 }
 
 export const defaultOuterGateState: OuterGateState = {
@@ -136,8 +221,8 @@ export const defaultOuterGateState: OuterGateState = {
 	],
 	quickActions: [
 		{
-			slug: "create-workspace",
-			title: "Create Workspace",
+			slug: "create-company",
+			title: "Create Company",
 			description: "Launch a new company space with AI teammates and templates tuned to your mission.",
 			icon: "codicon-building",
 		},
@@ -165,6 +250,15 @@ export const defaultOuterGateState: OuterGateState = {
 		isInitialFetchComplete: false,
 	},
 	activeCloverSessionId: undefined,
+	passionMap: {
+		status: "idle",
+		points: [],
+		clusters: [],
+		generatedAtIso: undefined,
+		lastRequestedIso: undefined,
+		summary: undefined,
+		error: undefined,
+	},
 }
 
 export const isOuterGateState = (value: unknown): value is OuterGateState => {
@@ -179,6 +273,7 @@ export const isOuterGateState = (value: unknown): value is OuterGateState => {
 		candidate.quickActions !== undefined &&
 		candidate.integrations !== undefined &&
 		candidate.cloverMessages !== undefined &&
-		candidate.cloverSessions !== undefined
+		candidate.cloverSessions !== undefined &&
+		candidate.passionMap !== undefined
 	)
 }

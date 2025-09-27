@@ -13,6 +13,7 @@ import { initializeSourceMaps, exposeSourceMapsForDebugging } from "./utils/sour
 import { ExtensionStateContextProvider, useExtensionState } from "./context/ExtensionStateContext"
 import ChatView, { ChatViewRef } from "./components/chat/ChatView"
 import HubView from "./components/hub/HubView"
+import ChatsHubView from "./components/chats/ChatsHubView"
 import HistoryView from "./components/history/HistoryView"
 import SettingsView, { SettingsViewRef } from "./components/settings/SettingsView"
 import WelcomeView from "./components/kilocode/Welcome/WelcomeView" // kilocode_change
@@ -46,6 +47,7 @@ type Tab =
 	| "modes"
 	| "lobby"
 	| "hub"
+	| "chatsHub"
 	| "marketplace"
 	| "account"
 	| "cloud"
@@ -154,16 +156,22 @@ const App = () => {
 	const marketplaceStateManager = useMemo(() => new MarketplaceViewStateManager(), [])
 
 	const surfaces = useMemo<BrainstormSurfaceSummary[]>(() => {
-		return (endlessSurface?.surfaces ?? []).map((surface) => ({
-			id: surface.id,
-			title: surface.title,
-			description: surface.description,
-			createdAt: new Date(surface.createdAt).toISOString(),
-			updatedAt: new Date(surface.updatedAt).toISOString(),
-			owner: surface.owner,
-			tags: surface.tags,
-			emoji: surface.emoji,
-		}))
+		return (endlessSurface?.surfaces ?? []).map((surface) => {
+			const surfaceWithExtras = surface as typeof surface & {
+				owner?: string
+				emoji?: string
+			}
+			return {
+				id: surface.id,
+				title: surface.title,
+				description: surface.description,
+				createdAt: new Date(surface.createdAt).toISOString(),
+				updatedAt: new Date(surface.updatedAt).toISOString(),
+				owner: surfaceWithExtras.owner,
+				tags: surface.tags,
+				emoji: surfaceWithExtras.emoji,
+			}
+		})
 	}, [endlessSurface?.surfaces])
 
 	const activeSurfaceId = endlessSurface?.activeSurfaceId
@@ -473,6 +481,11 @@ const App = () => {
 				hideAnnouncement={() => setShowAnnouncement(false)}
 			/>
 			<HubView isHidden={tab !== "hub"} targetSection={currentSection} />
+			<ChatsHubView
+				isHidden={tab !== "chatsHub"}
+				showAnnouncement={showAnnouncement}
+				hideAnnouncement={() => setShowAnnouncement(false)}
+			/>
 			{route.page === "brainstorm" && tab === "brainstorm" && (
 				<BrainstormHubPage
 					surfaces={surfaces}
@@ -559,7 +572,7 @@ const App = () => {
 			)}
 			{/* kilocode_change */}
 			{/* Lobby, modes and history view contain their own bottom controls */}
-			{!["lobby", "modes", "history", "outerGate"].includes(tab) && (
+			{!["lobby", "chatsHub", "modes", "history", "outerGate"].includes(tab) && (
 				<div className="fixed inset-0 top-auto">
 					<BottomControls />
 				</div>

@@ -77,17 +77,25 @@ import {
 	CreateCompanyPayload,
 	CreateDepartmentPayload,
 	CreateEmployeePayload,
+	CreateShiftPayload,
 	CreateTeamPayload,
+	DeleteCompanyPayload,
 	DeleteActionItemPayload,
+	DeleteShiftPayload,
 	RemoveEmployeeFromTeamPayload,
 	RemoveTeamFromDepartmentPayload,
+	SetCompanyFavoritePayload,
 	StartActionItemsPayload,
+	StartWorkdayPayload,
 	UpdateActionItemPayload,
 	UpdateCompanyPayload,
 	UpdateDepartmentPayload,
 	UpdateEmployeePayload,
+	UpdateEmployeeSchedulePayload,
+	UpdateShiftPayload,
 	UpdateTeamPayload,
 	UpsertActionStatusPayload,
+	HaltWorkdayPayload,
 } from "../../shared/golden/workplace"
 import type { HubAgentBlueprint, HubSettingsUpdate } from "../../shared/hub"
 
@@ -435,7 +443,7 @@ export const webviewMessageHandler = async (
 		}
 	}
 
-	console.log("[webviewMessageHandler] received message", message.type, {
+	debugWebviewLog("received message", message.type, {
 		workplaceCompanyId: (message as any)?.workplaceCompanyId,
 		workplaceEmployeeId: (message as any)?.workplaceEmployeeId,
 	})
@@ -517,6 +525,89 @@ export const webviewMessageHandler = async (
 			} catch (error) {
 				const messageText = error instanceof Error ? error.message : String(error)
 				await vscode.window.showErrorMessage(`Unable to update company: ${messageText}`)
+			}
+			break
+		}
+		case "setCompanyFavorite": {
+			const payload = message.workplaceCompanyFavorite as SetCompanyFavoritePayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing company favorite payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				const errorMessage = "Workplace service is unavailable in this session."
+				await vscode.window.showErrorMessage(errorMessage)
+				await provider.postMessageToWebview({
+					type: "workplaceCompanyMutationResult",
+					mutation: "setFavorite",
+					companyId: payload.companyId,
+					success: false,
+					error: errorMessage,
+				})
+				break
+			}
+			try {
+				await service.setCompanyFavorite(payload)
+				await provider.postStateToWebview()
+				await provider.postMessageToWebview({
+					type: "workplaceCompanyMutationResult",
+					mutation: "setFavorite",
+					companyId: payload.companyId,
+					success: true,
+					isFavorite: payload.isFavorite,
+				})
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to update favorite: ${messageText}`)
+				await provider.postMessageToWebview({
+					type: "workplaceCompanyMutationResult",
+					mutation: "setFavorite",
+					companyId: payload.companyId,
+					success: false,
+					error: messageText,
+				})
+			}
+			break
+		}
+		case "deleteCompany": {
+			const payload = message.workplaceCompanyDelete as DeleteCompanyPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing company delete payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				const errorMessage = "Workplace service is unavailable in this session."
+				await vscode.window.showErrorMessage(errorMessage)
+				await provider.postMessageToWebview({
+					type: "workplaceCompanyMutationResult",
+					mutation: "delete",
+					companyId: payload.companyId,
+					success: false,
+					error: errorMessage,
+				})
+				break
+			}
+			try {
+				await service.deleteCompany(payload)
+				await provider.postStateToWebview()
+				await provider.postMessageToWebview({
+					type: "workplaceCompanyMutationResult",
+					mutation: "delete",
+					companyId: payload.companyId,
+					success: true,
+				})
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to delete company: ${messageText}`)
+				await provider.postMessageToWebview({
+					type: "workplaceCompanyMutationResult",
+					mutation: "delete",
+					companyId: payload.companyId,
+					success: false,
+					error: messageText,
+				})
 			}
 			break
 		}
@@ -854,6 +945,128 @@ export const webviewMessageHandler = async (
 			} catch (error) {
 				const messageText = error instanceof Error ? error.message : String(error)
 				await vscode.window.showErrorMessage(`Unable to start action items: ${messageText}`)
+			}
+			break
+		}
+		case "startWorkday": {
+			const payload = message.workplaceWorkdayStart as StartWorkdayPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing workday start payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				const nextState = await service.startWorkday(payload)
+				await provider.handleWorkdayStatusChange(payload.companyId, nextState)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to start workday: ${messageText}`)
+			}
+			break
+		}
+		case "haltWorkday": {
+			const payload = message.workplaceWorkdayHalt as HaltWorkdayPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing workday halt payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				const nextState = await service.haltWorkday(payload)
+				await provider.handleWorkdayStatusChange(payload.companyId, nextState)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to halt workday: ${messageText}`)
+			}
+			break
+		}
+		case "updateEmployeeSchedule": {
+			const payload = message.workplaceEmployeeScheduleUpdate as UpdateEmployeeSchedulePayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing employee schedule payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.updateEmployeeSchedule(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to update employee schedule: ${messageText}`)
+			}
+			break
+		}
+		case "createShift": {
+			const payload = message.workplaceShiftCreate as CreateShiftPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing shift create payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.createShift(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to create shift: ${messageText}`)
+			}
+			break
+		}
+		case "updateShift": {
+			const payload = message.workplaceShiftUpdate as UpdateShiftPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing shift update payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.updateShift(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to update shift: ${messageText}`)
+			}
+			break
+		}
+		case "deleteShift": {
+			const payload = message.workplaceShiftDelete as DeleteShiftPayload | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing shift delete payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.deleteShift(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to delete shift: ${messageText}`)
 			}
 			break
 		}
@@ -2522,6 +2735,25 @@ export const webviewMessageHandler = async (
 		}
 		case "outerGateSessionsLoadMore": {
 			await provider.loadMoreCloverSessions(message.cloverSessionCursor, message.cloverSessionLimit)
+			break
+		}
+		case "outerGateGeneratePassionMap": {
+			await provider.generateOuterGatePassionMap()
+			break
+		}
+		case "outerGateUpdateInsight": {
+			if (message.outerGateInsightId) {
+				await provider.updateOuterGateInsight(
+					message.outerGateInsightId,
+					message.outerGateInsightUpdates ?? {},
+				)
+			}
+			break
+		}
+		case "outerGateDeleteInsight": {
+			if (message.outerGateInsightId) {
+				await provider.deleteOuterGateInsight(message.outerGateInsightId)
+			}
 			break
 		}
 		// kilocode_change start - ghostServiceSettings

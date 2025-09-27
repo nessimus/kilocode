@@ -139,6 +139,11 @@
 				"category": "Golden Workplace"
 			},
 			{
+				"command": "kilo-code.chooseWorkplaceFolder",
+				"title": "Golden Workplace: Choose Root Folder",
+				"category": "Golden Workplace"
+			},
+			{
 				"command": "kilo-code.mcpButtonClicked",
 				"title": "%command.mcpServers.title%",
 				"icon": "$(server)"
@@ -517,6 +522,11 @@
 		"configuration": {
 			"title": "%configuration.title%",
 			"properties": {
+				"kilo-code.openCompanyInNewWindow": {
+					"type": "boolean",
+					"default": true,
+					"description": "Open each company workspace in a new VS Code window when you switch companies."
+				},
 				"kilo-code.allowedCommands": {
 					"type": "array",
 					"items": {
@@ -678,6 +688,7 @@
 		"ollama": "^0.5.17",
 		"openai": "^5.12.2",
 		"os-name": "^6.0.0",
+		"tsne-js": "^1.0.3",
 		"p-limit": "^6.2.0",
 		"p-wait-for": "^5.0.2",
 		"pdf-parse": "^1.1.1",

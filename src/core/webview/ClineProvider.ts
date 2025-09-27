@@ -100,7 +100,7 @@ import { webviewMessageHandler } from "./webviewMessageHandler"
 import { getNonce } from "./getNonce"
 import { getUri } from "./getUri"
 import { ConversationHubService } from "../hub/ConversationHubService"
-import type { HubSnapshot } from "../../shared/hub"
+import type { HubAgentBlueprint, HubSnapshot } from "../../shared/hub"
 import { singleCompletionHandler } from "../../utils/single-completion-handler"
 import { countTokens } from "../../utils/countTokens"
 
@@ -114,12 +114,25 @@ import isWsl from "is-wsl"
 import { getKilocodeDefaultModel } from "../../api/providers/kilocode/getKilocodeDefaultModel"
 import { getKiloCodeWrapperProperties } from "../../core/kilocode/wrapper"
 import type { WorkplaceService } from "../../services/workplace/WorkplaceService"
-import type { WorkplaceCompany, WorkplaceState } from "../../shared/golden/workplace"
+import type { WorkplaceFilesystemManager } from "../../services/workplace/WorkplaceFilesystemManager"
+import type {
+	WorkplaceCompany,
+	WorkplaceEmployee,
+	WorkplaceState,
+	WorkplaceWorkdayState,
+} from "../../shared/golden/workplace"
 import {
-	defaultOuterGateIntegrations,
 	defaultOuterGateState,
+	OuterGateAnalysisPool,
 	OuterGateCloverMessage,
 	OuterGateCloverSessionSummary,
+	OuterGateInsight,
+	OuterGateInsightStage,
+	OuterGateInsightUpdate,
+	OuterGatePassionCluster,
+	OuterGatePassionMapState,
+	OuterGatePassionPoint,
+	OuterGatePassionStatus,
 	OuterGateState,
 } from "../../shared/golden/outerGate"
 import { CloverSessionService, DEFAULT_CLOVER_SESSION_PAGE_SIZE } from "../../services/outerGate/CloverSessionService"
@@ -150,6 +163,17 @@ const CLOVER_SYSTEM_PROMPT = `You are Clover AI, the concierge for Golden Workpl
 const CLOVER_WELCOME_TEXT =
 	"Welcome back to the Outer Gates! Tell me what spark you want to explore and I’ll line it up with the right workspace."
 
+const PASSION_COLOR_PALETTE = [
+	"#F97316",
+	"#6366F1",
+	"#10B981",
+	"#EC4899",
+	"#14B8A6",
+	"#F59E0B",
+	"#8B5CF6",
+	"#0EA5E9",
+]
+
 /**
  * https://github.com/microsoft/vscode-webview-ui-toolkit-samples/blob/main/default/weather-webview/src/providers/WeatherViewProvider.ts
  * https://github.com/KumarVariable/vscode-extension-sidebar-html/blob/master/src/customSidebarViewProvider.ts
@@ -176,6 +200,7 @@ export class ClineProvider
 	private static globalWorkplaceService?: WorkplaceService
 	private static globalEndlessSurfaceService?: EndlessSurfaceService
 	private static globalCloverSessionService?: CloverSessionService
+	private readonly workdayRoomMap = new Map<string, string>()
 	// Used in package.json as the view's id. This value cannot be changed due
 	// to how VSCode caches views based on their id, and updating the id would
 	// break existing instances of the extension.
@@ -196,6 +221,7 @@ export class ClineProvider
 	private taskEventListeners: WeakMap<Task, Array<() => void>> = new WeakMap()
 	private currentWorkspacePath: string | undefined
 	private workplaceService?: WorkplaceService
+	private workplaceFilesystemManager?: WorkplaceFilesystemManager
 	private endlessSurfaceService?: EndlessSurfaceService
 	private cloverSessionService?: CloverSessionService
 	private cloverSessionsInitialized = false
@@ -344,6 +370,10 @@ export class ClineProvider
 	public attachWorkplaceService(service: WorkplaceService) {
 		this.workplaceService = service
 		ClineProvider.globalWorkplaceService = service
+	}
+
+	public attachWorkplaceFilesystemManager(manager: WorkplaceFilesystemManager) {
+		this.workplaceFilesystemManager = manager
 	}
 
 	public getWorkplaceService(): WorkplaceService | undefined {
@@ -512,6 +542,204 @@ export class ClineProvider
 		} catch (error) {
 			this.log(`Error syncing cloud profiles: ${error}`)
 		}
+	}
+
+	private clampToZero(value: number): number {
+		return value < 0 ? 0 : value
+	}
+
+	private applyStageTransition(
+		pool: OuterGateAnalysisPool,
+		previous: OuterGateInsightStage,
+		next: OuterGateInsightStage,
+		timestampIso: string,
+	): OuterGateAnalysisPool {
+		let processing = pool.processing
+		let ready = pool.ready
+		let assigned = pool.assignedThisWeek
+
+		if (previous === "processing") {
+			processing = this.clampToZero(processing - 1)
+		} else if (previous === "ready") {
+			ready = this.clampToZero(ready - 1)
+		} else if (previous === "assigned") {
+			assigned = this.clampToZero(assigned - 1)
+		}
+
+		if (next === "processing") {
+			processing += 1
+		} else if (next === "ready") {
+			ready += 1
+		} else if (next === "assigned") {
+			assigned += 1
+		}
+
+		return {
+			...pool,
+			processing,
+			ready,
+			assignedThisWeek: assigned,
+			lastUpdatedIso: timestampIso,
+		}
+	}
+
+	private applyStageRemoval(
+		pool: OuterGateAnalysisPool,
+		removedStage: OuterGateInsightStage,
+		timestampIso: string,
+	): OuterGateAnalysisPool {
+		let processing = pool.processing
+		let ready = pool.ready
+		let assigned = pool.assignedThisWeek
+
+		if (removedStage === "processing") {
+			processing = this.clampToZero(processing - 1)
+		} else if (removedStage === "ready") {
+			ready = this.clampToZero(ready - 1)
+		} else if (removedStage === "assigned") {
+			assigned = this.clampToZero(assigned - 1)
+		}
+
+		return {
+			...pool,
+			totalCaptured: this.clampToZero(pool.totalCaptured - 1),
+			processing,
+			ready,
+			assignedThisWeek: assigned,
+			lastUpdatedIso: timestampIso,
+		}
+	}
+
+	public async updateOuterGateInsight(id: string, updates: OuterGateInsightUpdate): Promise<void> {
+		if (!id) {
+			return
+		}
+
+		const baseState = this.ensureOuterGateState()
+		const existing = baseState.recentInsights.find((insight) => insight.id === id)
+		if (!existing) {
+			return
+		}
+
+		const nowIso = new Date().toISOString()
+		const trimmedTitle =
+			updates.title !== undefined ? updates.title.trim() : undefined
+		const trimmedSummary =
+			updates.summary !== undefined && updates.summary !== null
+				? updates.summary.trim()
+				: updates.summary ?? undefined
+		const trimmedWorkspace =
+			updates.recommendedWorkspace !== undefined && updates.recommendedWorkspace !== null
+				? updates.recommendedWorkspace.trim()
+				: updates.recommendedWorkspace ?? undefined
+		const trimmedCompanyId =
+			updates.assignedCompanyId !== undefined && updates.assignedCompanyId !== null
+				? updates.assignedCompanyId.trim()
+				: updates.assignedCompanyId ?? undefined
+
+		const nextStage = updates.stage ?? existing.stage
+		if (!["captured", "processing", "ready", "assigned"].includes(nextStage)) {
+			return
+		}
+
+		const updatedInsight: OuterGateInsight = { ...existing }
+
+		if (trimmedTitle !== undefined && trimmedTitle.length > 0) {
+			updatedInsight.title = trimmedTitle
+		}
+
+		if (trimmedSummary !== undefined) {
+			if (trimmedSummary && trimmedSummary.length > 0) {
+				updatedInsight.summary = trimmedSummary
+			} else {
+				delete updatedInsight.summary
+			}
+		}
+
+		if (trimmedWorkspace !== undefined) {
+			if (trimmedWorkspace && trimmedWorkspace.length > 0) {
+				updatedInsight.recommendedWorkspace = trimmedWorkspace
+			} else {
+				delete updatedInsight.recommendedWorkspace
+			}
+		}
+
+		if (trimmedCompanyId !== undefined) {
+			if (trimmedCompanyId && trimmedCompanyId.length > 0) {
+				updatedInsight.assignedCompanyId = trimmedCompanyId
+			} else {
+				delete updatedInsight.assignedCompanyId
+			}
+		}
+
+		updatedInsight.stage = nextStage
+
+		let nextAnalysisPool = { ...baseState.analysisPool, lastUpdatedIso: nowIso }
+		if (existing.stage !== nextStage) {
+			nextAnalysisPool = this.applyStageTransition(nextAnalysisPool, existing.stage, nextStage, nowIso)
+		}
+
+		const nextInsights = baseState.recentInsights.map((insight) =>
+			insight.id === id ? updatedInsight : insight,
+		)
+
+		this.updateOuterGateState({
+			...baseState,
+			recentInsights: nextInsights,
+			analysisPool: nextAnalysisPool,
+		})
+
+		try {
+			const manager = await this.getOuterGateManager()
+			const stored = manager?.getStoredInsightById(id)
+			if (manager && stored) {
+				await manager.updateStoredInsight(id, {
+					title: updatedInsight.title,
+					summary: updatedInsight.summary,
+					stage: updatedInsight.stage,
+					recommendedWorkspace: updatedInsight.recommendedWorkspace,
+					assignedCompanyId: updatedInsight.assignedCompanyId,
+				})
+			}
+		} catch (error) {
+			console.error("[ClineProvider] Failed to persist insight update", error)
+		}
+
+		await this.postStateToWebview()
+	}
+
+	public async deleteOuterGateInsight(id: string): Promise<void> {
+		if (!id) {
+			return
+		}
+
+		const baseState = this.ensureOuterGateState()
+		const existing = baseState.recentInsights.find((insight) => insight.id === id)
+		if (!existing) {
+			return
+		}
+
+		const nowIso = new Date().toISOString()
+		const nextInsights = baseState.recentInsights.filter((insight) => insight.id !== id)
+		const nextAnalysisPool = this.applyStageRemoval(baseState.analysisPool, existing.stage, nowIso)
+
+		this.updateOuterGateState({
+			...baseState,
+			recentInsights: nextInsights,
+			analysisPool: nextAnalysisPool,
+		})
+
+		try {
+			const manager = await this.getOuterGateManager()
+			const stored = manager?.getStoredInsightById(id)
+			if (manager && stored) {
+				await manager.deleteStoredInsight(id)
+			}
+		} catch (error) {
+			console.error("[ClineProvider] Failed to delete stored insight", error)
+		}
+
+		await this.postStateToWebview()
 	}
 
 	/**
@@ -2293,6 +2521,84 @@ export class ClineProvider
 		await this.postStateToWebview()
 	}
 
+	public async generateOuterGatePassionMap(): Promise<void> {
+		await this.ensureCloverSessionsInitialized()
+		const requestIso = new Date().toISOString()
+		const initialState = this.ensureOuterGateState()
+		this.updateOuterGateState({
+			...initialState,
+			passionMap: {
+				...initialState.passionMap,
+				status: "loading",
+				lastRequestedIso: requestIso,
+				error: undefined,
+			},
+		})
+		await this.postStateToWebview()
+
+		try {
+			const service = this.getCloverSessionService()
+			if (!service) {
+				throw new Error("Pool analysis service is not configured yet.")
+			}
+
+			const analysis = await service.fetchAnalysisItems({ limit: 250 })
+			const { points, clusters, summary } = buildSimplePassionMap(analysis.items)
+			const refreshedState = this.ensureOuterGateState()
+			const statusCounts = countAnalysisStatuses(analysis.items)
+			const generatedIso = analysis.generatedAt ?? new Date().toISOString()
+			const totalCaptured =
+				typeof analysis.totalItems === "number"
+					? analysis.totalItems
+					: statusCounts.ready + statusCounts.processing + statusCounts.captured
+
+			this.updateOuterGateState({
+				...refreshedState,
+				analysisPool: {
+					...refreshedState.analysisPool,
+					totalCaptured,
+					processing: statusCounts.processing,
+					ready: statusCounts.ready,
+					lastUpdatedIso: generatedIso,
+				},
+				passionMap: {
+					status: "ready",
+					points,
+					clusters,
+					summary,
+					generatedAtIso: generatedIso,
+					lastRequestedIso: requestIso,
+					error: undefined,
+				},
+			})
+		} catch (error) {
+			const refreshedState = this.ensureOuterGateState()
+			let message = "Unable to generate the passion map right now."
+			if (axios.isAxiosError(error)) {
+				const status = error.response?.status
+				if (status) {
+					message = `Passion map request failed with status ${status}. Check your POOL_API_URL configuration and try again.`
+				} else if (error.message) {
+					message = error.message
+				}
+			} else if (error instanceof Error && error.message) {
+				message = error.message
+			}
+
+			this.updateOuterGateState({
+				...refreshedState,
+				passionMap: {
+					...refreshedState.passionMap,
+					status: "error",
+					error: message,
+					lastRequestedIso: requestIso,
+				},
+			})
+		}
+
+		await this.postStateToWebview()
+	}
+
 	private buildOuterGatePrompt(latestUserMessage: string): string {
 		const state = this.ensureOuterGateState()
 		const analysis = state.analysisPool
@@ -2550,6 +2856,199 @@ Clover:`
 		// Only redirect if there's an actual MDM policy requiring authentication
 		if (this.mdmService?.requiresCloudAuth() && !this.checkMdmCompliance()) {
 			await this.postMessageToWebview({ type: "action", action: "cloudButtonClicked" })
+		}
+	}
+
+	private buildWorkdayAgentBlueprint(employee: WorkplaceEmployee): HubAgentBlueprint {
+		const personaMode = employee.personaMode
+		const summary = personaMode?.summary ?? employee.role ?? "AI Teammate"
+		const instructions = personaMode?.instructions ?? employee.description ?? undefined
+		const baseModeSlug = personaMode?.baseModeSlug ?? "code"
+		return {
+			displayName: employee.name,
+			mode: baseModeSlug,
+			persona: {
+				employeeId: employee.id,
+				summary,
+				instructions,
+				baseModeSlug,
+				role: employee.role,
+				personality: employee.personality,
+				mbtiType: employee.mbtiType,
+				customAttributes: employee.customAttributes,
+			},
+		}
+	}
+
+	private formatIsoForDisplay(iso?: string): string {
+		if (!iso) {
+			return "now"
+		}
+		try {
+			const date = new Date(iso)
+			if (Number.isNaN(date.getTime())) {
+				return iso
+			}
+			return date.toLocaleString()
+		} catch {
+			return iso
+		}
+	}
+
+	private buildWorkdayKickoffMessage(company: WorkplaceCompany, workday: WorkplaceWorkdayState): string {
+		const activeEmployees = workday.activeEmployeeIds
+			.map((id) => company.employees.find((employee) => employee.id === id && !employee.deletedAt))
+			.filter((employee): employee is WorkplaceEmployee => Boolean(employee))
+
+		const header = `Workday is live for ${company.name} as of ${this.formatIsoForDisplay(
+			workday.startedAt,
+		)}.`
+		const roster =
+			activeEmployees.length > 0
+				? `Active teammates: ${activeEmployees
+						.map((employee) => `${employee.name}${employee.role ? ` (${employee.role})` : ""}`)
+						.join(", ")}.`
+				: `No employees are currently active. Update schedules or select teammates to begin.`
+
+		const priorities = [
+			"Audit the action workspace and create missing goals, projects, or tasks before diving into execution.",
+			"Update the status and notes for anything you touch so coworkers can rely on the tracker as the source of truth.",
+			"Document outcomes (links, commits, recordings) inside the relevant action item prior to marking it complete.",
+			"Coordinate handoffs or blockers here in the hub—mention teammates when you need their attention.",
+		]
+
+		const focusBlock = ["Focus for this block:", ...priorities.map((item) => `- ${item}`)].join("\n")
+		const closing = "Let’s keep communication transparent and wrap each task with a succinct summary before moving on."
+
+		return [header, roster, "", focusBlock, "", closing].filter(Boolean).join("\n")
+	}
+
+	private buildWorkdayHaltMessage(company: WorkplaceCompany, workday: WorkplaceWorkdayState): string {
+		const header = `Halting the workday for ${company.name} as of ${this.formatIsoForDisplay(workday.haltedAt)}.`
+		const wrap =
+			"Capture final notes, push any remaining updates to the action workspace, and flag follow-up needs before signing off."
+		return `${header}\n\n- Update every in-progress action item with current status and next step.\n- Add concise summaries so we can restart smoothly.\n\n${wrap}`
+	}
+
+	private async synchronizeWorkdayParticipants(
+		companyId: string,
+		roomId: string,
+		company: WorkplaceCompany,
+		workday: WorkplaceWorkdayState,
+	): Promise<void> {
+		const hub = this.getConversationHub()
+		const snapshot = hub.getSnapshot()
+		const room = snapshot.rooms.find((candidate) => candidate.id === roomId)
+		if (!room) {
+			this.workdayRoomMap.delete(companyId)
+			return
+		}
+
+		const desired = new Set(workday.activeEmployeeIds)
+		const participantMap = new Map(
+			room.participants
+				.filter((participant) => participant.type === "agent" && participant.persona?.employeeId)
+				.map((participant) => [participant.persona?.employeeId as string, participant]),
+		)
+
+		for (const [employeeId, participant] of participantMap.entries()) {
+			if (!desired.has(employeeId)) {
+				hub.removeParticipant(roomId, participant.id)
+			}
+		}
+
+		for (const employeeId of desired) {
+			if (participantMap.has(employeeId)) {
+				continue
+			}
+			const employee = company.employees.find((candidate) => candidate.id === employeeId && !candidate.deletedAt)
+			if (!employee) {
+				continue
+			}
+			await hub.addAgent(roomId, this.buildWorkdayAgentBlueprint(employee))
+		}
+	}
+
+	private async ensureWorkdayRoom(company: WorkplaceCompany): Promise<string | undefined> {
+		const hub = this.getConversationHub()
+		const workday = company.workday
+		if (!workday || workday.activeEmployeeIds.length === 0) {
+			return undefined
+		}
+
+		const existingId = this.workdayRoomMap.get(company.id)
+		const snapshot = hub.getSnapshot()
+		let roomId = existingId
+		let room = existingId ? snapshot.rooms.find((entry) => entry.id === existingId) : undefined
+
+		if (!room) {
+			const participants = workday.activeEmployeeIds
+				.map((id) => company.employees.find((employee) => employee.id === id && !employee.deletedAt))
+				.filter((employee): employee is WorkplaceEmployee => Boolean(employee))
+				.map((employee) => this.buildWorkdayAgentBlueprint(employee))
+			const created = hub.createRoom({
+				title: `${company.name} • Workday Ops`,
+				autonomous: true,
+				participants,
+			})
+			roomId = created.id
+			this.workdayRoomMap.set(company.id, roomId)
+			const refreshed = hub.getSnapshot()
+			room = refreshed.rooms.find((entry) => entry.id === roomId)
+		}
+
+		if (!roomId || !room) {
+			return undefined
+		}
+
+		await this.synchronizeWorkdayParticipants(company.id, roomId, company, workday)
+		return roomId
+	}
+
+	private async announceWorkdayStart(company: WorkplaceCompany, workday: WorkplaceWorkdayState): Promise<void> {
+		const roomId = await this.ensureWorkdayRoom(company)
+		if (!roomId) {
+			return
+		}
+
+		const hub = this.getConversationHub()
+		const message = this.buildWorkdayKickoffMessage(company, workday)
+		hub.sendUserMessage(roomId, message)
+		hub.setActiveRoom(roomId)
+	}
+
+	private async announceWorkdayHalt(company: WorkplaceCompany, workday: WorkplaceWorkdayState): Promise<void> {
+		const roomId = this.workdayRoomMap.get(company.id)
+		if (!roomId) {
+			return
+		}
+		const hub = this.getConversationHub()
+		const snapshot = hub.getSnapshot()
+		const room = snapshot.rooms.find((entry) => entry.id === roomId)
+		if (!room) {
+			this.workdayRoomMap.delete(company.id)
+			return
+		}
+
+		const message = this.buildWorkdayHaltMessage(company, workday)
+		hub.sendUserMessage(roomId, message)
+		hub.stopRoom(roomId)
+	}
+
+	public async handleWorkdayStatusChange(companyId: string, state?: WorkplaceState): Promise<void> {
+		const snapshot = state ?? this.getWorkplaceService()?.getState()
+		if (!snapshot) {
+			return
+		}
+		const company = snapshot.companies.find((entry) => entry.id === companyId)
+		if (!company || !company.workday) {
+			return
+		}
+
+		if (company.workday.status === "active" && company.workday.activeEmployeeIds.length > 0) {
+			await this.announceWorkdayStart(company, company.workday)
+		} else {
+			await this.announceWorkdayHalt(company, company.workday)
 		}
 	}
 
@@ -2982,6 +3481,8 @@ Clover:`
 			openRouterUseMiddleOutTransform,
 			endlessSurface: endlessSurfaceViewState,
 			workplaceState: workplaceStateSnapshot ?? { companies: [] },
+			workplaceRootConfigured: this.workplaceFilesystemManager?.isConfigured() ?? false,
+			workplaceRootUri: this.workplaceFilesystemManager?.getRootUri()?.fsPath,
 			outerGateState: this.getOuterGateStateSnapshot(),
 			hubSnapshot,
 		}
@@ -3218,11 +3719,17 @@ Clover:`
 			notificationSmsGateway: stateValues.notificationSmsGateway,
 			notificationTelegramChatId: stateValues.notificationTelegramChatId,
 			workplaceState: workplaceStateSnapshot ?? { companies: [] },
+			workplaceRootConfigured: this.workplaceFilesystemManager?.isConfigured() ?? false,
+			workplaceRootUri: this.workplaceFilesystemManager?.getRootUri()?.fsPath,
 			hubSnapshot: this.conversationHub.getSnapshot(),
 		}
 		const companyCount = result.workplaceState?.companies?.length ?? 0
 		const companyNames = result.workplaceState?.companies?.map((company: WorkplaceCompany) => company.name) ?? []
-		console.log("[ClineProvider.getState] returning companyCount=%d companyNames=%o", companyCount, companyNames)
+		verboseProviderLog(
+			"[ClineProvider.getState] returning companyCount=%d companyNames=%o",
+			companyCount,
+			companyNames,
+		)
 		return result
 	}
 
@@ -4164,85 +4671,289 @@ function cloneOuterGateState(state: OuterGateState): OuterGateState {
 			isInitialFetchComplete: state.cloverSessions.isInitialFetchComplete,
 		},
 		activeCloverSessionId: state.activeCloverSessionId,
+		passionMap: {
+			status: state.passionMap.status,
+			points: state.passionMap.points.map((point) => ({
+				...point,
+				coordinates: { ...point.coordinates },
+				metadata: point.metadata
+					? {
+						...point.metadata,
+						references: point.metadata.references ? [...point.metadata.references] : undefined,
+					}
+				: undefined,
+			})),
+			clusters: state.passionMap.clusters.map((cluster) => ({
+				...cluster,
+				centroid: { ...cluster.centroid },
+				topKeywords: [...cluster.topKeywords],
+			})),
+			generatedAtIso: state.passionMap.generatedAtIso,
+			lastRequestedIso: state.passionMap.lastRequestedIso,
+			summary: state.passionMap.summary,
+			error: state.passionMap.error,
+		},
 	}
 }
 
-function createInitialOuterGateState(workplaceState?: WorkplaceState): OuterGateState {
+function createInitialOuterGateState(_workplaceState?: WorkplaceState): OuterGateState {
 	const base = cloneOuterGateState(defaultOuterGateState)
-	const now = Date.now()
-	const companyNames = workplaceState?.companies?.map((company) => company.name).filter(Boolean) ?? []
-	const primaryCompany = companyNames[0] ?? "Launchpad Studio"
-	const secondaryCompany = companyNames[1] ?? "Passion Incubator"
+	const nowIso = new Date().toISOString()
 
-	base.analysisPool = {
-		totalCaptured: 18,
-		processing: 2,
-		ready: 6,
-		assignedThisWeek: 4,
-		lastUpdatedIso: new Date(now - 5 * 60 * 1000).toISOString(),
-	}
+	// Ensure timestamps reflect the current session instead of module evaluation time.
+	base.analysisPool = { ...base.analysisPool, lastUpdatedIso: nowIso }
 
-	base.quickActions = defaultOuterGateState.quickActions.map((action) => ({ ...action }))
-
-	base.integrations = defaultOuterGateIntegrations.map((integration) => {
-		switch (integration.id) {
-			case "notion":
-				return {
-					...integration,
-					description: "Connected workspace wiki for organizing docs and projects across your team.",
-				}
-			case "miro":
-				return {
-					...integration,
-					description: "Collaborative whiteboarding platform for brainstorming, mapping, and planning.",
-				}
-			default:
-				return { ...integration }
-		}
-	})
-
-	base.recentInsights = [
-		{
-			id: randomUUID(),
-			title: "Eco retreat concept with regenerative workshops",
-			sourceType: "conversation" as const,
-			summary: "You outlined a weekend retreat blending nature immersion with structured founder masterminds.",
-			stage: "ready" as const,
-			recommendedWorkspace: primaryCompany,
-			capturedAtIso: new Date(now - 60 * 60 * 1000).toISOString(),
-			assignedCompanyId: primaryCompany,
-		},
-		{
-			id: randomUUID(),
-			title: "Podcast highlights from creative residency interviews",
-			sourceType: "integration" as const,
-			summary: "Imported Life HQ notes about multidisciplinary residencies seeking production support.",
-			stage: "processing" as const,
-			recommendedWorkspace: secondaryCompany,
-			capturedAtIso: new Date(now - 2 * 60 * 60 * 1000).toISOString(),
-			assignedCompanyId: secondaryCompany,
-		},
-		{
-			id: randomUUID(),
-			title: "Community operations checklist draft",
-			sourceType: "document" as const,
-			summary: "A Google Doc outlines onboarding steps for volunteer hosts and moderators.",
-			stage: "assigned" as const,
-			recommendedWorkspace: primaryCompany,
-			capturedAtIso: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
-			assignedCompanyId: primaryCompany,
-		},
-	]
-
-	base.suggestions = [
-		"Map last week's journal entries into venture themes",
-		"Draft a role card for the retreat operations lead",
-		"Bundle your voice notes into a single venture brief",
-	]
-
-	base.cloverMessages = [createCloverWelcomeMessage(new Date(now - 90 * 1000).toISOString())]
-
+	// Seed with the standard welcome message but leave the dataset empty for real data to populate.
+	base.cloverMessages = [createCloverWelcomeMessage(nowIso)]
 	base.isCloverProcessing = false
 
 	return base
+}
+
+type CloverAnalysisItems = Awaited<ReturnType<CloverSessionService["fetchAnalysisItems"]>>["items"]
+type CloverAnalysisItem = CloverAnalysisItems[number]
+
+const PASSION_KEYWORD_STOPWORDS = new Set([
+	"the",
+	"and",
+	"with",
+	"from",
+	"this",
+	"that",
+	"into",
+	"your",
+	"have",
+	"about",
+	"when",
+	"where",
+	"they",
+	"them",
+	"their",
+	"will",
+	"just",
+	"been",
+	"make",
+	"over",
+	"under",
+	"more",
+	"less",
+	"into",
+	"through",
+	"while",
+	"after",
+	"before",
+	"those",
+	"these",
+	"then",
+	"than",
+])
+
+function buildSimplePassionMap(items: CloverAnalysisItems): {
+	points: OuterGatePassionPoint[]
+	clusters: OuterGatePassionCluster[]
+	summary?: string
+} {
+	if (!items.length) {
+		return { points: [], clusters: [], summary: undefined }
+	}
+
+	const coordinates = deriveNormalizedCoordinates(items)
+	const nowMs = Date.now()
+
+	const points = items.map<OuterGatePassionPoint>((item, index) => {
+		const snippet = createPassionSnippet(item.text)
+		return {
+			id: item.id,
+			label: createPassionLabel(snippet),
+			kind: item.kind,
+			status: item.status,
+			clusterId: item.status,
+			coordinates: coordinates[index],
+			heat: computeRecencyHeat(item.createdAt, nowMs),
+			createdAtIso: item.createdAt,
+			snippet,
+			sessionId: item.sessionId,
+			tokens: item.tokens,
+			metadata: buildPassionMetadata(item),
+		}
+	})
+
+	const clusterBuckets = new Map<string, { points: OuterGatePassionPoint[]; heatTotal: number }>()
+	for (const point of points) {
+		const bucket = clusterBuckets.get(point.clusterId)
+		if (bucket) {
+			bucket.points.push(point)
+			bucket.heatTotal += point.heat
+		} else {
+			clusterBuckets.set(point.clusterId, { points: [point], heatTotal: point.heat })
+		}
+	}
+
+	const totalPoints = points.length || 1
+	const clusters = Array.from(clusterBuckets.entries()).map<OuterGatePassionCluster>(([clusterId, bucket], index) => {
+		const centroid = averageCoordinates(bucket.points)
+		const passionScore = Number(
+			((bucket.heatTotal / bucket.points.length) * 0.7 + (bucket.points.length / totalPoints) * 0.3).toFixed(2),
+		)
+		const topKeywords = computeTopKeywords(bucket.points, 5)
+		return {
+			id: clusterId,
+			label: toTitleCase(clusterId.replace(/_/g, " ")) || `Cluster ${index + 1}`,
+			color: PASSION_COLOR_PALETTE[index % PASSION_COLOR_PALETTE.length],
+			size: bucket.points.length,
+			topKeywords,
+			passionScore,
+			centroid,
+		}
+	})
+
+	const summary = clusters.length
+		? `Top clusters: ${clusters.map((cluster) => `${cluster.label} (${cluster.size})`).join(", ")}`
+		: undefined
+
+	return { points, clusters, summary }
+}
+
+function countAnalysisStatuses(items: CloverAnalysisItems): Record<OuterGatePassionStatus, number> {
+	const counts: Record<OuterGatePassionStatus, number> = {
+		captured: 0,
+		processing: 0,
+		ready: 0,
+		archived: 0,
+	}
+	for (const item of items) {
+		counts[item.status] += 1
+	}
+	return counts
+}
+
+function deriveNormalizedCoordinates(items: CloverAnalysisItems): Array<{ x: number; y: number }> {
+	if (!items.length) {
+		return []
+	}
+	const raw = items.map((item, index) => {
+		const embedding = Array.isArray(item.embedding) ? item.embedding : []
+		const primary = Number.isFinite(embedding[0]) ? Number(embedding[0]) : index
+		const secondary = Number.isFinite(embedding[1]) ? Number(embedding[1]) : 0
+		return { x: primary, y: secondary }
+	})
+	let minX = Number.POSITIVE_INFINITY
+	let maxX = Number.NEGATIVE_INFINITY
+	let minY = Number.POSITIVE_INFINITY
+	let maxY = Number.NEGATIVE_INFINITY
+	for (const entry of raw) {
+		if (entry.x < minX) minX = entry.x
+		if (entry.x > maxX) maxX = entry.x
+		if (entry.y < minY) minY = entry.y
+		if (entry.y > maxY) maxY = entry.y
+	}
+	const rangeX = maxX - minX || 1
+	const rangeY = maxY - minY || 1
+	return raw.map((entry, index) => ({
+		x: Number(normalizeToRange(entry.x, minX, rangeX).toFixed(3)),
+		y: Number(normalizeToRange(entry.y, minY, rangeY).toFixed(3)),
+	}))
+}
+
+function normalizeToRange(value: number, min: number, range: number): number {
+	return (value - min) / range * 2 - 1
+}
+
+function averageCoordinates(points: OuterGatePassionPoint[]): { x: number; y: number } {
+	if (!points.length) {
+		return { x: 0, y: 0 }
+	}
+	const sum = points.reduce(
+		(acc, point) => {
+			acc.x += point.coordinates.x
+			acc.y += point.coordinates.y
+			return acc
+		},
+		{ x: 0, y: 0 },
+	)
+	return {
+		x: Number((sum.x / points.length).toFixed(3)),
+		y: Number((sum.y / points.length).toFixed(3)),
+	}
+}
+
+function createPassionSnippet(text: string | undefined): string {
+	if (!text) {
+		return ""
+	}
+	const normalized = text.replace(/\s+/g, " ").trim()
+	if (normalized.length <= 180) {
+		return normalized
+	}
+	return `${normalized.slice(0, 177).trim()}...`
+}
+
+function createPassionLabel(snippet: string): string {
+	if (!snippet) {
+		return "Untitled"
+	}
+	const words = snippet.split(/\s+/).slice(0, 6).join(" ")
+	return words.length < snippet.length ? `${words}...` : words
+}
+
+function buildPassionMetadata(item: CloverAnalysisItem): OuterGatePassionPoint["metadata"] | undefined {
+	const metadata: OuterGatePassionPoint["metadata"] = {}
+	if (item.filename) {
+		metadata.filename = item.filename
+	}
+	if (item.mimeType) {
+		metadata.mimeType = item.mimeType
+	}
+	if (typeof item.sizeBytes === "number") {
+		metadata.sizeBytes = item.sizeBytes
+	}
+	if (item.source) {
+		metadata.source = item.source
+	}
+	if (Array.isArray(item.references) && item.references.length > 0) {
+		metadata.references = [...item.references]
+	}
+	return Object.keys(metadata).length > 0 ? metadata : undefined
+}
+
+function computeRecencyHeat(createdAt: string | undefined, nowMs: number): number {
+	if (!createdAt) {
+		return 0.25
+	}
+	const timestamp = Date.parse(createdAt)
+	if (Number.isNaN(timestamp)) {
+		return 0.25
+	}
+	const ageDays = Math.max(0, (nowMs - timestamp) / (1000 * 60 * 60 * 24))
+	const heat = Math.exp(-ageDays / 7)
+	return Number(Math.min(1, Math.max(0, heat)).toFixed(3))
+}
+
+function computeTopKeywords(points: OuterGatePassionPoint[], limit: number): string[] {
+	const counts = new Map<string, number>()
+	for (const point of points) {
+		const words = point.snippet
+			.toLowerCase()
+			.split(/[^a-z0-9]+/)
+			.filter((word) => word.length >= 4 && !PASSION_KEYWORD_STOPWORDS.has(word))
+		const unique = new Set(words)
+		for (const word of unique) {
+			counts.set(word, (counts.get(word) ?? 0) + 1)
+		}
+	}
+	return Array.from(counts.entries())
+		.sort((a, b) => b[1] - a[1])
+		.slice(0, limit)
+		.map(([word]) => toTitleCase(word))
+}
+
+function toTitleCase(value: string): string {
+	if (!value) {
+		return value
+	}
+	return value
+		.split(/\s+/)
+		.filter(Boolean)
+		.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+		.join(" ")
 }

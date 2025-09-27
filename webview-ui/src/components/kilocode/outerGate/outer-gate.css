@@ -17,13 +17,21 @@ body.vscode-dark .outer-gate-backdrop {
 		radial-gradient(120% 120% at 50% 100%, rgba(13, 9, 4, 0.78), transparent 82%);
 }
 
+.outer-gate-gateways {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	z-index: 1;
+}
+
 .outer-gate-gateways::before,
 .outer-gate-gateways::after {
 	content: "";
 	position: absolute;
-	top: 8%;
-	bottom: -16%;
-	width: 28%;
+	top: 50%;
+	width: clamp(220px, 28vw, 360px);
+	height: clamp(320px, 60vh, 720px);
+	transform: translateY(-50%);
 	border-radius: 999px;
 	border: 1px solid color-mix(in srgb, var(--primary) 32%, rgba(255, 255, 255, 0.16));
 	background: linear-gradient(
@@ -153,4 +161,26 @@ body.vscode-dark .outer-gate-grid {
 
 .outer-gate-orbit::after {
 	right: 8%;
+}
+
+/* Keep the Clover console pinned on wide layouts while letting its contents scroll. */
+.outer-gate-clover-pane {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	min-height: 0;
+}
+
+@media (min-width: 1280px) {
+	.outer-gate-clover-pane {
+		position: sticky;
+		top: 2rem;
+		height: calc(100vh - 4.25rem);
+		max-height: calc(100vh - 4.25rem);
+	}
+
+	.outer-gate-clover-pane > * {
+		flex: 1 1 auto;
+		min-height: 0;
+	}
 }

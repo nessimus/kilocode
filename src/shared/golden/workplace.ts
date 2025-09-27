@@ -77,6 +77,96 @@ export interface WorkplaceEmployee {
 	deletedAt?: string | null
 }
 
+export type WorkplaceEmployeeAvailability = "available" | "suspended" | "on_call" | "flexible"
+
+export type WorkplaceDayOfWeek =
+	| "sunday"
+	| "monday"
+	| "tuesday"
+	| "wednesday"
+	| "thursday"
+	| "friday"
+	| "saturday"
+
+export interface WorkplaceEmployeeWorkSchedule {
+	employeeId: string
+	availability: WorkplaceEmployeeAvailability
+	/**
+	 * Primary timezone identifier (IANA) so scheduling can rotate correctly.
+	 */
+	timezone?: string
+	/**
+	 * High-level weekly hour target agencies can use when creating plans.
+	 */
+	weeklyHoursTarget?: number
+	/**
+	 * Days of week the employee is generally expected to be active.
+	 */
+	workdays?: WorkplaceDayOfWeek[]
+	/**
+	 * Minutes since midnight local time for the typical start of a shift.
+	 */
+	dailyStartMinute?: number
+	/**
+	 * Minutes since midnight local time for the typical end of a shift.
+	 */
+	dailyEndMinute?: number
+	/**
+	 * Timestamp used to prioritise more recent overrides.
+	 */
+	lastUpdatedAt: string
+}
+
+export type WorkplaceShiftRecurrence =
+	| { type: "none" }
+	| {
+			 type: "weekly"
+			 interval: number
+			 weekdays: WorkplaceDayOfWeek[]
+			 until?: string
+	  }
+
+export interface WorkplaceShift {
+	id: string
+	companyId: string
+	employeeId: string
+	name?: string
+	description?: string
+	timezone?: string
+	start: string
+	end: string
+	recurrence?: WorkplaceShiftRecurrence
+	createdAt: string
+	updatedAt: string
+}
+
+export interface WorkplaceWorkdayState {
+	status: "idle" | "active" | "paused"
+	startedAt?: string
+	haltedAt?: string
+	/**
+	 * When true, starting a workday should immediately kick off all eligible action items.
+	 */
+	autoStartActionItems: boolean
+	/**
+	 * Stores the ids of employees that should currently be considered active when the
+	 * workday is running. This is recalculated from schedule data but persisted for quick lookups.
+	 */
+	activeEmployeeIds: string[]
+	/**
+	 * Employees intentionally bypassed (e.g. manual override) while the workday is active.
+	 */
+	bypassedEmployeeIds: string[]
+	/**
+	 * Captures schedule overrides and availability preferences per employee.
+	 */
+	employeeSchedules: WorkplaceEmployeeWorkSchedule[]
+	/**
+	 * Optional freeform reason for the current activation state (e.g. "manual override").
+	 */
+	lastActivationReason?: string
+}
+
 export type WorkplaceActionItemKind = "goal" | "project" | "task"
 
 export interface WorkplaceActionStatus {
@@ -152,8 +242,11 @@ export interface WorkplaceDepartment {
 export interface WorkplaceCompany {
 	id: string
 	name: string
+	emoji?: string
+	description?: string
 	vision?: string
 	mission?: string
+	isFavorite?: boolean
 	ownerProfile?: WorkplaceOwnerProfile
 	createdAt: string
 	updatedAt: string
@@ -165,6 +258,8 @@ export interface WorkplaceCompany {
 	actionStatuses: WorkplaceActionStatus[]
 	actionItems: WorkplaceActionItem[]
 	actionRelations: WorkplaceActionRelation[]
+	shifts: WorkplaceShift[]
+	workday?: WorkplaceWorkdayState
 }
 
 export interface WorkplaceState {
@@ -176,6 +271,8 @@ export interface WorkplaceState {
 
 export interface CreateCompanyPayload {
 	name: string
+	emoji?: string
+	description?: string
 	vision?: string
 	mission?: string
 	ownerProfile?: WorkplaceOwnerProfile
@@ -184,11 +281,22 @@ export interface CreateCompanyPayload {
 
 export interface UpdateCompanyPayload {
 	id: string
-	name: string
+	name?: string
+	emoji?: string
+	description?: string
 	vision?: string
 	mission?: string
 	ownerProfile?: WorkplaceOwnerProfile
 	updateDefaultOwnerProfile?: boolean
+}
+
+export interface SetCompanyFavoritePayload {
+	companyId: string
+	isFavorite: boolean
+}
+
+export interface DeleteCompanyPayload {
+	companyId: string
 }
 
 export interface CreateEmployeePayload {
@@ -303,6 +411,62 @@ export interface StartActionItemsPayload {
 	initiatedBy?: string
 }
 
+export interface StartWorkdayPayload {
+	companyId: string
+	/**
+	 * Optional explicit list of employee ids to activate. When omitted, the service
+	 * will derive the set from availability and schedule settings.
+	 */
+	employeeIds?: string[]
+	reason?: string
+	initiatedBy?: string
+}
+
+export interface HaltWorkdayPayload {
+	companyId: string
+	reason?: string
+	initiatedBy?: string
+	suspendActiveEmployees?: boolean
+}
+
+export interface UpdateEmployeeSchedulePayload {
+	companyId: string
+	employeeId: string
+	availability: WorkplaceEmployeeAvailability
+	timezone?: string
+	weeklyHoursTarget?: number
+	workdays?: WorkplaceDayOfWeek[]
+	dailyStartMinute?: number
+	dailyEndMinute?: number
+}
+
+export interface WorkplaceShiftInput {
+	id?: string
+	employeeId: string
+	name?: string
+	description?: string
+	timezone?: string
+	start: string
+	end: string
+	recurrence?: WorkplaceShiftRecurrence
+	companyId?: string
+}
+
+export interface CreateShiftPayload {
+	companyId: string
+	shift: WorkplaceShiftInput
+}
+
+export interface UpdateShiftPayload {
+	companyId: string
+	shift: Omit<WorkplaceShiftInput, "id"> & { id: string }
+}
+
+export interface DeleteShiftPayload {
+	companyId: string
+	shiftId: string
+}
+
 export interface UpsertActionStatusPayload {
 	companyId: string
 	status: WorkplaceActionStatus
@@ -343,14 +507,25 @@ export const createDefaultActionStatuses = () => {
 	}))
 }
 
+export const createDefaultWorkdayState = (): WorkplaceWorkdayState => ({
+	status: "idle",
+	autoStartActionItems: true,
+	activeEmployeeIds: [],
+	bypassedEmployeeIds: [],
+	employeeSchedules: [],
+})
+
 export const withGeneratedIds = {
 	company(payload: CreateCompanyPayload) {
 		const now = new Date().toISOString()
 		return {
 			id: uuid(),
 			name: payload.name,
+			emoji: payload.emoji,
+			description: payload.description,
 			vision: payload.vision,
 			mission: payload.mission,
+			isFavorite: false,
 			ownerProfile: payload.ownerProfile ?? {
 				name: "",
 				role: "Owner & CEO",
@@ -367,6 +542,8 @@ export const withGeneratedIds = {
 			actionStatuses: [] as WorkplaceActionStatus[],
 			actionItems: [] as WorkplaceActionItem[],
 			actionRelations: [] as WorkplaceActionRelation[],
+			shifts: [] as WorkplaceShift[],
+			workday: createDefaultWorkdayState(),
 		}
 	},
 	employee(payload: Omit<CreateEmployeePayload, "companyId">) {

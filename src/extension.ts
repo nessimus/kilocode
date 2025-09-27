@@ -50,6 +50,7 @@ import { registerGhostProvider } from "./services/ghost" // kilocode_change
 import { TerminalWelcomeService } from "./services/terminal-welcome/TerminalWelcomeService" // kilocode_change
 import { getKiloCodeWrapperProperties } from "./core/kilocode/wrapper" // kilocode_change
 import { createWorkplaceService } from "./services/workplace/WorkplaceService"
+import { WorkplaceFilesystemManager } from "./services/workplace/WorkplaceFilesystemManager"
 import { CloverSessionService } from "./services/outerGate/CloverSessionService"
 
 /**
@@ -147,6 +148,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	const contextProxy = await ContextProxy.getInstance(context)
 	const workplaceService = await createWorkplaceService(context)
+	const workplaceFilesystemManager = new WorkplaceFilesystemManager(context)
+	await workplaceFilesystemManager.initialize(workplaceService.getState())
+	workplaceService.attachStateObserver(workplaceFilesystemManager)
 	const cloverSessionService = new CloverSessionService(context, () => workplaceService)
 	const endlessSurfaceService = new EndlessSurfaceService(context, (message, ...rest) => {
 		const serializedRest = rest.map((entry) =>
@@ -190,8 +194,13 @@ export async function activate(context: vscode.ExtensionContext) {
 	// Initialize the provider *before* the Roo Code Cloud service.
 	const provider = new ClineProvider(context, outputChannel, "sidebar", contextProxy, mdmService)
 	provider.attachWorkplaceService(workplaceService)
+	provider.attachWorkplaceFilesystemManager(workplaceFilesystemManager)
 	provider.attachEndlessSurfaceService(endlessSurfaceService)
 	provider.attachCloverSessionService(cloverSessionService)
+	const fsConfigListener = workplaceFilesystemManager.addConfigurationListener(() =>
+		provider.postStateToWebview(),
+	)
+	context.subscriptions.push(fsConfigListener)
 
 	// Initialize Roo Code Cloud service.
 	const postStateListener = () => ClineProvider.getVisibleInstance()?.postStateToWebview()
@@ -351,6 +360,18 @@ export async function activate(context: vscode.ExtensionContext) {
 		endlessSurfaceService,
 		cloverSessionService,
 	})
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand(`${Package.name}.chooseWorkplaceFolder`, async () => {
+			await workplaceFilesystemManager.chooseRootFolder()
+			const root = workplaceFilesystemManager.getRootUri()
+			if (root) {
+				void vscode.window.showInformationMessage(
+					`Golden Workplace root set to ${root.fsPath}. Opening the associated workspace...`,
+				)
+			}
+		}),
+	)
 
 	const dumpCodexInfoDisposable = vscode.commands.registerCommand("golden-workplace.dev.dumpCodexInfo", async () => {
 		const codex = vscode.extensions.getExtension("openai.chatgpt")

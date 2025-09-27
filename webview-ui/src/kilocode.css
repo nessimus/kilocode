@@ -560,6 +560,24 @@ vscode-button::part(control) {
 	border-radius: 22px;
 }
 
+/* Align Workday navigator buttons so the host and control share pill sizing */
+vscode-button.workday-nav-button {
+	display: inline-flex;
+}
+
+vscode-button.workday-nav-button::part(control) {
+	border-radius: 999px;
+	min-height: 36px;
+	padding: 0 1.25rem;
+	font-size: calc(var(--vscode-font-size) * 0.9);
+	font-weight: 600;
+	letter-spacing: 0.18em;
+	text-transform: uppercase;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+}
+
 /* Gold-infused primary buttons */
 vscode-button[appearance="primary"]::part(control) {
 	background: linear-gradient(

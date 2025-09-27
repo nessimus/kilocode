@@ -105,6 +105,16 @@ export class OuterGateStorage {
 		await this.persist()
 	}
 
+	public async removeInsight(id: string): Promise<boolean> {
+		if (!this.data.insights[id]) {
+			return false
+		}
+
+		delete this.data.insights[id]
+		await this.persist()
+		return true
+	}
+
 	public async removeInsightsByIntegration(integrationId: OuterGateIntegrationId) {
 		let didMutate = false
 		for (const [insightId, insight] of Object.entries(this.data.insights)) {

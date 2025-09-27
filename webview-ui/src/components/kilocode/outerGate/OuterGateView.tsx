@@ -2,22 +2,44 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import clsx from "clsx"
 
 import { useExtensionState } from "@/context/ExtensionStateContext"
+import type { ExtensionMessage } from "@roo/ExtensionMessage"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuSeparator,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { EmojiPickerField } from "@/components/emoji"
 import OuterGateCloverConsole from "./OuterGateCloverConsole"
 import {
 	defaultOuterGateState,
 	OuterGateCloverSessionSummary,
 	OuterGateInsight,
+	OuterGateInsightStage,
 	type OuterGateIntegration,
 } from "@roo/golden/outerGate"
 import { cn } from "@/lib/utils"
 
 import "./outer-gate.css"
+import OuterGatePassionMap from "./OuterGatePassionMap"
 
 const formatNumber = (value: number) => new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value)
 
@@ -56,6 +78,10 @@ const insightStageLabel: Record<string, string> = {
 	assigned: "Assigned",
 }
 
+const insightStageOptions: { value: OuterGateInsightStage; label: string }[] = (
+	["captured", "processing", "ready", "assigned"] as OuterGateInsightStage[]
+).map((value) => ({ value, label: insightStageLabel[value] ?? value }))
+
 const insightIconClass: Record<OuterGateInsight["sourceType"], string> = {
 	conversation: "codicon-comment-discussion",
 	document: "codicon-file-text",
@@ -67,30 +93,95 @@ const integrationStatusLabel: Record<OuterGateIntegration["status"], string> = {
 	connected: "Connected",
 	not_connected: "Not Connected",
 	coming_soon: "Coming Soon",
+	error: "Connection Error",
 }
 
 const integrationStatusVariant: Record<OuterGateIntegration["status"], "default" | "secondary" | "outline"> = {
 	connected: "default",
 	not_connected: "secondary",
 	coming_soon: "outline",
+	error: "secondary",
 }
+
+type CompanyFormState = {
+	name: string
+	emoji: string
+	description: string
+	mission: string
+	vision: string
+}
+
+type InsightFormState = {
+	title: string
+	summary: string
+	stage: OuterGateInsightStage
+	recommendedWorkspace: string
+}
+
+const createEmptyCompanyForm = (): CompanyFormState => ({
+	name: "",
+	emoji: "",
+	description: "",
+	mission: "",
+	vision: "",
+})
+
+const createInsightFormState = (insight?: OuterGateInsight): InsightFormState => ({
+	title: insight?.title ?? "",
+	summary: insight?.summary ?? "",
+	stage: insight?.stage ?? "captured",
+	recommendedWorkspace: insight?.recommendedWorkspace ?? insight?.assignedCompanyId ?? "",
+})
+
+const CONNECTED_FEEDS_SECTION_ID = "outer-gate-connected-feeds"
 
 const OuterGateView: React.FC = () => {
 	const {
 		outerGateState,
 		sendOuterGateMessage,
 		triggerOuterGateAction,
+		requestOuterGatePassionMap,
+		updateOuterGateInsight,
+		deleteOuterGateInsight,
 		workplaceState,
 		createCompany,
+		updateCompany,
+		setCompanyFavorite,
+		deleteCompany,
 		selectCompany,
 		createCloverSession,
 		activateCloverSession,
 		loadMoreCloverSessions,
 	} = useExtensionState()
 	const resolvedState = outerGateState ?? defaultOuterGateState
-	const [createCompanyForm, setCreateCompanyForm] = useState({ name: "", mission: "", vision: "" })
+	const [createCompanyForm, setCreateCompanyForm] = useState<CompanyFormState>(() => createEmptyCompanyForm())
+	const [editCompanyForm, setEditCompanyForm] = useState<CompanyFormState>(() => createEmptyCompanyForm())
 	const [createCompanyError, setCreateCompanyError] = useState<string | undefined>()
+	const [editCompanyError, setEditCompanyError] = useState<string | undefined>()
 	const [isCreateCompanyModalOpen, setIsCreateCompanyModalOpen] = useState(false)
+	const [isEditCompanyModalOpen, setIsEditCompanyModalOpen] = useState(false)
+	const [activeEditCompanyId, setActiveEditCompanyId] = useState<string | null>(null)
+	const activeEditCompanyIdRef = useRef<string | null>(null)
+	const [favoritePending, setFavoritePending] = useState<Record<string, boolean>>({})
+	const [deletePending, setDeletePending] = useState<Record<string, boolean>>({})
+	const [updatePending, setUpdatePending] = useState<Record<string, boolean>>({})
+	const [optimisticFavorites, setOptimisticFavorites] = useState<Record<string, boolean>>({})
+	const [optimisticDeleted, setOptimisticDeleted] = useState<Record<string, boolean>>({})
+	const [mutationErrors, setMutationErrors] = useState<Record<string, string | undefined>>({})
+	const [activeDeleteDialog, setActiveDeleteDialog] = useState<string | null>(null)
+	const [deleteConfirmationText, setDeleteConfirmationText] = useState<string>("")
+	const [viewMode, setViewMode] = useState<"overview" | "passionMap">("overview")
+	const [activeInsightId, setActiveInsightId] = useState<string | null>(null)
+	const [insightForm, setInsightForm] = useState<InsightFormState>(() => createInsightFormState())
+	const [isInsightModalOpen, setIsInsightModalOpen] = useState(false)
+	const [isInsightSubmitting, setIsInsightSubmitting] = useState(false)
+	const [insightError, setInsightError] = useState<string | undefined>()
+	const [insightToDelete, setInsightToDelete] = useState<OuterGateInsight | null>(null)
+	const [isInsightDeletePending, setIsInsightDeletePending] = useState(false)
+
+	useEffect(() => {
+		activeEditCompanyIdRef.current = activeEditCompanyId
+	}, [activeEditCompanyId])
 
 	const {
 		analysisPool,
@@ -103,6 +194,13 @@ const OuterGateView: React.FC = () => {
 		cloverSessions,
 		activeCloverSessionId,
 	} = resolvedState
+	const passionMapState = resolvedState.passionMap
+
+	useEffect(() => {
+		if (viewMode === "passionMap" && passionMapState.status === "idle") {
+			requestOuterGatePassionMap()
+		}
+	}, [viewMode, passionMapState.status, requestOuterGatePassionMap])
 
 	const courtyardCompanies = useMemo(() => {
 		const companyList = workplaceState?.companies ?? []
@@ -120,6 +218,11 @@ const OuterGateView: React.FC = () => {
 
 		return [...companyList].sort((a, b) => toMs(b.updatedAt ?? b.createdAt) - toMs(a.updatedAt ?? a.createdAt))
 	}, [workplaceState?.companies])
+
+	const activeEditCompany = useMemo(
+		() => courtyardCompanies.find((company) => company.id === activeEditCompanyId) ?? null,
+		[courtyardCompanies, activeEditCompanyId],
+	)
 
 	const cloverSessionEntries = cloverSessions?.entries ?? []
 	const hasMoreCloverSessions = cloverSessions?.hasMore ?? false
@@ -198,8 +301,7 @@ const OuterGateView: React.FC = () => {
 				selectCompany(session.companyId)
 			}
 			activateCloverSession(session.id)
-			window.postMessage({ type: "action", action: "switchTab", tab: "lobby" }, "*")
-			window.postMessage({ type: "action", action: "focusChatInput" }, "*")
+			window.postMessage({ type: "outerGateFocusComposer" }, "*")
 		},
 		[activateCloverSession, selectCompany],
 	)
@@ -220,14 +322,32 @@ const OuterGateView: React.FC = () => {
 	const handleCreateCompanyModalChange = useCallback((open: boolean) => {
 		setIsCreateCompanyModalOpen(open)
 		if (!open) {
-			setCreateCompanyForm({ name: "", mission: "", vision: "" })
+			setCreateCompanyForm(createEmptyCompanyForm())
 			setCreateCompanyError(undefined)
 		}
 	}, [])
 
+	const handleEditCompanyModalChange = useCallback((open: boolean) => {
+		setIsEditCompanyModalOpen(open)
+		if (!open) {
+			setEditCompanyForm(createEmptyCompanyForm())
+			setEditCompanyError(undefined)
+			setActiveEditCompanyId(null)
+			activeEditCompanyIdRef.current = null
+		}
+	}, [])
+
 	const handleQuickAction = (slug: string) => {
-		if (slug === "create-company") {
+		if (slug === "create-company" || slug === "create-workspace") {
 			handleCreateCompanyModalChange(true)
+			return
+		}
+
+		if (slug === "import-data") {
+			const connectedFeedsSection = document.getElementById(CONNECTED_FEEDS_SECTION_ID)
+			if (connectedFeedsSection) {
+				connectedFeedsSection.scrollIntoView({ behavior: "smooth", block: "start" })
+			}
 			return
 		}
 
@@ -242,34 +362,207 @@ const OuterGateView: React.FC = () => {
 			return
 		}
 
+		const emojiValue = createCompanyForm.emoji.trim()
+		const descriptionValue = createCompanyForm.description.trim()
+		const missionValue = createCompanyForm.mission.trim()
+		const visionValue = createCompanyForm.vision.trim()
+
 		createCompany({
 			name: trimmedName,
-			mission: createCompanyForm.mission.trim() || undefined,
-			vision: createCompanyForm.vision.trim() || undefined,
+			emoji: emojiValue ? emojiValue : undefined,
+			description: descriptionValue ? descriptionValue : undefined,
+			mission: missionValue || undefined,
+			vision: visionValue || undefined,
 		})
 
 		handleCreateCompanyModalChange(false)
 	}
 
-	const handlePromptInsert = useCallback(
-		(prompt: string) => {
-			const text = prompt.trim()
-			if (!text) {
+	const handleEditCompanySubmit = useCallback(
+		(event: React.FormEvent<HTMLFormElement>) => {
+			event.preventDefault()
+			const companyId = activeEditCompanyIdRef.current
+			if (!companyId) {
+				setEditCompanyError("Select a company to update.")
 				return
 			}
-			createCloverSession(activeCompanyContext)
-			window.postMessage(
-				{
-					type: "outerGatePrefillDraft",
-					text,
-					replace: true,
-					focus: true,
-				},
-				"*",
-			)
+
+			const trimmedName = editCompanyForm.name.trim()
+			if (!trimmedName) {
+				setEditCompanyError("Company name is required.")
+				return
+			}
+
+			const emojiValue = editCompanyForm.emoji.trim()
+			const descriptionValue = editCompanyForm.description.trim()
+			const missionValue = editCompanyForm.mission.trim()
+			const visionValue = editCompanyForm.vision.trim()
+
+			setEditCompanyError(undefined)
+			setUpdatePending((prev) => ({ ...prev, [companyId]: true }))
+			setMutationErrors((prev) => {
+				if (!prev[companyId]) {
+					return prev
+				}
+				const next = { ...prev }
+				delete next[companyId]
+				return next
+			})
+
+			updateCompany({
+				id: companyId,
+				name: trimmedName,
+				emoji: emojiValue ? emojiValue : "",
+				description: descriptionValue ? descriptionValue : "",
+				mission: missionValue || undefined,
+				vision: visionValue || undefined,
+			})
 		},
-		[activeCompanyContext, createCloverSession],
+		[editCompanyForm, updateCompany],
 	)
+
+	const handleFavoriteToggle = useCallback(
+		(companyId: string, nextFavorite: boolean) => {
+			setFavoritePending((prev) => ({ ...prev, [companyId]: true }))
+			setOptimisticFavorites((prev) => ({ ...prev, [companyId]: nextFavorite }))
+			setMutationErrors((prev) => {
+				if (!prev[companyId]) {
+					return prev
+				}
+				const next = { ...prev }
+				delete next[companyId]
+				return next
+			})
+			setCompanyFavorite({ companyId, isFavorite: nextFavorite })
+		},
+		[setCompanyFavorite],
+	)
+
+	const handleEditCompany = useCallback(
+		(companyId: string) => {
+			const company = courtyardCompanies.find((entry) => entry.id === companyId)
+			if (!company) {
+				return
+			}
+
+			selectCompany(companyId)
+			setEditCompanyForm({
+				name: company.name ?? "",
+				emoji: company.emoji ?? "",
+				description: company.description ?? "",
+				mission: company.mission ?? "",
+				vision: company.vision ?? "",
+			})
+			setEditCompanyError(undefined)
+			setActiveEditCompanyId(companyId)
+			activeEditCompanyIdRef.current = companyId
+			setIsEditCompanyModalOpen(true)
+		},
+		[courtyardCompanies, selectCompany],
+	)
+
+	const handleDeleteRequest = useCallback((companyId: string) => {
+		setDeleteConfirmationText("")
+		setMutationErrors((prev) => {
+			if (!prev[companyId]) {
+				return prev
+			}
+			const next = { ...prev }
+			delete next[companyId]
+			return next
+		})
+		setActiveDeleteDialog(companyId)
+	}, [])
+
+	const handleConfirmDelete = useCallback(
+		(companyId: string) => {
+			setMutationErrors((prev) => {
+				if (!prev[companyId]) {
+					return prev
+				}
+				const next = { ...prev }
+				delete next[companyId]
+				return next
+			})
+			setDeletePending((prev) => ({ ...prev, [companyId]: true }))
+			setOptimisticDeleted((prev) => ({ ...prev, [companyId]: true }))
+			deleteCompany({ companyId })
+		},
+		[deleteCompany],
+	)
+
+	const handleInsightModalChange = useCallback((open: boolean) => {
+		if (!open) {
+			setActiveInsightId(null)
+			setInsightForm(createInsightFormState())
+			setInsightError(undefined)
+			setIsInsightSubmitting(false)
+		}
+
+		setIsInsightModalOpen(open)
+	}, [])
+
+	const handleEditInsight = useCallback((insight: OuterGateInsight) => {
+		setActiveInsightId(insight.id)
+		setInsightForm(createInsightFormState(insight))
+		setInsightError(undefined)
+		setIsInsightSubmitting(false)
+		setIsInsightModalOpen(true)
+	}, [])
+
+	const handleInsightInputChange = useCallback((field: keyof InsightFormState, value: string) => {
+		setInsightForm((prev) => ({ ...prev, [field]: value }))
+	}, [])
+
+	const handleInsightSubmit = useCallback(
+		(event: React.FormEvent<HTMLFormElement>) => {
+			event.preventDefault()
+			if (!activeInsightId) {
+				return
+			}
+
+			const trimmedTitle = insightForm.title.trim()
+			if (!trimmedTitle) {
+				setInsightError("Title is required.")
+				return
+			}
+
+			setInsightError(undefined)
+			setIsInsightSubmitting(true)
+
+			const trimmedSummary = insightForm.summary.trim()
+			const trimmedWorkspace = insightForm.recommendedWorkspace.trim()
+
+			updateOuterGateInsight(activeInsightId, {
+				title: trimmedTitle,
+				summary: trimmedSummary.length > 0 ? trimmedSummary : null,
+				stage: insightForm.stage,
+				recommendedWorkspace: trimmedWorkspace.length > 0 ? trimmedWorkspace : null,
+				assignedCompanyId: trimmedWorkspace.length > 0 ? trimmedWorkspace : null,
+			})
+
+			setIsInsightSubmitting(false)
+			setIsInsightModalOpen(false)
+			setActiveInsightId(null)
+			setInsightForm(createInsightFormState())
+		},
+		[activeInsightId, insightForm, updateOuterGateInsight],
+	)
+
+	const handleDeleteInsightRequest = useCallback((insight: OuterGateInsight) => {
+		setInsightToDelete(insight)
+		setIsInsightDeletePending(false)
+	}, [])
+
+	const handleDeleteInsightConfirm = useCallback(() => {
+		if (!insightToDelete) {
+			return
+		}
+		setIsInsightDeletePending(true)
+		deleteOuterGateInsight(insightToDelete.id)
+		setInsightToDelete(null)
+		setIsInsightDeletePending(false)
+	}, [deleteOuterGateInsight, insightToDelete])
 
 	useEffect(() => {
 		const handler = (event: MessageEvent) => {
@@ -286,6 +579,173 @@ const OuterGateView: React.FC = () => {
 		window.addEventListener("message", handler)
 		return () => window.removeEventListener("message", handler)
 	}, [handleCreateCompanyModalChange])
+
+	useEffect(() => {
+		const handler = (event: MessageEvent<ExtensionMessage>) => {
+			const data = event.data
+			if (!data || data.type !== "workplaceCompanyMutationResult" || !data.companyId) {
+				return
+			}
+			const { companyId, mutation, success, error } = data
+			if (mutation === "setFavorite") {
+				setFavoritePending((prev) => {
+					if (!prev[companyId]) {
+						return prev
+					}
+					const next = { ...prev }
+					delete next[companyId]
+					return next
+				})
+				setOptimisticFavorites((prev) => {
+					if (!prev[companyId]) {
+						return prev
+					}
+					const next = { ...prev }
+					delete next[companyId]
+					return next
+				})
+				setMutationErrors((prev) => {
+					if (success) {
+						if (!prev[companyId]) {
+							return prev
+						}
+						const next = { ...prev }
+						delete next[companyId]
+						return next
+					}
+					return {
+						...prev,
+						[companyId]: error ?? "Unable to update favorite. Please try again.",
+					}
+				})
+			} else if (mutation === "delete") {
+				setDeletePending((prev) => {
+					if (!prev[companyId]) {
+						return prev
+					}
+					const next = { ...prev }
+					delete next[companyId]
+					return next
+				})
+				setOptimisticDeleted((prev) => {
+					if (!prev[companyId]) {
+						return prev
+					}
+					const next = { ...prev }
+					delete next[companyId]
+					return next
+				})
+				if (success) {
+					setActiveDeleteDialog((prev) => (prev === companyId ? null : prev))
+					setDeleteConfirmationText("")
+				}
+				setMutationErrors((prev) => {
+					if (success) {
+						if (!prev[companyId]) {
+							return prev
+						}
+						const next = { ...prev }
+						delete next[companyId]
+						return next
+					}
+					return {
+						...prev,
+						[companyId]: error ?? "Unable to delete workspace. Please try again.",
+					}
+				})
+			} else if (mutation === "update") {
+				setUpdatePending((prev) => {
+					if (!prev[companyId]) {
+						return prev
+					}
+					const next = { ...prev }
+					delete next[companyId]
+					return next
+				})
+				if (success) {
+					setMutationErrors((prev) => {
+						if (!prev[companyId]) {
+							return prev
+						}
+						const next = { ...prev }
+						delete next[companyId]
+						return next
+					})
+					if (activeEditCompanyIdRef.current === companyId) {
+						handleEditCompanyModalChange(false)
+					}
+				} else {
+					const fallbackError = error ?? "Unable to update workspace. Please try again."
+					setMutationErrors((prev) => ({ ...prev, [companyId]: fallbackError }))
+					if (activeEditCompanyIdRef.current === companyId) {
+						setEditCompanyError(fallbackError)
+					}
+				}
+			}
+		}
+		window.addEventListener("message", handler)
+		return () => window.removeEventListener("message", handler)
+	}, [handleEditCompanyModalChange])
+
+useEffect(() => {
+	if (!activeDeleteDialog) {
+		setDeleteConfirmationText("")
+	}
+}, [activeDeleteDialog])
+
+	useEffect(() => {
+		const companyIds = new Set(courtyardCompanies.map((entry) => entry.id))
+		const pruneMap = <T,>(state: Record<string, T>) => {
+			let mutated = false
+			const next: Record<string, T> = {}
+			for (const [key, value] of Object.entries(state)) {
+				if (companyIds.has(key)) {
+					next[key] = value
+				} else {
+					mutated = true
+				}
+			}
+			return mutated ? next : state
+		}
+
+		setFavoritePending((prev) => pruneMap(prev))
+		setDeletePending((prev) => pruneMap(prev))
+		setUpdatePending((prev) => pruneMap(prev))
+		setOptimisticFavorites((prev) => pruneMap(prev))
+		setOptimisticDeleted((prev) => pruneMap(prev))
+		setMutationErrors((prev) => pruneMap(prev))
+	}, [courtyardCompanies])
+
+	const courtyardTotals = useMemo(() => {
+		const totals = courtyardCompanies.reduce(
+			(acc, company) => {
+				const activeEmployees = (company.employees ?? []).filter((employee) => !employee.deletedAt)
+				const activeTeams = (company.teams ?? []).filter((team) => !team.deletedAt)
+				const activeDepartments = (company.departments ?? []).filter((department) => !department.deletedAt)
+
+				return {
+					...acc,
+					employees: acc.employees + activeEmployees.length,
+					teams: acc.teams + activeTeams.length,
+					departments: acc.departments + activeDepartments.length,
+				}
+			},
+			{ companies: courtyardCompanies.length, employees: 0, teams: 0, departments: 0 },
+		)
+
+		const { companies, employees, teams, departments } = totals
+		const summaryParts = [
+			`${formatNumber(companies)} ${companies === 1 ? "company" : "companies"}`,
+			`${formatNumber(employees)} ${employees === 1 ? "employee" : "employees"}`,
+			`${formatNumber(teams)} ${teams === 1 ? "team" : "teams"}`,
+			`${formatNumber(departments)} ${departments === 1 ? "department" : "departments"}`,
+		]
+
+		return {
+			...totals,
+			summary: summaryParts.join(" · "),
+		}
+	}, [courtyardCompanies])
 
 	const stats = useMemo(
 		() => [
@@ -314,9 +774,23 @@ const OuterGateView: React.FC = () => {
 	)
 
 	const isCreateCompanySubmitDisabled = !createCompanyForm.name.trim()
+	const isEditCompanySubmitDisabled = !activeEditCompanyId || !editCompanyForm.name.trim()
+	const isEditSubmitting = activeEditCompanyId ? Boolean(updatePending[activeEditCompanyId]) : false
+	const editCompanyLabel = activeEditCompany?.name?.trim() || "company"
+
+	if (viewMode === "passionMap") {
+		return (
+			<OuterGatePassionMap
+				passionMap={passionMapState}
+				analysisPool={analysisPool}
+				onBack={() => setViewMode("overview")}
+				onRefresh={requestOuterGatePassionMap}
+			/>
+		)
+	}
 
 	return (
-		<div className="relative flex h-full w-full overflow-hidden">
+		<div className="relative flex h-full w-full overflow-x-hidden">
 			<div className="outer-gate-backdrop" aria-hidden />
 			<div className="outer-gate-glow-ring" aria-hidden />
 			<div className="outer-gate-gateways pointer-events-none" aria-hidden />
@@ -397,32 +871,6 @@ const OuterGateView: React.FC = () => {
 							))}
 						</section>
 
-						{suggestions.length > 0 && (
-							<section>
-								<Card className="border-transparent bg-[color-mix(in_srgb,var(--vscode-editor-background)_78%,rgba(255,255,255,0.1)_22%)] shadow-[0_18px_36px_rgba(10,6,0,0.24)]">
-									<CardHeader>
-										<CardTitle className="text-base font-semibold text-[color-mix(in_srgb,var(--vscode-foreground)_86%,rgba(255,255,255,0.12)_14%)]">
-											Suggested Prompts
-										</CardTitle>
-										<CardDescription className="text-xs text-[color-mix(in_srgb,var(--vscode-foreground)_68%,rgba(255,255,255,0.2)_32%)]">
-											Use these to jump-start Clover’s analysis.
-										</CardDescription>
-									</CardHeader>
-									<CardContent className="flex flex-wrap gap-2">
-										{suggestions.map((suggestion) => (
-											<Button
-												key={suggestion}
-												variant="outline"
-												className="rounded-full border-[color-mix(in_srgb,var(--primary)_22%,rgba(255,255,255,0.22)_78%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_85%,rgba(255,255,255,0.08)_15%)] px-4 py-2 text-xs font-medium text-[color-mix(in_srgb,var(--vscode-foreground)_72%,rgba(255,255,255,0.2)_28%)] hover:border-[color-mix(in_srgb,var(--primary)_34%,rgba(255,255,255,0.3)_66%)]"
-												onClick={() => handlePromptInsert(suggestion)}>
-												{suggestion}
-											</Button>
-										))}
-									</CardContent>
-								</Card>
-							</section>
-						)}
-
 						<section className="grid min-h-0 grid-cols-1 gap-4 overflow-auto pr-1">
 							<Card className="border-transparent bg-[color-mix(in_srgb,var(--vscode-editor-background)_78%,rgba(255,255,255,0.1)_22%)] shadow-[0_24px_48px_rgba(12,8,2,0.26)]">
 								<CardHeader>
@@ -434,6 +882,9 @@ const OuterGateView: React.FC = () => {
 											<CardDescription className="text-xs text-[color-mix(in_srgb,var(--vscode-foreground)_68%,rgba(255,255,255,0.24)_32%)]">
 												Your live ventures and workspaces ready for their next check-in.
 											</CardDescription>
+											<p className="mt-1 text-[0.7rem] text-[color-mix(in_srgb,var(--vscode-foreground)_56%,rgba(255,255,255,0.22)_44%)]">
+												{courtyardTotals.summary}
+											</p>
 										</div>
 										<Button
 											variant="secondary"
@@ -461,86 +912,237 @@ const OuterGateView: React.FC = () => {
 										</div>
 									) : (
 										<div className="-mx-1 flex snap-x snap-mandatory gap-4 overflow-x-auto pb-2 px-1">
-											{courtyardCompanies.map((company) => {
-												const trimmedName = company.name?.trim() ?? ""
-												const leadingSymbol = trimmedName.match(/^[^\w\s]/u)?.[0]
-												const companyIcon = leadingSymbol ?? "🏛️"
-												const remainder = leadingSymbol
-													? trimmedName.slice(leadingSymbol.length)
-													: ""
-												const companyLabel =
+									{courtyardCompanies.map((company) => {
+										const trimmedName = company.name?.trim() ?? ""
+										const customEmoji = company.emoji?.trim()
+										const fallbackLabel = trimmedName || "Untitled Company"
+										let companyIcon = customEmoji || "🏛️"
+										let companyLabel = fallbackLabel
+										if (!customEmoji) {
+											const leadingSymbol = trimmedName.match(/^[^\w\s]/u)?.[0]
+											if (leadingSymbol) {
+												companyIcon = leadingSymbol
+												const remainder = trimmedName.slice(leadingSymbol.length)
+												companyLabel =
 													remainder && /^\s/.test(remainder)
-														? remainder.trimStart() || trimmedName
-														: trimmedName || "Untitled Company"
-												const mission = company.mission?.trim() || company.vision?.trim()
-												const employeeCount = formatNumber(company.employees.length)
-												const departmentCount = formatNumber(company.departments.length)
-												const teamCount = formatNumber(company.teams.length)
-												return (
-													<div
-														key={company.id}
-														className="flex min-w-[280px] max-w-[320px] snap-start flex-col justify-between gap-4 rounded-2xl border border-[color-mix(in_srgb,var(--primary)_12%,rgba(255,255,255,0.18)_88%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_84%,rgba(255,255,255,0.08)_16%)] p-5 shadow-[0_16px_32px_rgba(8,5,1,0.24)] transition-transform hover:-translate-y-[2px]">
-														<div className="flex flex-col gap-4">
-															<div className="flex items-start gap-3">
-																<span className="text-3xl leading-none">
-																	{companyIcon}
-																</span>
-																<div className="min-w-0">
-																	<h3 className="truncate text-base font-semibold text-[color-mix(in_srgb,var(--vscode-foreground)_90%,rgba(255,255,255,0.1)_10%)]">
-																		{companyLabel}
-																	</h3>
-																	<p className="text-[11px] uppercase tracking-[0.18em] text-[color-mix(in_srgb,var(--vscode-foreground)_52%,rgba(255,255,255,0.28)_48%)]">
-																		Updated {formatDayTime(company.updatedAt)}
-																	</p>
-																</div>
-															</div>
-															<p className="line-clamp-3 text-sm leading-relaxed text-[color-mix(in_srgb,var(--vscode-foreground)_70%,rgba(255,255,255,0.22)_30%)]">
-																{mission ??
-																	"Set a mission so Clover knows where to guide your check-ins."}
-															</p>
-														</div>
-														<div className="flex flex-col gap-3">
-															<div className="flex flex-wrap gap-2 text-[0.68rem] uppercase tracking-[0.18em] text-[color-mix(in_srgb,var(--vscode-foreground)_54%,rgba(255,255,255,0.26)_46%)]">
-																<Badge
-																	variant="outline"
-																	className="border-[color-mix(in_srgb,var(--primary)_18%,rgba(255,255,255,0.24)_82%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_80%,rgba(255,255,255,0.1)_20%)] px-3 py-1 text-[0.62rem] text-[color-mix(in_srgb,var(--primary)_58%,rgba(255,255,255,0.24)_42%)]">
-																	<span className="inline-flex items-center gap-1">
-																		<span className="codicon codicon-person" />{" "}
-																		{employeeCount} teammates
-																	</span>
-																</Badge>
-																<Badge
-																	variant="outline"
-																	className="border-[color-mix(in_srgb,var(--primary)_18%,rgba(255,255,255,0.24)_82%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_80%,rgba(255,255,255,0.1)_20%)] px-3 py-1 text-[0.62rem] text-[color-mix(in_srgb,var(--primary)_58%,rgba(255,255,255,0.24)_42%)]">
-																	<span className="inline-flex items-center gap-1">
-																		<span className="codicon codicon-organization" />{" "}
-																		{departmentCount} departments
-																	</span>
-																</Badge>
-																<Badge
-																	variant="outline"
-																	className="border-[color-mix(in_srgb,var(--primary)_18%,rgba(255,255,255,0.24)_82%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_80%,rgba(255,255,255,0.1)_20%)] px-3 py-1 text-[0.62rem] text-[color-mix(in_srgb,var(--primary)_58%,rgba(255,255,255,0.24)_42%)]">
-																	<span className="inline-flex items-center gap-1">
-																		<span className="codicon codicon-versions" />{" "}
-																		{teamCount} teams
-																	</span>
-																</Badge>
-															</div>
-															<Button
-																variant="secondary"
-																className="w-full items-center justify-center gap-2 rounded-2xl border border-[color-mix(in_srgb,var(--primary)_24%,rgba(255,255,255,0.26)_76%)] bg-[color-mix(in_srgb,var(--primary)_78%,rgba(255,255,255,0.08)_22%)] py-2.5 text-sm font-semibold text-[color-mix(in_srgb,var(--primary-foreground,#211703)_88%,rgba(255,255,255,0.08)_12%)] shadow-[0_16px_32px_rgba(212,175,55,0.32)] hover:-translate-y-[1px] hover:bg-[color-mix(in_srgb,var(--primary)_84%,rgba(255,255,255,0.12)_16%)]"
-																onClick={() =>
-																	handleCheckIn(
-																		company.id,
-																		companyLabel || company.name,
-																	)
-																}>
-																Check-In Now
-																<span className="codicon codicon-location" />
+														? remainder.trimStart() || fallbackLabel
+														: remainder || fallbackLabel
+											}
+										} else if (!trimmedName) {
+											companyLabel = fallbackLabel
+										}
+										const summary =
+											company.description?.trim() || company.mission?.trim() || company.vision?.trim()
+											const employeeCount = formatNumber(company.employees.length)
+											const departmentCount = formatNumber(company.departments.length)
+											const teamCount = formatNumber(company.teams.length)
+											const isFavoriteLoading = Boolean(favoritePending[company.id])
+											const isDeleteLoading = Boolean(deletePending[company.id])
+											const isUpdateLoading = Boolean(updatePending[company.id])
+											const isDeleting = Boolean(optimisticDeleted[company.id]) || isDeleteLoading
+											const isFavorited = optimisticFavorites[company.id] ?? company.isFavorite ?? false
+											const menuDisabled = isFavoriteLoading || isDeleteLoading || isUpdateLoading
+											const mutationError = mutationErrors[company.id]
+											const isDeleteDialogOpen = activeDeleteDialog === company.id
+											const confirmationTarget = companyLabel || trimmedName || "Untitled Company"
+											const confirmationValue = isDeleteDialogOpen ? deleteConfirmationText : ""
+											const normalizedConfirmationInput = confirmationValue.trim()
+											const isConfirmationAccurate = normalizedConfirmationInput === confirmationTarget
+											const showConfirmationHint = confirmationValue.length > 0 && !isConfirmationAccurate
+
+											return (
+												<div
+													key={company.id}
+													className={clsx(
+														"flex min-w-[280px] max-w-[320px] snap-start flex-col justify-between gap-4 rounded-2xl border border-[color-mix(in_srgb,var(--primary)_12%,rgba(255,255,255,0.18)_88%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_84%,rgba(255,255,255,0.08)_16%)] p-5 shadow-[0_16px_32px_rgba(8,5,1,0.24)] transition-transform hover:-translate-y-[2px]",
+														isDeleting && "opacity-60 pointer-events-none",
+													)}
+													aria-busy={isDeleteLoading || isUpdateLoading ? true : undefined}>
+												<div className="flex flex-col gap-3">
+										<div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1">
+											<span className="text-3xl leading-none" aria-hidden>
+												{companyIcon}
+											</span>
+											<div className="min-w-0">
+												<div className="flex items-start gap-2">
+													<h3 className="truncate text-base font-semibold text-[color-mix(in_srgb,var(--vscode-foreground)_90%,rgba(255,255,255,0.1)_10%)]">
+														{companyLabel}
+													</h3>
+													{isFavorited && (
+														<span className="inline-flex items-center gap-1 rounded-full border border-[color-mix(in_srgb,var(--primary)_36%,rgba(255,255,255,0.3)_64%)] bg-[color-mix(in_srgb,var(--primary)_24%,rgba(255,255,255,0.08)_76%)] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.22em] text-[color-mix(in_srgb,var(--primary-foreground,#211703)_90%,rgba(255,255,255,0.14)_10%)]">
+															<span className="codicon codicon-star-full" aria-hidden />
+															<span className="sr-only">Favorited workspace</span>
+														</span>
+													)}
+												</div>
+											</div>
+											<div className="col-start-3 row-start-1 self-start justify-self-end">
+												<DropdownMenu>
+													<DropdownMenuTrigger asChild>
+														<Button
+															variant="ghost"
+															size="icon"
+															aria-label={`${companyLabel} options`}
+															disabled={menuDisabled}
+															className="text-[color-mix(in_srgb,var(--vscode-foreground)_64%,rgba(255,255,255,0.24)_36%)] hover:bg-[color-mix(in_srgb,var(--vscode-editor-background)_70%,rgba(255,255,255,0.12)_30%)]">
+																{menuDisabled ? (
+																	<span className="codicon codicon-sync animate-spin" aria-hidden />
+																) : (
+																	<span className="codicon codicon-kebab-vertical" aria-hidden />
+																)}
 															</Button>
-														</div>
+														</DropdownMenuTrigger>
+													<DropdownMenuContent
+														align="end"
+														className="w-56 rounded-xl border border-[color-mix(in_srgb,var(--primary)_26%,rgba(255,255,255,0.28)_74%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_78%,rgba(15,12,4,0.36)_22%)]/95 p-1 text-sm shadow-[0_20px_40px_rgba(8,5,1,0.45)] backdrop-blur-md">
+														<DropdownMenuItem
+															onSelect={() => handleFavoriteToggle(company.id, !isFavorited)}
+															disabled={isDeleteLoading || isUpdateLoading}>
+															<span className={`codicon ${isFavorited ? "codicon-star-full" : "codicon-star-empty"}`} aria-hidden />
+																{isFavorited ? "Unfavorite workspace" : "Favorite workspace"}
+															</DropdownMenuItem>
+														<DropdownMenuItem
+															onSelect={() => handleEditCompany(company.id)}
+															disabled={isDeleteLoading || isUpdateLoading}>
+															<span className="codicon codicon-edit" aria-hidden />
+															Edit details
+														</DropdownMenuItem>
+														<DropdownMenuSeparator />
+														<DropdownMenuItem
+															className="text-[color-mix(in_srgb,var(--vscode-editorError-foreground,#ff6b6b)_88%,rgba(255,255,255,0.24)_12%)] focus:bg-[color-mix(in_srgb,var(--vscode-editorError-foreground,#ff6b6b)_24%,rgba(255,255,255,0.12)_76%)] focus:text-[color-mix(in_srgb,var(--vscode-editorError-foreground,#ff9b9b)_92%,rgba(255,255,255,0.1)_8%)]"
+															onSelect={() => handleDeleteRequest(company.id)}>
+															<span className="codicon codicon-trash" aria-hidden />
+															Delete workspace
+														</DropdownMenuItem>
+													</DropdownMenuContent>
+												</DropdownMenu>
+											</div>
+											<p className="col-span-2 col-start-1 text-[11px] uppercase tracking-[0.18em] text-[color-mix(in_srgb,var(--vscode-foreground)_52%,rgba(255,255,255,0.28)_48%)] leading-[1.2]">
+												Updated {formatDayTime(company.updatedAt)}
+											</p>
+											</div>
+														<p className="line-clamp-3 text-sm leading-relaxed text-[color-mix(in_srgb,var(--vscode-foreground)_70%,rgba(255,255,255,0.22)_30%)]">
+															{summary ??
+																"Set a mission so Clover knows where to guide your check-ins."}
+														</p>
+													{isUpdateLoading && (
+														<p className="flex items-center gap-2 text-xs text-[color-mix(in_srgb,var(--vscode-foreground)_62%,rgba(255,255,255,0.2)_38%)]" role="status" aria-live="polite">
+															<span className="codicon codicon-sync animate-spin" aria-hidden /> Saving changes…
+														</p>
+													)}
+													{isDeleteLoading && (
+														<p className="flex items-center gap-2 text-xs text-[color-mix(in_srgb,var(--vscode-foreground)_62%,rgba(255,255,255,0.2)_38%)]" role="status" aria-live="polite">
+															<span className="codicon codicon-sync animate-spin" aria-hidden /> Deleting workspace…
+														</p>
+													)}
 													</div>
-												)
+													<div className="flex flex-col gap-3">
+														<div className="flex flex-wrap gap-2 text-[0.68rem] uppercase tracking-[0.18em] text-[color-mix(in_srgb,var(--vscode-foreground)_54%,rgba(255,255,255,0.26)_46%)]">
+															<Badge
+																variant="outline"
+																className="border-[color-mix(in_srgb,var(--primary)_18%,rgba(255,255,255,0.24)_82%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_80%,rgba(255,255,255,0.1)_20%)] px-3 py-1 text-[0.62rem] text-[color-mix(in_srgb,var(--primary)_58%,rgba(255,255,255,0.24)_42%)]">
+																<span className="inline-flex items-center gap-1">
+																	<span className="codicon codicon-person" aria-hidden /> {employeeCount} teammates
+																</span>
+															</Badge>
+															<Badge
+																variant="outline"
+																className="border-[color-mix(in_srgb,var(--primary)_18%,rgba(255,255,255,0.24)_82%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_80%,rgba(255,255,255,0.1)_20%)] px-3 py-1 text-[0.62rem] text-[color-mix(in_srgb,var(--primary)_58%,rgba(255,255,255,0.24)_42%)]">
+																<span className="inline-flex items-center gap-1">
+																	<span className="codicon codicon-organization" aria-hidden /> {departmentCount} departments
+																</span>
+															</Badge>
+															<Badge
+																variant="outline"
+																className="border-[color-mix(in_srgb,var(--primary)_18%,rgba(255,255,255,0.24)_82%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_80%,rgba(255,255,255,0.1)_20%)] px-3 py-1 text-[0.62rem] text-[color-mix(in_srgb,var(--primary)_58%,rgba(255,255,255,0.24)_42%)]">
+																<span className="inline-flex items-center gap-1">
+																	<span className="codicon codicon-versions" aria-hidden /> {teamCount} teams
+																</span>
+															</Badge>
+														</div>
+														<Button
+															variant="secondary"
+															disabled={isDeleteLoading || isUpdateLoading}
+															className="w-full items-center justify-center gap-2 rounded-2xl border border-[color-mix(in_srgb,var(--primary)_24%,rgba(255,255,255,0.26)_76%)] bg-[color-mix(in_srgb,var(--primary)_78%,rgba(255,255,255,0.08)_22%)] py-2.5 text-sm font-semibold text-[color-mix(in_srgb,var(--primary-foreground,#211703)_88%,rgba(255,255,255,0.08)_12%)] shadow-[0_16px_32px_rgba(212,175,55,0.32)] hover:-translate-y-[1px] hover:bg-[color-mix(in_srgb,var(--primary)_84%,rgba(255,255,255,0.12)_16%)] disabled:opacity-70"
+															onClick={() =>
+																handleCheckIn(company.id, companyLabel || company.name)}>
+															{isDeleteLoading ? (
+																<>
+																	<span className="codicon codicon-sync animate-spin" aria-hidden /> Deleting…
+																</>
+															) : (
+																<>
+																	Check-In Now
+																	<span className="codicon codicon-location" aria-hidden />
+																</>
+															)}
+														</Button>
+													</div>
+
+													{mutationError && (
+														<p
+															role="status"
+															aria-live="polite"
+															className="rounded-lg border border-[color-mix(in_srgb,var(--vscode-editorError-foreground,#ff6b6b)_60%,rgba(255,255,255,0.24)_40%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_80%,rgba(255,90,90,0.16)_20%)] px-3 py-2 text-xs text-[color-mix(in_srgb,var(--vscode-editorError-foreground,#ff8484)_88%,rgba(255,255,255,0.12)_12%)]">
+															{mutationError}
+														</p>
+													)}
+
+													<AlertDialog
+														open={activeDeleteDialog === company.id}
+														onOpenChange={(open) => setActiveDeleteDialog(open ? company.id : null)}>
+														<AlertDialogContent className="max-w-sm">
+															<AlertDialogHeader>
+																<AlertDialogTitle>Delete {confirmationTarget}</AlertDialogTitle>
+																<AlertDialogDescription className="space-y-3 text-sm text-[color-mix(in_srgb,var(--vscode-foreground)_82%,rgba(255,255,255,0.18)_18%)]">
+																	<p>
+																		This will permanently remove <span className="font-semibold text-[color-mix(in_srgb,var(--primary)_68%,rgba(255,255,255,0.28)_32%)]">{confirmationTarget}</span>
+																		and its AI teammates. Enter the workspace name exactly to confirm.
+																	</p>
+																	<div className="space-y-2">
+																		<Input
+																			type="text"
+																			value={confirmationValue}
+																			onChange={(event) => setDeleteConfirmationText(event.target.value)}
+																			autoFocus={isDeleteDialogOpen}
+																			placeholder={`Type ${confirmationTarget}`}
+																			aria-label={`Type ${confirmationTarget} to confirm deletion`}
+																			aria-invalid={showConfirmationHint ? true : undefined}
+																			disabled={!isDeleteDialogOpen || isDeleteLoading}
+																		/>
+																		<p
+																			className={cn(
+																				"text-xs text-[color-mix(in_srgb,var(--vscode-foreground)_60%,rgba(255,255,255,0.28)_40%)]",
+																				showConfirmationHint && "text-[color-mix(in_srgb,var(--vscode-editorError-foreground,#ff6b6b)_88%,rgba(255,255,255,0.22)_12%)]",
+																			)}
+																			aria-live="polite">
+																			Type <span className="font-semibold">{confirmationTarget}</span> to enable deletion.
+																		</p>
+																	</div>
+																</AlertDialogDescription>
+															</AlertDialogHeader>
+															<AlertDialogFooter>
+																<AlertDialogCancel asChild>
+																	<Button variant="secondary">Cancel</Button>
+																</AlertDialogCancel>
+																<AlertDialogAction asChild>
+																	<Button
+																		variant="destructive"
+																		onClick={() => handleConfirmDelete(company.id)}
+																		disabled={isDeleteLoading || !isConfirmationAccurate}>
+																		{isDeleteLoading ? (
+																			<span className="codicon codicon-sync animate-spin" aria-hidden />
+																		) : (
+																			<span className="codicon codicon-trash" aria-hidden />
+																		)}
+																		Delete workspace
+																	</Button>
+																</AlertDialogAction>
+															</AlertDialogFooter>
+														</AlertDialogContent>
+													</AlertDialog>
+												</div>
+											)
 											})}
 										</div>
 									)}
@@ -555,7 +1157,7 @@ const OuterGateView: React.FC = () => {
 												Recent Chats with Clover
 											</CardTitle>
 											<CardDescription className="text-xs text-[color-mix(in_srgb,var(--vscode-foreground)_68%,rgba(255,255,255,0.24)_32%)]">
-												Pick up where you left off or spin up a fresh concierge thread.
+												Pick up where you left off or spin up a fresh concierge thread. Clover AI chats stay personal—they aren’t shared with any company.
 											</CardDescription>
 										</div>
 										<Button
@@ -568,12 +1170,12 @@ const OuterGateView: React.FC = () => {
 									</div>
 								</CardHeader>
 								<CardContent className="space-y-4">
-									{!cloverSessionsLoaded && isLoadingCloverSessions ? (
-										<div className="grid gap-3 md:grid-cols-2">
-											{[0, 1, 2, 3].map((index) => (
-												<div
-													key={index}
-													className="flex flex-col gap-3 rounded-2xl border border-[color-mix(in_srgb,var(--primary)_12%,rgba(255,255,255,0.18)_88%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_84%,rgba(255,255,255,0.08)_16%)] p-4 shadow-[0_16px_32px_rgba(8,5,1,0.18)] animate-pulse">
+					{!cloverSessionsLoaded && isLoadingCloverSessions ? (
+						<div className="-mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto px-1 pb-2">
+							{[0, 1, 2, 3].map((index) => (
+								<div
+									key={index}
+									className="flex min-w-[280px] max-w-[320px] shrink-0 snap-start flex-col gap-3 rounded-2xl border border-[color-mix(in_srgb,var(--primary)_12%,rgba(255,255,255,0.18)_88%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_84%,rgba(255,255,255,0.08)_16%)] p-4 shadow-[0_16px_32px_rgba(8,5,1,0.18)] animate-pulse">
 													<div className="h-4 w-2/3 rounded bg-[color-mix(in_srgb,var(--primary)_18%,rgba(255,255,255,0.22)_82%)]" />
 													<div className="h-3 w-1/3 rounded bg-[color-mix(in_srgb,var(--primary)_12%,rgba(255,255,255,0.18)_88%)]" />
 													<div className="h-12 rounded bg-[color-mix(in_srgb,var(--primary)_12%,rgba(255,255,255,0.14)_88%)]" />
@@ -597,14 +1199,14 @@ const OuterGateView: React.FC = () => {
 										</div>
 									) : (
 										<>
-											<div className="grid gap-3 md:grid-cols-2">
+							<div className="-mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto px-1 pb-2">
 												{cloverSessionEntries.map((session) => {
 													const isActive = session.id === activeCloverSessionId
 													return (
 														<div
 															key={session.id}
-															className={clsx(
-																"flex flex-col justify-between gap-3 rounded-2xl border border-[color-mix(in_srgb,var(--primary)_12%,rgba(255,255,255,0.18)_88%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_84%,rgba(255,255,255,0.1)_16%)] p-4 shadow-[0_16px_32px_rgba(8,5,1,0.22)] transition-transform hover:-translate-y-[1px]",
+										className={clsx(
+											"flex min-w-[280px] max-w-[320px] shrink-0 snap-start flex-col justify-between gap-3 rounded-2xl border border-[color-mix(in_srgb,var(--primary)_12%,rgba(255,255,255,0.18)_88%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_84%,rgba(255,255,255,0.1)_16%)] p-4 shadow-[0_16px_32px_rgba(8,5,1,0.22)] transition-transform hover:-translate-y-[1px]",
 																isActive &&
 																	"border-[color-mix(in_srgb,var(--primary)_42%,rgba(255,255,255,0.32)_58%)]",
 															)}>
@@ -617,13 +1219,6 @@ const OuterGateView: React.FC = () => {
 																		Updated {formatDayTime(session.updatedAtIso)}
 																	</p>
 																</div>
-																{session.companyName && (
-																	<Badge
-																		variant="outline"
-																		className="whitespace-nowrap rounded-full border-[color-mix(in_srgb,var(--primary)_18%,rgba(255,255,255,0.28)_82%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_80%,rgba(255,255,255,0.1)_20%)] px-3 py-1 text-[0.62rem] uppercase tracking-[0.18em] text-[color-mix(in_srgb,var(--primary)_58%,rgba(255,255,255,0.24)_42%)]">
-																		{session.companyName}
-																	</Badge>
-																)}
 															</div>
 															<p className="line-clamp-2 text-sm text-[color-mix(in_srgb,var(--vscode-foreground)_72%,rgba(255,255,255,0.22)_28%)]">
 																{session.preview}
@@ -646,8 +1241,10 @@ const OuterGateView: React.FC = () => {
 														</div>
 													)
 												})}
-											</div>
-											{hasMoreCloverSessions && <div ref={loadMoreSentinelRef} className="h-1" />}
+											{hasMoreCloverSessions && (
+												<div ref={loadMoreSentinelRef} className="h-full w-1 shrink-0" />
+											)}
+										</div>
 											{isLoadingCloverSessions && (
 												<div className="flex items-center gap-2 text-xs text-[color-mix(in_srgb,var(--vscode-foreground)_60%,rgba(255,255,255,0.28)_40%)]">
 													<span
@@ -677,7 +1274,10 @@ const OuterGateView: React.FC = () => {
 											variant="ghost"
 											size="sm"
 											className="rounded-full border border-transparent bg-[color-mix(in_srgb,var(--primary)_12%,rgba(255,255,255,0.16)_88%)] px-3 py-1 text-xs text-[color-mix(in_srgb,var(--primary)_62%,rgba(255,255,255,0.24)_38%)] hover:border-[color-mix(in_srgb,var(--primary)_28%,rgba(255,255,255,0.3)_72%)]"
-											onClick={() => {}}>
+											onClick={() => {
+												setViewMode("passionMap")
+												requestOuterGatePassionMap()
+											}}>
 											<span className="codicon codicon-briefcase" /> Explore Insights
 										</Button>
 									</div>
@@ -699,24 +1299,47 @@ const OuterGateView: React.FC = () => {
 																className={clsx(
 																	"codicon",
 																	insightIconClass[insight.sourceType],
-																)}
-																aria-hidden
-															/>
+															)}
+															aria-hidden
+														/>
 															<span>{insight.recommendedWorkspace ?? "Unassigned"}</span>
 														</div>
-														<Badge
-															variant="outline"
-															className={cn(
-																"border-none px-3 py-1 text-[0.65rem] uppercase tracking-[0.22em]",
-																stageVariantMap[insight.stage],
-															)}>
-															{insightStageLabel[insight.stage] ?? insight.stage}
-														</Badge>
-													</div>
-													<div className="space-y-2">
-														<h3 className="text-base font-semibold text-[color-mix(in_srgb,var(--vscode-foreground)_88%,rgba(255,255,255,0.12)_12%)]">
-															{insight.title}
-														</h3>
+														<div className="flex items-start gap-2">
+															<Badge
+																variant="outline"
+																className={cn(
+																	"border-none px-3 py-1 text-[0.65rem] uppercase tracking-[0.22em]",
+																	stageVariantMap[insight.stage],
+																)}>
+																{insightStageLabel[insight.stage] ?? insight.stage}
+															</Badge>
+															<DropdownMenu>
+																<DropdownMenuTrigger asChild>
+																	<Button
+																		variant="ghost"
+																		size="icon"
+																		aria-label="Insight options"
+																		className="h-7 w-7 rounded-full border border-[color-mix(in_srgb,var(--primary)_18%,rgba(255,255,255,0.24)_82%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_78%,rgba(255,255,255,0.12)_22%)] text-[color-mix(in_srgb,var(--primary)_62%,rgba(255,255,255,0.22)_38%)] transition hover:border-[color-mix(in_srgb,var(--primary)_28%,rgba(255,255,255,0.3)_72%)]">
+																		<span className="codicon codicon-kebab-vertical" aria-hidden />
+																	</Button>
+																</DropdownMenuTrigger>
+																<DropdownMenuContent align="end" className="min-w-[160px]">
+																	<DropdownMenuItem onSelect={() => handleEditInsight(insight)}>
+																		Edit insight
+																	</DropdownMenuItem>
+																	<DropdownMenuItem
+																		onSelect={() => handleDeleteInsightRequest(insight)}
+																		className="text-[var(--vscode-errorForeground)] focus:text-[var(--vscode-errorForeground)]">
+																		Delete insight
+																	</DropdownMenuItem>
+																</DropdownMenuContent>
+															</DropdownMenu>
+														</div>
+												</div>
+												<div className="space-y-2">
+													<h3 className="text-base font-semibold text-[color-mix(in_srgb,var(--vscode-foreground)_88%,rgba(255,255,255,0.12)_12%)]">
+														{insight.title}
+													</h3>
 														{insight.summary && (
 															<p className="text-sm text-[color-mix(in_srgb,var(--vscode-foreground)_70%,rgba(255,255,255,0.22)_30%)]">
 																{insight.summary}
@@ -735,19 +1358,6 @@ const OuterGateView: React.FC = () => {
 																</span>
 															)}
 														</div>
-														<div className="flex items-center justify-end">
-															<Button
-																variant="ghost"
-																size="sm"
-																className="ml-auto inline-flex items-center gap-1 rounded-xl border border-[color-mix(in_srgb,var(--primary)_18%,rgba(255,255,255,0.24)_82%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_78%,rgba(255,255,255,0.12)_22%)] px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-[color-mix(in_srgb,var(--primary)_62%,rgba(255,255,255,0.22)_38%)] shadow-[0_10px_22px_rgba(12,8,2,0.24)] transition-transform hover:-translate-y-[1px] hover:border-[color-mix(in_srgb,var(--primary)_28%,rgba(255,255,255,0.3)_72%)]"
-																onClick={() => {}}>
-																Details
-																<span
-																	className="codicon codicon-chevron-right"
-																	aria-hidden
-																/>
-															</Button>
-														</div>
 													</div>
 												</div>
 											))}
@@ -756,7 +1366,10 @@ const OuterGateView: React.FC = () => {
 								</CardContent>
 							</Card>
 
-							<Card className="border-transparent bg-[color-mix(in_srgb,var(--vscode-editor-background)_80%,rgba(255,255,255,0.1)_20%)] shadow-[0_20px_44px_rgba(10,6,0,0.26)]">
+							<Card
+								id={CONNECTED_FEEDS_SECTION_ID}
+								tabIndex={-1}
+								className="border-transparent bg-[color-mix(in_srgb,var(--vscode-editor-background)_80%,rgba(255,255,255,0.1)_20%)] shadow-[0_20px_44px_rgba(10,6,0,0.26)]">
 								<CardHeader>
 									<CardTitle className="text-lg font-semibold text-[color-mix(in_srgb,var(--vscode-foreground)_86%,rgba(255,255,255,0.12)_14%)]">
 										Connected Feeds
@@ -813,7 +1426,7 @@ const OuterGateView: React.FC = () => {
 						</section>
 					</div>
 
-					<div className="flex min-h-0 flex-col">
+					<div className="outer-gate-clover-pane flex min-h-0 flex-col">
 						<OuterGateCloverConsole
 							title="Clover AI Concierge"
 							subtitle="Voice what matters. I’ll align it with the right workspace and teammates."
@@ -827,6 +1440,246 @@ const OuterGateView: React.FC = () => {
 					</div>
 				</div>
 			</div>
+
+			<Dialog open={isInsightModalOpen} onOpenChange={handleInsightModalChange}>
+				<DialogContent className="max-w-lg">
+					<form onSubmit={handleInsightSubmit} className="space-y-5" aria-busy={isInsightSubmitting}>
+						<DialogHeader>
+							<DialogTitle>Edit Insight</DialogTitle>
+						</DialogHeader>
+
+						<div className="space-y-4">
+							<div className="flex flex-col gap-2">
+								<label htmlFor="outer-gate-insight-title" className="text-sm font-medium text-[var(--vscode-foreground)]">
+									Title
+								</label>
+								<Input
+									required
+									id="outer-gate-insight-title"
+									value={insightForm.title}
+									onChange={(event) => handleInsightInputChange("title", event.target.value)}
+									placeholder="Summarize the insight"
+								/>
+							</div>
+							<div className="flex flex-col gap-2">
+								<label htmlFor="outer-gate-insight-stage" className="text-sm font-medium text-[var(--vscode-foreground)]">
+									Stage
+								</label>
+								<Select
+									value={insightForm.stage}
+									onValueChange={(value) => handleInsightInputChange("stage", value as OuterGateInsightStage)}>
+									<SelectTrigger id="outer-gate-insight-stage" className="w-full">
+										<SelectValue placeholder="Select stage" />
+									</SelectTrigger>
+									<SelectContent>
+										{insightStageOptions.map(({ value, label }) => (
+											<SelectItem key={value} value={value}>
+												{label}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+							</div>
+							<div className="flex flex-col gap-2">
+								<label htmlFor="outer-gate-insight-summary" className="text-sm font-medium text-[var(--vscode-foreground)]">
+									Summary (optional)
+								</label>
+								<Textarea
+									id="outer-gate-insight-summary"
+									value={insightForm.summary}
+									onChange={(event) => handleInsightInputChange("summary", event.target.value)}
+									placeholder="Add a short summary or leave blank"
+									rows={3}
+								/>
+							</div>
+							<div className="flex flex-col gap-2">
+								<label htmlFor="outer-gate-insight-workspace" className="text-sm font-medium text-[var(--vscode-foreground)]">
+									Recommended workspace (optional)
+								</label>
+								<Input
+									id="outer-gate-insight-workspace"
+									value={insightForm.recommendedWorkspace}
+									onChange={(event) => handleInsightInputChange("recommendedWorkspace", event.target.value)}
+									placeholder="Unassigned"
+								/>
+							</div>
+							{insightError && (
+								<p className="text-sm text-[color-mix(in_srgb,var(--vscode-editorError-foreground,#ff6b6b)_82%,rgba(255,255,255,0.2)_18%)]">
+									{insightError}
+								</p>
+							)}
+						</div>
+
+						<DialogFooter>
+							<Button type="button" variant="secondary" onClick={() => handleInsightModalChange(false)}>
+								Cancel
+							</Button>
+							<Button type="submit" disabled={isInsightSubmitting}>
+								{isInsightSubmitting ? (
+									<span className="flex items-center gap-2">
+										<span className="codicon codicon-sync animate-spin" aria-hidden /> Saving…
+									</span>
+								) : (
+									"Save Insight"
+								)}
+							</Button>
+						</DialogFooter>
+					</form>
+				</DialogContent>
+			</Dialog>
+
+			<AlertDialog
+				open={Boolean(insightToDelete)}
+				onOpenChange={(open) => {
+					if (!open) {
+						setInsightToDelete(null)
+						setIsInsightDeletePending(false)
+					}
+				}}>
+				<AlertDialogContent className="max-w-sm">
+					<AlertDialogHeader>
+						<AlertDialogTitle>
+							Delete {insightToDelete?.title ?? "this insight"}?
+						</AlertDialogTitle>
+						<AlertDialogDescription className="text-sm text-[color-mix(in_srgb,var(--vscode-foreground)_82%,rgba(255,255,255,0.18)_18%)]">
+							This permanently removes the insight from your recent captures. You can always capture a new one later, but this action cannot be undone.
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel asChild>
+							<Button type="button" variant="secondary">Keep Insight</Button>
+						</AlertDialogCancel>
+						<AlertDialogAction asChild>
+							<Button
+								variant="destructive"
+								onClick={handleDeleteInsightConfirm}
+								disabled={isInsightDeletePending}>
+								{isInsightDeletePending ? (
+									<span className="flex items-center gap-2">
+										<span className="codicon codicon-sync animate-spin" aria-hidden /> Removing…
+									</span>
+								) : (
+									<span className="flex items-center gap-2">
+										<span className="codicon codicon-trash" aria-hidden /> Delete Insight
+									</span>
+								)}
+							</Button>
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
+
+			<Dialog open={isEditCompanyModalOpen} onOpenChange={handleEditCompanyModalChange}>
+				<DialogContent className="max-w-lg">
+					<form onSubmit={handleEditCompanySubmit} className="space-y-5" aria-busy={isEditSubmitting}>
+						<DialogHeader>
+							<DialogTitle>Edit {editCompanyLabel}</DialogTitle>
+						</DialogHeader>
+
+						<div className="space-y-4">
+							<div className="flex flex-col gap-2">
+								<label
+									htmlFor="edit-company-name"
+									className="text-sm font-medium text-[var(--vscode-foreground)]">
+									Company name
+								</label>
+								<Input
+									id="edit-company-name"
+									value={editCompanyForm.name}
+									onChange={(event) => setEditCompanyForm((prev) => ({ ...prev, name: event.target.value }))}
+									autoFocus
+									disabled={isEditSubmitting}
+									placeholder="Northwind Ventures"
+								/>
+							</div>
+
+						<div className="flex flex-col gap-2">
+							<label
+								htmlFor="edit-company-emoji"
+								className="text-sm font-medium text-[var(--vscode-foreground)]">
+								Company emoji (optional)
+							</label>
+							<EmojiPickerField
+								id="edit-company-emoji"
+								value={editCompanyForm.emoji}
+								onChange={(event) => setEditCompanyForm((prev) => ({ ...prev, emoji: event.target.value }))}
+								onEmojiSelect={(emoji) => setEditCompanyForm((prev) => ({ ...prev, emoji }))}
+								disabled={isEditSubmitting}
+								placeholder="🚀"
+								maxLength={4}
+							/>
+						</div>
+
+							<div className="flex flex-col gap-2">
+								<label
+									htmlFor="edit-company-description"
+									className="text-sm font-medium text-[var(--vscode-foreground)]">
+									Company description (optional)
+								</label>
+								<Textarea
+									id="edit-company-description"
+									value={editCompanyForm.description}
+									onChange={(event) => setEditCompanyForm((prev) => ({ ...prev, description: event.target.value }))}
+									disabled={isEditSubmitting}
+									placeholder="Summarize what this workspace is for."
+									rows={3}
+								/>
+							</div>
+
+							<div className="flex flex-col gap-2">
+								<label
+									htmlFor="edit-company-mission"
+									className="text-sm font-medium text-[var(--vscode-foreground)]">
+									Mission statement
+								</label>
+								<Textarea
+									id="edit-company-mission"
+									value={editCompanyForm.mission}
+									onChange={(event) => setEditCompanyForm((prev) => ({ ...prev, mission: event.target.value }))}
+									disabled={isEditSubmitting}
+									placeholder="Give Clover a guiding objective for this team."
+									rows={3}
+								/>
+							</div>
+
+							<div className="flex flex-col gap-2">
+								<label
+									htmlFor="edit-company-vision"
+									className="text-sm font-medium text-[var(--vscode-foreground)]">
+									Vision (optional)
+								</label>
+								<Textarea
+									id="edit-company-vision"
+									value={editCompanyForm.vision}
+									onChange={(event) => setEditCompanyForm((prev) => ({ ...prev, vision: event.target.value }))}
+									disabled={isEditSubmitting}
+									placeholder="Paint the future state you want Clover to steer toward."
+									rows={3}
+								/>
+							</div>
+
+							{editCompanyError && (
+								<p className="text-xs text-[var(--vscode-errorForeground)]">{editCompanyError}</p>
+							)}
+						</div>
+
+						<DialogFooter>
+							<Button type="button" variant="ghost" onClick={() => handleEditCompanyModalChange(false)} disabled={isEditSubmitting}>
+								Cancel
+							</Button>
+							<Button type="submit" disabled={isEditCompanySubmitDisabled || isEditSubmitting}>
+								{isEditSubmitting ? (
+									<>
+										<span className="codicon codicon-sync animate-spin" aria-hidden /> Saving…
+									</>
+								) : (
+									"Save changes"
+								)}
+							</Button>
+						</DialogFooter>
+					</form>
+				</DialogContent>
+			</Dialog>
 
 			<Dialog open={isCreateCompanyModalOpen} onOpenChange={handleCreateCompanyModalChange}>
 				<DialogContent className="max-w-lg">
@@ -853,6 +1706,43 @@ const OuterGateView: React.FC = () => {
 									}}
 									placeholder="Northwind Ventures"
 									autoFocus
+								/>
+							</div>
+
+						<div className="flex flex-col gap-2">
+							<label
+								htmlFor="create-company-emoji"
+								className="text-sm font-medium text-[var(--vscode-foreground)]">
+								Company emoji (optional)
+							</label>
+							<EmojiPickerField
+								id="create-company-emoji"
+								value={createCompanyForm.emoji}
+								onChange={(event) =>
+									setCreateCompanyForm((prev) => ({ ...prev, emoji: event.target.value }))
+								}
+								onEmojiSelect={(emoji) =>
+									setCreateCompanyForm((prev) => ({ ...prev, emoji }))
+								}
+								placeholder="🚀"
+								maxLength={4}
+							/>
+						</div>
+
+							<div className="flex flex-col gap-2">
+								<label
+									htmlFor="create-company-description"
+									className="text-sm font-medium text-[var(--vscode-foreground)]">
+									Company description (optional)
+								</label>
+								<Textarea
+									id="create-company-description"
+									value={createCompanyForm.description}
+									onChange={(event) =>
+										setCreateCompanyForm((prev) => ({ ...prev, description: event.target.value }))
+									}
+									placeholder="Summarize what this workspace is for."
+									rows={3}
 								/>
 							</div>
 

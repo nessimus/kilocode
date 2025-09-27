@@ -3,6 +3,7 @@
 import Anthropic from "@anthropic-ai/sdk"
 import * as vscode from "vscode"
 import axios from "axios"
+import { vi, type Mock } from "vitest"
 
 import {
 	type ProviderSettingsEntry,
@@ -21,6 +22,7 @@ import { Task, TaskOptions } from "../../task/Task"
 import { safeWriteJson } from "../../../utils/safeWriteJson"
 
 import { ClineProvider } from "../ClineProvider"
+import { CloverSessionService } from "../../../services/outerGate/CloverSessionService"
 
 // Mock setup must come before imports.
 vi.mock("../../prompts/sections/custom-instructions")
@@ -38,14 +40,21 @@ vi.mock("fs/promises", () => ({
 	rmdir: vi.fn().mockResolvedValue(undefined),
 }))
 
-vi.mock("axios", () => ({
-	default: {
+vi.mock("axios", () => {
+	const createMockClient = () => ({ get: vi.fn(), post: vi.fn() })
+	return {
+		default: {
+			get: vi.fn().mockResolvedValue({ data: { data: [] } }),
+			post: vi.fn(),
+			create: vi.fn().mockReturnValue(createMockClient()),
+			isAxiosError: vi.fn().mockReturnValue(false),
+		},
 		get: vi.fn().mockResolvedValue({ data: { data: [] } }),
 		post: vi.fn(),
-	},
-	get: vi.fn().mockResolvedValue({ data: { data: [] } }),
-	post: vi.fn(),
-}))
+		create: vi.fn().mockReturnValue(createMockClient()),
+		isAxiosError: vi.fn().mockReturnValue(false),
+	}
+})
 
 vi.mock("../../../utils/safeWriteJson")
 
@@ -582,6 +591,8 @@ describe("ClineProvider", () => {
 			diagnosticsEnabled: true,
 			openRouterImageApiKey: undefined,
 			openRouterImageGenerationSelectedModel: undefined,
+			workplaceRootConfigured: false,
+			workplaceRootUri: undefined,
 		}
 
 		const message: ExtensionMessage = {
@@ -2251,6 +2262,166 @@ describe("ClineProvider", () => {
 					success: true,
 					text: expect.stringContaining("Auto-discovered and tested connection to Chrome"),
 				}),
+			)
+		})
+	})
+
+	describe("Clover session cross-context synchronization", () => {
+		let sidebarProvider: ClineProvider
+		let tabProvider: ClineProvider
+		let sharedContextProxy: ContextProxy
+		let cloverService: CloverSessionService
+		let sidebarWebview: vscode.WebviewView
+		let tabWebview: vscode.WebviewView
+
+		const createMockWebviewView = () => {
+			const postMessage = vi.fn()
+			return {
+				webview: {
+					postMessage,
+					html: "",
+					options: {},
+					onDidReceiveMessage: vi.fn(),
+					asWebviewUri: vi.fn(),
+					cspSource: "vscode-webview://test-csp-source",
+				},
+				visible: true,
+				onDidDispose: vi.fn().mockReturnValue({ dispose: vi.fn() }),
+				onDidChangeVisibility: vi.fn().mockReturnValue({ dispose: vi.fn() }),
+			} as unknown as vscode.WebviewView
+		}
+
+		beforeEach(async () => {
+			const { CloudService } = await import("@roo-code/cloud")
+			CloudService.hasInstance = vi.fn().mockReturnValue(false)
+
+			await provider.dispose()
+
+			const originalUpdate = mockContext.globalState.update
+			mockContext.globalState.update = vi.fn().mockImplementation((key: string, value: any) => {
+				originalUpdate.call(mockContext.globalState, key, value)
+				return Promise.resolve()
+			})
+
+			sharedContextProxy = new ContextProxy(mockContext)
+			sidebarProvider = new ClineProvider(mockContext, mockOutputChannel, "sidebar", sharedContextProxy)
+			tabProvider = new ClineProvider(mockContext, mockOutputChannel, "editor", sharedContextProxy)
+
+			sidebarWebview = createMockWebviewView()
+			tabWebview = createMockWebviewView()
+
+			;(sidebarProvider as any).view = sidebarWebview
+			;(tabProvider as any).view = tabWebview
+
+			cloverService = new CloverSessionService(mockContext, () => undefined)
+			;(cloverService as any).useLocalFallback = true
+			await (cloverService as any).ensureLocalSessionsLoaded()
+
+			sidebarProvider.attachCloverSessionService(cloverService)
+			tabProvider.attachCloverSessionService(cloverService)
+
+			provider = sidebarProvider
+		})
+
+		afterEach(async () => {
+			if (sidebarProvider) {
+				await sidebarProvider.dispose()
+				sidebarProvider = undefined as unknown as ClineProvider
+			}
+			if (tabProvider) {
+				await tabProvider.dispose()
+				tabProvider = undefined as unknown as ClineProvider
+			}
+			;(ClineProvider as any).globalCloverSessionService = undefined
+			await mockContext.globalState.update("goldenOuterGate.localSessions", undefined)
+			await mockContext.globalState.update("goldenOuterGate.poolActiveSessionId", undefined)
+		})
+
+		test("propagates new Clover sessions across active providers", async () => {
+			await sidebarProvider.createCloverSession({ companyName: "Acme Ventures" })
+
+			const sidebarState = sidebarProvider.getOuterGateStateSnapshot()
+			const tabState = tabProvider.getOuterGateStateSnapshot()
+
+			expect(sidebarState.cloverSessions.entries).toHaveLength(1)
+			expect(tabState.cloverSessions.entries).toHaveLength(1)
+			expect(tabState.cloverSessions.entries[0].id).toBe(sidebarState.cloverSessions.entries[0].id)
+			expect(tabState.cloverMessages.map((message) => message.id)).toEqual(
+				sidebarState.cloverMessages.map((message) => message.id),
+			)
+
+			const postMessageMock = tabWebview.webview.postMessage as Mock<
+				(message: ExtensionMessage) => Thenable<boolean>
+			>
+			const tabMessages: ExtensionMessage[] = postMessageMock.mock.calls.map(
+				([message]: [ExtensionMessage]) => message,
+			)
+			expect(tabMessages.some((message: ExtensionMessage) => message?.type === "outerGateState")).toBe(true)
+		})
+
+		test("shares appended Clover messages without duplication", async () => {
+			await sidebarProvider.createCloverSession({ companyName: "Acme Ventures" })
+			await sidebarProvider.handleOuterGateMessage("Daily sync update")
+
+			const sidebarState = sidebarProvider.getOuterGateStateSnapshot()
+			const tabState = tabProvider.getOuterGateStateSnapshot()
+
+			expect(tabState.cloverMessages).toHaveLength(sidebarState.cloverMessages.length)
+			expect(new Set(tabState.cloverMessages.map((message) => message.id)).size).toBe(
+				tabState.cloverMessages.length,
+			)
+			expect(tabState.cloverMessages.map((message) => message.text)).toEqual(
+				sidebarState.cloverMessages.map((message) => message.text),
+			)
+			expect(tabState.cloverSessions.entries[0].messageCount).toBe(
+				sidebarState.cloverSessions.entries[0].messageCount,
+			)
+		})
+
+		test("persists Clover sessions across provider reload", async () => {
+			await sidebarProvider.createCloverSession({ companyName: "Acme Ventures" })
+			await sidebarProvider.handleOuterGateMessage("Persist me")
+
+			const initialState = sidebarProvider.getOuterGateStateSnapshot()
+			const activeSessionId = initialState.activeCloverSessionId
+			expect(activeSessionId).toBeDefined()
+
+			await sidebarProvider.dispose()
+			await tabProvider.dispose()
+			;(ClineProvider as any).globalCloverSessionService = undefined
+
+			const reloadContextProxy = new ContextProxy(mockContext)
+			const reloadSidebar = new ClineProvider(mockContext, mockOutputChannel, "sidebar", reloadContextProxy)
+			const reloadTab = new ClineProvider(mockContext, mockOutputChannel, "editor", reloadContextProxy)
+
+			sidebarProvider = reloadSidebar
+			tabProvider = reloadTab
+			sidebarWebview = createMockWebviewView()
+			tabWebview = createMockWebviewView()
+			;(sidebarProvider as any).view = sidebarWebview
+			;(tabProvider as any).view = tabWebview
+
+			const reloadService = new CloverSessionService(mockContext, () => undefined)
+			;(reloadService as any).useLocalFallback = true
+			await (reloadService as any).ensureLocalSessionsLoaded()
+
+			sidebarProvider.attachCloverSessionService(reloadService)
+			tabProvider.attachCloverSessionService(reloadService)
+
+			await (sidebarProvider as any).refreshCloverSessions({ append: false, syncActiveSession: true })
+
+			const reloadedSidebarState = sidebarProvider.getOuterGateStateSnapshot()
+			const reloadedTabState = tabProvider.getOuterGateStateSnapshot()
+
+			expect(reloadedSidebarState.cloverSessions.entries).toHaveLength(1)
+			expect(reloadedTabState.cloverSessions.entries).toHaveLength(1)
+			expect(reloadedSidebarState.cloverSessions.entries[0].id).toBe(activeSessionId)
+			expect(reloadedTabState.cloverSessions.entries[0].id).toBe(activeSessionId)
+			expect(new Set(reloadedSidebarState.cloverMessages.map((message) => message.id)).size).toBe(
+				reloadedSidebarState.cloverMessages.length,
+			)
+			expect(reloadedTabState.cloverMessages.map((message) => message.text)).toEqual(
+				reloadedSidebarState.cloverMessages.map((message) => message.text),
 			)
 		})
 	})

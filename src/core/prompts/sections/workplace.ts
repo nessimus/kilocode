@@ -33,7 +33,8 @@ export function getWorkplacePersonaSection(
 		return ""
 	}
 
-	const lines: string[] = ["====", "WORKPLACE CONTEXT", "", `Company: ${company.name}`]
+	const companyDisplayName = company.emoji ? `${company.emoji} ${company.name}` : company.name
+	const lines: string[] = ["====", "WORKPLACE CONTEXT", "", `Company: ${companyDisplayName}`]
 
 	if (company.id) {
 		lines.push(`Company ID: ${company.id}`)
@@ -47,6 +48,14 @@ export function getWorkplacePersonaSection(
 
 	if (company.vision) {
 		lines.push(`Vision: ${company.vision}`)
+	}
+
+	if (company.description) {
+		lines.push(`Description: ${company.description}`)
+	}
+
+	if (company.emoji && !company.name.includes(company.emoji)) {
+		lines.push(`Emoji: ${company.emoji}`)
 	}
 
 	if (company.ownerProfile) {

@@ -99,6 +99,7 @@ export async function listActionItemsTool(
 
 		const results: Array<{
 			companyId: string
+			companyName: string
 			actionItemId: string
 			title: string
 			statusName?: string
@@ -107,9 +108,27 @@ export async function listActionItemsTool(
 			priority?: string
 			kind: WorkplaceActionItemKind
 		}> = []
+		const statusSummaries = new Map<
+			string,
+			{
+				companyName: string
+				statuses: Array<{ id: string; name: string; isTerminal?: boolean }>
+			}
+		>()
 
 		for (const company of companies) {
-			const statusLookup = new Map(company.actionStatuses?.map((status) => [status.id, status.name]) ?? [])
+			const sortedStatuses = [...(company.actionStatuses ?? [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+			const statusLookup = new Map(sortedStatuses.map((status) => [status.id, status.name]))
+			if (sortedStatuses.length) {
+				statusSummaries.set(company.id, {
+					companyName: company.name ?? company.id,
+					statuses: sortedStatuses.map((status) => ({
+						id: status.id,
+						name: status.name,
+						isTerminal: status.isTerminal,
+					})),
+				})
+			}
 			for (const item of company.actionItems) {
 				if (statusFilter && item.statusId !== statusFilter) {
 					continue
@@ -138,6 +157,7 @@ export async function listActionItemsTool(
 
 				results.push({
 					companyId: company.id,
+					companyName: company.name ?? company.id,
 					actionItemId: item.id,
 					title: item.title,
 					statusName: statusLookup.get(item.statusId) ?? item.statusId,
@@ -155,7 +175,7 @@ export async function listActionItemsTool(
 		}
 
 		const limited = results.slice(0, maxItems)
-		const lines = limited.map((entry) => {
+		const resultLines = limited.map((entry) => {
 			const statusPrefix = entry.statusName ? `[${entry.statusName}] ` : ""
 			const ownerText = `owner: ${entry.ownerEmployeeId ?? "(unassigned)"}`
 			const dueText = entry.dueAt ? ` due: ${entry.dueAt}` : ""
@@ -163,10 +183,30 @@ export async function listActionItemsTool(
 			return `• ${statusPrefix}${entry.title} — id: ${entry.actionItemId}, kind: ${entry.kind}, company: ${entry.companyId}, ${ownerText}${dueText}${priorityText}`
 		})
 		if (results.length > maxItems) {
-			lines.push(`…and ${results.length - maxItems} more action items (result truncated to ${maxItems}).`)
+			resultLines.push(`…and ${results.length - maxItems} more action items (result truncated to ${maxItems}).`)
 		}
 
-		pushToolResult(formatResponse.toolResult(lines.join("\n")))
+		const statusLines: string[] = []
+		if (statusSummaries.size && limited.length) {
+			statusLines.push("Status options:")
+			const relevantCompanyIds = new Set(limited.map((entry) => entry.companyId))
+			for (const companyId of relevantCompanyIds) {
+				const summary = statusSummaries.get(companyId)
+				if (!summary || !summary.statuses.length) {
+					continue
+				}
+				const renderedStatuses = summary.statuses
+					.map((status) => {
+						const terminalSuffix = status.isTerminal ? " [terminal]" : ""
+						return `${status.id} -> ${status.name}${terminalSuffix}`
+					})
+					.join(", ")
+				statusLines.push(`• ${summary.companyName} (${companyId}): ${renderedStatuses}`)
+			}
+		}
+
+		const outputLines = statusLines.length ? [...statusLines, "", ...resultLines] : resultLines
+		pushToolResult(formatResponse.toolResult(outputLines.join("\n")))
 	} catch (error) {
 		await handleError("list action items", error as Error)
 	}

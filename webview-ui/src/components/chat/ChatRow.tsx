@@ -4,7 +4,7 @@ import { useTranslation, Trans } from "react-i18next"
 import deepEqual from "fast-deep-equal"
 import { VSCodeBadge, VSCodeButton } from "@vscode/webview-ui-toolkit/react"
 
-import type { ClineMessage, FollowUpData, SuggestionItem } from "@roo-code/types"
+import type { ClineMessage, FollowUpData, SuggestionItem, ToolResultMessagePayload } from "@roo-code/types"
 
 import { ClineApiReqInfo, ClineAskUseMcpServer, ClineSayTool } from "@roo/ExtensionMessage"
 import { COMMAND_OUTPUT_STRING } from "@roo/combineCommandSequences"
@@ -40,6 +40,7 @@ import { Markdown } from "./Markdown"
 import { CommandExecution } from "./CommandExecution"
 import { CommandExecutionError } from "./CommandExecutionError"
 import ReportBugPreview from "./ReportBugPreview"
+import ToolResultBlock from "./ToolResultBlock"
 
 import { NewTaskPreview } from "../kilocode/chat/NewTaskPreview" // kilocode_change
 import { KiloChatRowGutterBar } from "../kilocode/chat/KiloChatRowGutterBar" // kilocode_change
@@ -1318,6 +1319,31 @@ export const ChatRowContent = ({
 					)
 				case "api_req_finished":
 					return null // we should never see this message type
+				case "tool_result": {
+					const payload =
+						(message.metadata?.toolResult as ToolResultMessagePayload | undefined) ||
+						safeJsonParse<ToolResultMessagePayload>(message.text)
+
+					if (payload) {
+						return <ToolResultBlock payload={payload} />
+					}
+
+					return (
+						<ToolUseBlock>
+							<ToolUseBlockHeader>
+								<span
+									className="codicon codicon-tools"
+									style={{ color: "var(--vscode-foreground)", marginBottom: "-1.5px" }}></span>
+								<span style={{ fontWeight: "bold", marginLeft: 6 }}>Tool Result</span>
+							</ToolUseBlockHeader>
+							{message.text && (
+								<div className="mt-2">
+									<Markdown markdown={message.text} />
+								</div>
+							)}
+						</ToolUseBlock>
+					)
+				}
 				case "text":
 					return (
 						<div>

@@ -105,15 +105,21 @@ export const BrowserSettings = ({
 		() => [
 			{
 				value: "legacy",
-				label: t("settings:browser.interaction.options.legacy", "Legacy (internal planner)"),
+				label: t("settings:browser.interaction.options.legacy", {
+					defaultValue: "Legacy (internal planner)",
+				}),
 			},
 			{
 				value: "venus_navi",
-				label: t("settings:browser.interaction.options.venusNavi", "UI Venus Navi (guided policy)"),
+				label: t("settings:browser.interaction.options.venusNavi", {
+					defaultValue: "UI Venus Navi (guided policy)",
+				}),
 			},
 			{
 				value: "venus_ground",
-				label: t("settings:browser.interaction.options.venusGround", "UI Venus Ground (autonomous policy)"),
+				label: t("settings:browser.interaction.options.venusGround", {
+					defaultValue: "UI Venus Ground (autonomous policy)",
+				}),
 			},
 		],
 		[t],
@@ -149,9 +155,9 @@ export const BrowserSettings = ({
 				{browserToolEnabled && (
 					<div className="flex flex-col gap-3 pl-3 border-l-2 border-vscode-button-background">
 						<div>
-							<label className="block font-medium mb-1">
-								{t("settings:browser.interaction.label", "Interaction method")}
-							</label>
+								<label className="block font-medium mb-1">
+									{t("settings:browser.interaction.label", { defaultValue: "Interaction method" })}
+								</label>
 							<Select
 								value={browserInteractionStrategy ?? "legacy"}
 								onValueChange={(value) =>
@@ -173,11 +179,11 @@ export const BrowserSettings = ({
 									</SelectGroup>
 								</SelectContent>
 							</Select>
-							<div className="text-vscode-descriptionForeground text-sm mt-1">
-								{t(
-									"settings:browser.interaction.description",
-									"Choose the planner that decides browser interactions. Venus models require the realtime stream and provide advanced UI policies.",
-								)}
+								<div className="text-vscode-descriptionForeground text-sm mt-1">
+									{t("settings:browser.interaction.description", {
+										defaultValue:
+											"Choose the planner that decides browser interactions. Venus models require the realtime stream and provide advanced UI policies.",
+									})}
 							</div>
 						</div>
 						<div>

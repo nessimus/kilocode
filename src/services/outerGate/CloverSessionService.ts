@@ -2,7 +2,14 @@ import axios, { type AxiosError, AxiosInstance } from "axios"
 import { randomUUID } from "crypto"
 import * as vscode from "vscode"
 
-import { OuterGateCloverMessage, OuterGateCloverSessionSummary } from "../../shared/golden/outerGate"
+import {
+	OuterGateCloverMessage,
+	OuterGateCloverSessionSummary,
+	OuterGateInsight,
+	OuterGateInsightEvent,
+	OuterGateInsightEventChange,
+	OuterGateInsightStage,
+} from "../../shared/golden/outerGate"
 
 import type { WorkplaceService } from "../workplace/WorkplaceService"
 
@@ -98,6 +105,32 @@ interface PoolSessionContextPayload {
 	companyName?: string
 }
 
+interface PoolAnalysisItemResponse {
+	id: string
+	kind: "message" | "file"
+	status: "captured" | "processing" | "ready" | "archived"
+	accountId: string
+	userId: string
+	createdAt: string
+	embedding: number[]
+	text: string
+	sessionId?: string
+	messageTimestamp?: string
+	tokens?: number
+	references?: string[]
+	filename?: string
+	mimeType?: string
+	sizeBytes?: number
+	source?: string
+}
+
+interface PoolAnalysisResponsePayload {
+	items: PoolAnalysisItemResponse[]
+	totalItems: number
+	embeddingDimension: number
+	generatedAt: string
+}
+
 export const DEFAULT_CLOVER_SESSION_PAGE_SIZE = 12
 
 const DEFAULT_POOL_BASE_URL = "http://localhost:3005"
@@ -108,7 +141,12 @@ const LOCAL_SESSIONS_STORAGE_KEY = "goldenOuterGate.localSessions"
 
 const TRANSIENT_NETWORK_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "EAI_AGAIN", "ETIMEDOUT", "ENOTFOUND"])
 
+const CLOVER_INSIGHT_REFERENCE_PREFIX = "clover-insight:"
+const VALID_INSIGHT_STAGES = new Set<OuterGateInsightStage>(["captured", "processing", "ready", "assigned"])
+const VALID_INSIGHT_SOURCE_TYPES = new Set<OuterGateInsight["sourceType"]>(["conversation", "document", "voice", "integration"])
+
 const SESSION_SUMMARY_PREVIEW_FALLBACK = "No messages yet."
+const SESSION_SUMMARY_TITLE_FALLBACK = "Untitled Chat"
 
 export class CloverSessionService {
 	private readonly accountId: string
@@ -232,6 +270,49 @@ export class CloverSessionService {
 		}
 	}
 
+	public async fetchAnalysisItems(options: {
+		limit?: number
+		status?: PoolAnalysisItemResponse["status"]
+		since?: string
+		includeFiles?: boolean
+		includeMessages?: boolean
+	} = {}): Promise<PoolAnalysisResponsePayload> {
+		if (this.useLocalFallback) {
+			return this.buildEmptyAnalysisResponse()
+		}
+
+		const params: Record<string, unknown> = {}
+		if (typeof options.limit === "number") {
+			params.limit = options.limit
+		}
+		if (options.status) {
+			params.status = options.status
+		}
+		if (options.since) {
+			params.since = options.since
+		}
+		if (typeof options.includeFiles === "boolean") {
+			params.includeFiles = String(options.includeFiles)
+		}
+		if (typeof options.includeMessages === "boolean") {
+			params.includeMessages = String(options.includeMessages)
+		}
+
+		try {
+			const { data } = await this.client.get<PoolAnalysisResponsePayload>("/analysis/passions", {
+				params,
+				headers: this.headers,
+			})
+			return data
+		} catch (error) {
+			if (!this.shouldFallback(error)) {
+				throw error
+			}
+			await this.enableLocalFallback(error)
+			return this.buildEmptyAnalysisResponse()
+		}
+	}
+
 	public async fetchSession(sessionId: string): Promise<PersistedCloverSession | undefined> {
 		try {
 			return await this.ensureSessionCached(sessionId)
@@ -299,13 +380,15 @@ export class CloverSessionService {
 		const lastMessage = session.messages.at(-1)
 		const previewSource = lastMessage?.text ?? session.firstUserMessage ?? SESSION_SUMMARY_PREVIEW_FALLBACK
 
+		const title = session.firstUserMessage?.trim() || SESSION_SUMMARY_TITLE_FALLBACK
+
 		return {
 			id: session.id,
 			createdAtIso: session.createdAtIso,
 			updatedAtIso: session.updatedAtIso,
 			companyId: session.companyId,
 			companyName: companyName,
-			title: session.firstUserMessage?.trim() || companyName?.trim() || "Untitled Chat",
+			title,
 			preview: previewSource,
 			messageCount: session.messages.length,
 			lastMessage: lastMessage,
@@ -316,6 +399,7 @@ export class CloverSessionService {
 		const companyName = this.resolveCompanyName(summary.companyId) ?? summary.companyName
 		const previewSource = summary.preview ?? summary.firstUserMessage ?? SESSION_SUMMARY_PREVIEW_FALLBACK
 		const lastMessage = summary.lastMessage ? this.mapPoolMessageToOuterGate(summary.lastMessage) : undefined
+		const title = summary.title?.trim() || summary.firstUserMessage?.trim() || SESSION_SUMMARY_TITLE_FALLBACK
 
 		return {
 			id: summary.id,
@@ -323,7 +407,7 @@ export class CloverSessionService {
 			updatedAtIso: normalizeIso(summary.updatedAt),
 			companyId: summary.companyId,
 			companyName,
-			title: summary.title ?? companyName ?? "Untitled Chat",
+			title,
 			preview: previewSource,
 			messageCount: summary.messageCount,
 			lastMessage,
@@ -507,6 +591,22 @@ export class CloverSessionService {
 		return messages.map((message) => ({
 			...message,
 			timestamp: normalizeIso(message.timestamp),
+			insightEvent: message.insightEvent
+				? {
+					...message.insightEvent,
+					insight: { ...message.insightEvent.insight },
+					changes: message.insightEvent.changes?.map((change) => ({ ...change })),
+				}
+				: undefined,
+			automationCall: message.automationCall
+				? {
+					...message.automationCall,
+					inputs: message.automationCall.inputs?.map((entry) => ({ ...entry })),
+					outputLines: message.automationCall.outputLines
+						? [...message.automationCall.outputLines]
+						: undefined,
+				}
+				: undefined,
 		}))
 	}
 
@@ -529,25 +629,172 @@ export class CloverSessionService {
 	}
 
 	private mapMessagesToPoolPayload(messages: OuterGateCloverMessage[]): PoolSessionMessagePayload[] {
-		return messages.map((message) => ({
-			id: message.id,
-			role: message.speaker === "clover" ? "assistant" : "user",
-			text: message.text,
-			timestamp: normalizeIso(message.timestamp),
-			tokens: message.tokens,
-			references: message.references && message.references.length > 0 ? [...message.references] : undefined,
-		}))
+		return messages.map((message) => {
+			const references: string[] = []
+			if (message.references && message.references.length > 0) {
+				references.push(...message.references)
+			}
+			if (message.insightEvent) {
+				const encoded = this.encodeInsightEventReference(message.insightEvent)
+				if (!references.some((entry) => entry === encoded)) {
+					references.push(encoded)
+				}
+			}
+			return {
+				id: message.id,
+				role: message.speaker === "clover" ? "assistant" : "user",
+				text: message.text,
+				timestamp: normalizeIso(message.timestamp),
+				tokens: message.tokens,
+				references: references.length ? references : undefined,
+			}
+		})
 	}
 
 	private mapPoolMessageToOuterGate(message: PoolSessionMessageLike): OuterGateCloverMessage {
+		const { event, references } = this.extractInsightEvent(message.references)
 		return {
 			id: message.id,
 			speaker: message.role === "assistant" ? "clover" : "user",
 			text: message.text,
 			timestamp: normalizeIso(message.timestamp),
 			tokens: message.tokens,
-			references: message.references && message.references.length > 0 ? [...message.references] : undefined,
+			references,
+			insightEvent: event,
 		}
+	}
+
+	private encodeInsightEventReference(event: OuterGateInsightEvent): string {
+		const payload = {
+			type: event.type,
+			insight: event.insight,
+			note: event.note,
+			changes: event.changes,
+		}
+		try {
+			const serialized = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url")
+			return `${CLOVER_INSIGHT_REFERENCE_PREFIX}${serialized}`
+		} catch {
+			return `${CLOVER_INSIGHT_REFERENCE_PREFIX}`
+		}
+	}
+
+	private extractInsightEvent(references?: string[]): {
+		event?: OuterGateInsightEvent
+		references?: string[]
+	} {
+		if (!references || references.length === 0) {
+			return { references: undefined }
+		}
+		const remaining: string[] = []
+		let event: OuterGateInsightEvent | undefined
+		for (const reference of references) {
+			if (!event && reference.startsWith(CLOVER_INSIGHT_REFERENCE_PREFIX)) {
+				const decoded = this.decodeInsightEvent(reference.slice(CLOVER_INSIGHT_REFERENCE_PREFIX.length))
+				if (decoded) {
+					event = decoded
+					continue
+				}
+			}
+			remaining.push(reference)
+		}
+		return {
+			event,
+			references: remaining.length ? remaining : undefined,
+		}
+	}
+
+	private decodeInsightEvent(encoded: string): OuterGateInsightEvent | undefined {
+		try {
+			if (!encoded) {
+				return undefined
+			}
+			const json = Buffer.from(encoded, "base64url").toString("utf8")
+			const raw = JSON.parse(json) as Partial<OuterGateInsightEvent> & { insight?: Partial<OuterGateInsight> }
+			if (!raw || typeof raw !== "object") {
+				return undefined
+			}
+			if (raw.type !== "created" && raw.type !== "updated") {
+				return undefined
+			}
+			const insight = this.normalizeInsight(raw.insight)
+			if (!insight) {
+				return undefined
+			}
+			const changes = Array.isArray(raw.changes)
+				? raw.changes
+					.map((entry) => this.normalizeInsightChange(entry))
+					.filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+				: undefined
+			return {
+				type: raw.type,
+				insight,
+				note: typeof raw.note === "string" ? raw.note : undefined,
+				changes,
+			}
+		} catch {
+			return undefined
+		}
+	}
+
+	private normalizeInsight(raw: Partial<OuterGateInsight> | undefined): OuterGateInsight | undefined {
+		if (!raw || typeof raw !== "object") {
+			return undefined
+		}
+		const { id, title, stage, sourceType } = raw
+		if (typeof id !== "string" || !id.trim()) {
+			return undefined
+		}
+		if (typeof title !== "string" || !title.trim()) {
+			return undefined
+		}
+		if (typeof stage !== "string" || !VALID_INSIGHT_STAGES.has(stage as OuterGateInsightStage)) {
+			return undefined
+		}
+		if (typeof sourceType !== "string" || !VALID_INSIGHT_SOURCE_TYPES.has(sourceType as OuterGateInsight["sourceType"])) {
+			return undefined
+		}
+		const normalized: OuterGateInsight = {
+			id: id.trim(),
+			title: title.trim(),
+			stage: stage as OuterGateInsightStage,
+			sourceType: sourceType as OuterGateInsight["sourceType"],
+			summary: typeof raw.summary === "string" ? raw.summary : undefined,
+			recommendedWorkspace:
+				typeof raw.recommendedWorkspace === "string" ? raw.recommendedWorkspace : undefined,
+			capturedAtIso: typeof raw.capturedAtIso === "string" ? normalizeIso(raw.capturedAtIso) : undefined,
+			assignedCompanyId:
+				typeof raw.assignedCompanyId === "string" ? raw.assignedCompanyId : undefined,
+		}
+		return normalized
+	}
+
+	private normalizeInsightChange(raw: unknown) {
+		if (!raw || typeof raw !== "object") {
+			return undefined
+		}
+		const record = raw as Record<string, unknown>
+		const field = record.field
+		if (typeof field !== "string") {
+			return undefined
+		}
+		if (
+		field !== "title" &&
+		field !== "summary" &&
+		field !== "stage" &&
+		field !== "recommendedWorkspace" &&
+		field !== "assignedCompanyId" &&
+		field !== "capturedAtIso" &&
+		field !== "sourceType"
+	) {
+			return undefined
+		}
+		const change: OuterGateInsightEventChange = {
+			field,
+			from: typeof record.from === "string" ? record.from : undefined,
+			to: typeof record.to === "string" ? record.to : undefined,
+		}
+		return change
 	}
 
 	private toContextPayload(context?: {
@@ -578,6 +825,15 @@ export class CloverSessionService {
 		const snapshot = workplace.getState()
 		const company = snapshot.companies.find((entry) => entry.id === companyId)
 		return company?.name
+	}
+
+	private buildEmptyAnalysisResponse(): PoolAnalysisResponsePayload {
+		return {
+			items: [],
+			totalItems: 0,
+			embeddingDimension: 0,
+			generatedAt: new Date().toISOString(),
+		}
 	}
 
 	private ensureIdentifier(key: string): string {

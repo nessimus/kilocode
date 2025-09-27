@@ -43,7 +43,18 @@ async function main() {
 	/**
 	 * @type {import('esbuild').Plugin[]}
 	 */
+	const uglifyStubPath = path.join(__dirname, "shims/uglify-stub.js")
+
 	const plugins = [
+		{
+			name: "alias-uglify",
+			setup(build) {
+				build.onResolve({ filter: /^uglify-js(?:\/.*)?$/ }, () => ({
+					path: uglifyStubPath,
+					namespace: "file",
+				}))
+			},
+		},
 		{
 			name: "copyFiles",
 			setup(build) {

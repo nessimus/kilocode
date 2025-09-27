@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto"
 
-import { and, asc, desc, eq, ilike, lt, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, ilike, lt, or, sql } from "drizzle-orm"
 
 import type { PoolDatabase } from "../db/client.js"
 import { poolFiles, poolMessages, poolSessions } from "../db/schema.js"
 import {
+	type PoolAnalysisItem,
+	type PoolAnalysisResponse,
 	type PoolFileItem,
 	type PoolFileInput,
 	type PoolItem,
@@ -30,6 +32,7 @@ const SESSION_LIST_DEFAULT_LIMIT = 12
 const SESSION_LIST_MAX_LIMIT = 100
 const SESSION_TITLE_LIMIT = 80
 const SESSION_PREVIEW_LIMIT = 180
+const ANALYSIS_QUERY_MAX = 500
 
 export class PoolRepository {
 	constructor(private readonly db: PoolDatabase) {}
@@ -417,6 +420,113 @@ export class PoolRepository {
 			.slice(0, limit)
 
 		return combined
+	}
+
+	async listAnalysisItems(
+		accountId: string,
+		options: {
+			limit?: number
+			status?: (typeof poolItemStatusValues)[number]
+			since?: Date
+			includeFiles?: boolean
+			includeMessages?: boolean
+		} = {},
+	): Promise<PoolAnalysisResponse> {
+		const limit = Math.min(Math.max(options.limit ?? 200, 1), ANALYSIS_QUERY_MAX)
+		const includeMessages = options.includeMessages !== false
+		const includeFiles = options.includeFiles !== false
+
+		const sinceDate = options.since ? new Date(options.since) : undefined
+
+		const [messageRows, fileRows] = await Promise.all([
+			includeMessages
+				? this.db
+						.select()
+						.from(poolMessages)
+						.where(
+							and(
+								eq(poolMessages.accountId, accountId),
+								...(options.status ? [eq(poolMessages.itemStatus, options.status)] : []),
+								...(sinceDate ? [gt(poolMessages.createdAt, sinceDate)] : []),
+							),
+						)
+						.orderBy(desc(poolMessages.createdAt))
+						.limit(limit * 2)
+				: [],
+			includeFiles
+				? this.db
+						.select()
+						.from(poolFiles)
+						.where(
+							and(
+								eq(poolFiles.accountId, accountId),
+								...(options.status ? [eq(poolFiles.itemStatus, options.status)] : []),
+								...(sinceDate ? [gt(poolFiles.createdAt, sinceDate)] : []),
+							),
+						)
+						.orderBy(desc(poolFiles.createdAt))
+						.limit(limit * 2)
+				: [],
+		])
+
+		const mappedMessages: PoolAnalysisItem[] = messageRows
+			.map((row) => {
+				const embedding = parseEmbedding(row.embedding)
+				if (!embedding.length) {
+					return undefined
+				}
+				return {
+					id: row.id,
+					kind: "message" as const,
+					status: row.itemStatus,
+					accountId: row.accountId,
+					userId: row.userId,
+					createdAt: asIso(row.createdAt),
+					embedding,
+					text: row.content,
+					sessionId: row.sessionId ?? undefined,
+					messageTimestamp: asIso(row.messageTimestamp),
+					tokens: row.tokenCount ?? undefined,
+					references: row.itemReferences ?? undefined,
+				}
+			})
+			.filter((item): item is PoolAnalysisItem => Boolean(item))
+
+		const mappedFiles: PoolAnalysisItem[] = fileRows
+			.map((row) => {
+				const embedding = parseEmbedding(row.embedding)
+				if (!embedding.length) {
+					return undefined
+				}
+				const textContent = row.parsedText?.trim()
+				return {
+					id: row.id,
+					kind: "file" as const,
+					status: row.itemStatus,
+					accountId: row.accountId,
+					userId: row.userId,
+					createdAt: asIso(row.createdAt),
+					embedding,
+					text: textContent && textContent.length > 0 ? textContent : row.filename ?? "",
+					filename: row.filename,
+					mimeType: row.mimeType ?? undefined,
+					sizeBytes: row.sizeBytes ?? undefined,
+					source: row.source ?? undefined,
+				}
+			})
+			.filter((item): item is PoolAnalysisItem => Boolean(item))
+
+		const combined = [...mappedMessages, ...mappedFiles]
+		combined.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+
+		const items = combined.slice(0, limit)
+
+		return {
+			items,
+			totalItems: combined.length,
+			embeddingDimension: EMBEDDING_DIMENSION,
+			generatedAt: new Date().toISOString(),
+		}
 	}
 }
 

@@ -225,10 +225,10 @@ describe("ExtensionStateContext", () => {
 
 describe("mergeExtensionState", () => {
 	it("should correctly merge extension states", () => {
-		const baseState: ExtensionState = {
-			version: "",
-			mcpEnabled: false,
-			enableMcpServerCreation: false,
+			const baseState: ExtensionState = {
+				version: "",
+				mcpEnabled: false,
+				enableMcpServerCreation: false,
 			clineMessages: [],
 			taskHistory: [],
 			shouldShowAnnouncement: false,
@@ -252,12 +252,13 @@ describe("mergeExtensionState", () => {
 			autoCondenseContextPercent: 100,
 			cloudIsAuthenticated: false,
 			sharingEnabled: false,
-			profileThresholds: {},
-			hasOpenedModeSelector: false, // Add the new required property
-			maxImageFileSize: 5,
-			maxTotalImageSize: 20,
-			kilocodeDefaultModel: openRouterDefaultModelId,
-		}
+				profileThresholds: {},
+				hasOpenedModeSelector: false, // Add the new required property
+				maxImageFileSize: 5,
+				maxTotalImageSize: 20,
+				kilocodeDefaultModel: openRouterDefaultModelId,
+				workplaceRootConfigured: false,
+			}
 
 		const prevState: ExtensionState = {
 			...baseState,

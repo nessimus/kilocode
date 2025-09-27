@@ -8,14 +8,27 @@ import { vscode } from "@/utils/vscode"
 
 import styles from "./HubView.module.css"
 
+type VsCodeTextFieldType = React.ComponentProps<typeof VSCodeTextField>["type"]
+const numberTextFieldType = "number" as VsCodeTextFieldType
+
 type OptionalNumberState = string
 
-const toOptionalNumber = (value: OptionalNumberState) => {
+const toOptionalNumber = (value: OptionalNumberState, range?: { min?: number; max?: number }) => {
 	if (!value || value.trim().length === 0) {
 		return undefined
 	}
 	const parsed = Number(value)
-	return Number.isFinite(parsed) ? parsed : undefined
+	if (!Number.isFinite(parsed)) {
+		return undefined
+	}
+	let next = parsed
+	if (typeof range?.min === "number") {
+		next = Math.max(range.min, next)
+	}
+	if (typeof range?.max === "number") {
+		next = Math.min(range.max, next)
+	}
+	return next
 }
 
 const toOptionalArray = (value: string) =>
@@ -28,14 +41,12 @@ const integrationStatusLabel: Record<OuterGateIntegration["status"], string> = {
 	connected: "Connected",
 	not_connected: "Not Connected",
 	coming_soon: "Coming Soon",
+	error: "Connection Error",
 }
 
-const getStatusLabel = (status?: OuterGateIntegration["status"] | "error") => {
+const getStatusLabel = (status?: OuterGateIntegration["status"]) => {
 	if (!status) {
 		return "Pending"
-	}
-	if (status === "error") {
-		return "Connection Error"
 	}
 	return integrationStatusLabel[status]
 }
@@ -81,7 +92,7 @@ const HubIntegrationsView: React.FC = () => {
 	const [miroItemTypes, setMiroItemTypes] = useState("")
 	const [miroMaxItems, setMiroMaxItems] = useState<OptionalNumberState>("")
 
-	const statusClassName = (status?: OuterGateIntegration["status"] | "error") =>
+	const statusClassName = (status?: OuterGateIntegration["status"]) =>
 		clsx(styles.integrationStatus, {
 			[styles.integrationStatusConnected]: status === "connected",
 			[styles.integrationStatusError]: status === "error",
@@ -109,8 +120,8 @@ const HubIntegrationsView: React.FC = () => {
 			token: notionToken.trim() || undefined,
 			databaseId: notionDatabaseId.trim() || undefined,
 			dataSourceId: notionDataSourceId.trim() || undefined,
-			pageSize: toOptionalNumber(notionPageSize),
-			maxPages: toOptionalNumber(notionMaxPages),
+			pageSize: toOptionalNumber(notionPageSize, { min: 1, max: 200 }),
+			maxPages: toOptionalNumber(notionMaxPages, { min: 1 }),
 		})
 		setNotionFormOpen(false)
 	}
@@ -121,7 +132,7 @@ const HubIntegrationsView: React.FC = () => {
 			token: miroToken.trim() || undefined,
 			boardId: miroBoardId.trim() || undefined,
 			itemTypes: miroItemTypes.trim() ? toOptionalArray(miroItemTypes) : undefined,
-			maxItems: toOptionalNumber(miroMaxItems),
+			maxItems: toOptionalNumber(miroMaxItems, { min: 1 }),
 		})
 		setMiroFormOpen(false)
 	}
@@ -212,24 +223,21 @@ const HubIntegrationsView: React.FC = () => {
 							<div className={styles.integrationFormRowInline}>
 								<div className={styles.integrationFormRow}>
 									<label htmlFor="notion-pagesize">Page size</label>
-									<VSCodeTextField
-										id="notion-pagesize"
-										type="number"
-										min={1}
-										max={200}
-										value={notionPageSize}
-										onInput={(event: any) => setNotionPageSize(event.target.value ?? "")}
-									/>
+										<VSCodeTextField
+											id="notion-pagesize"
+											type={numberTextFieldType}
+											value={notionPageSize}
+											onInput={(event: any) => setNotionPageSize(event.target.value ?? "")}
+										/>
 								</div>
 								<div className={styles.integrationFormRow}>
 									<label htmlFor="notion-maxpages">Max pages</label>
-									<VSCodeTextField
-										id="notion-maxpages"
-										type="number"
-										min={1}
-										value={notionMaxPages}
-										onInput={(event: any) => setNotionMaxPages(event.target.value ?? "")}
-									/>
+										<VSCodeTextField
+											id="notion-maxpages"
+											type={numberTextFieldType}
+											value={notionMaxPages}
+											onInput={(event: any) => setNotionMaxPages(event.target.value ?? "")}
+										/>
 								</div>
 							</div>
 							<div className={styles.integrationFormButtons}>
@@ -308,13 +316,12 @@ const HubIntegrationsView: React.FC = () => {
 							</div>
 							<div className={styles.integrationFormRow}>
 								<label htmlFor="miro-maxitems">Max items</label>
-								<VSCodeTextField
-									id="miro-maxitems"
-									type="number"
-									min={1}
-									value={miroMaxItems}
-									onInput={(event: any) => setMiroMaxItems(event.target.value ?? "")}
-								/>
+									<VSCodeTextField
+										id="miro-maxitems"
+										type={numberTextFieldType}
+										value={miroMaxItems}
+										onInput={(event: any) => setMiroMaxItems(event.target.value ?? "")}
+									/>
 							</div>
 							<div className={styles.integrationFormButtons}>
 								<VSCodeButton type="submit" appearance="primary">

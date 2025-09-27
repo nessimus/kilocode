@@ -101,6 +101,7 @@ const createInitialCompany = (): WorkplaceCompany => {
 		actionStatuses: statuses,
 		actionItems,
 		actionRelations: [],
+		shifts: [],
 	}
 }
 

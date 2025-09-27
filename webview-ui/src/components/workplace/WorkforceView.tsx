@@ -34,6 +34,8 @@ interface EmployeeFormState {
 
 const emptyCompanyForm = (company?: WorkplaceCompany) => ({
 	name: company?.name ?? "",
+	emoji: company?.emoji ?? "",
+	description: company?.description ?? "",
 	mission: company?.mission ?? "",
 	vision: company?.vision ?? "",
 })
@@ -268,9 +270,13 @@ const WorkforceView = ({ onDone }: WorkforceViewProps) => {
 			return
 		}
 
+		const emojiValue = companyForm.emoji.trim()
+		const descriptionValue = companyForm.description.trim()
 		updateCompany({
 			id: activeCompany.id,
 			name: companyForm.name.trim(),
+			emoji: emojiValue ? emojiValue : "",
+			description: descriptionValue ? descriptionValue : "",
 			mission: companyForm.mission.trim() || undefined,
 			vision: companyForm.vision.trim() || undefined,
 			ownerProfile: activeCompany.ownerProfile,
@@ -285,8 +291,12 @@ const WorkforceView = ({ onDone }: WorkforceViewProps) => {
 			return
 		}
 
+		const emojiValue = companyForm.emoji.trim()
+		const descriptionValue = companyForm.description.trim()
 		createCompany({
 			name: companyForm.name.trim(),
+			emoji: emojiValue ? emojiValue : undefined,
+			description: descriptionValue ? descriptionValue : undefined,
 			mission: companyForm.mission.trim() || undefined,
 			vision: companyForm.vision.trim() || undefined,
 		})
@@ -616,9 +626,17 @@ const WorkforceView = ({ onDone }: WorkforceViewProps) => {
 														: ""
 												}`}
 												style={{ color: "var(--vscode-foreground)", cursor: "pointer" }}>
-												<div className="font-medium text-sm">{company.name}</div>
+												<div className="font-medium text-sm flex items-center gap-2">
+													{company.emoji && (
+														<span className="text-base leading-none" aria-hidden>
+															{company.emoji}
+														</span>
+													)}
+													<span className="truncate">{company.name}</span>
+												</div>
 												<div className="text-xs text-[var(--vscode-descriptionForeground)] truncate">
-													{company.mission ||
+													{company.description ||
+														company.mission ||
 														company.vision ||
 														t("workplace:companyPlaceholder", {
 															defaultValue: "No mission yet.",
@@ -635,11 +653,31 @@ const WorkforceView = ({ onDone }: WorkforceViewProps) => {
 								{t("workplace:createCompany", { defaultValue: "Create Company" })}
 							</h3>
 							<VSCodeTextField
+								value={companyForm.emoji}
+								onInput={(event: any) =>
+									setCompanyForm((prev) => ({ ...prev, emoji: event.target.value }))
+								}
+								placeholder={t("workplace:companyEmojiPlaceholder", {
+									defaultValue: "Emoji (optional)",
+								})}
+									maxlength={4}
+							/>
+							<VSCodeTextField
 								value={companyForm.name}
 								onInput={(event: any) =>
 									setCompanyForm((prev) => ({ ...prev, name: event.target.value }))
 								}
 								placeholder={t("workplace:companyNamePlaceholder")}
+							/>
+							<VSCodeTextArea
+								value={companyForm.description}
+								onInput={(event: any) =>
+									setCompanyForm((prev) => ({ ...prev, description: event.target.value }))
+								}
+								placeholder={t("workplace:companyDescriptionPlaceholder", {
+									defaultValue: "Description (optional)",
+								})}
+								rows={3}
 							/>
 							<VSCodeTextField
 								value={companyForm.mission}
