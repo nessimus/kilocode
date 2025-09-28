@@ -50,7 +50,7 @@ import { registerGhostProvider } from "./services/ghost" // kilocode_change
 import { TerminalWelcomeService } from "./services/terminal-welcome/TerminalWelcomeService" // kilocode_change
 import { getKiloCodeWrapperProperties } from "./core/kilocode/wrapper" // kilocode_change
 import { createWorkplaceService } from "./services/workplace/WorkplaceService"
-import { WorkplaceFilesystemManager } from "./services/workplace/WorkplaceFilesystemManager"
+import { WorkplaceFilesystemManager, FOCUS_SIDEBAR_FLAG_KEY } from "./services/workplace/WorkplaceFilesystemManager"
 import { CloverSessionService } from "./services/outerGate/CloverSessionService"
 
 /**
@@ -197,10 +197,20 @@ export async function activate(context: vscode.ExtensionContext) {
 	provider.attachWorkplaceFilesystemManager(workplaceFilesystemManager)
 	provider.attachEndlessSurfaceService(endlessSurfaceService)
 	provider.attachCloverSessionService(cloverSessionService)
-	const fsConfigListener = workplaceFilesystemManager.addConfigurationListener(() =>
-		provider.postStateToWebview(),
-	)
+	const fsConfigListener = workplaceFilesystemManager.addConfigurationListener(() => provider.postStateToWebview())
 	context.subscriptions.push(fsConfigListener)
+
+	const shouldFocusSidebar = context.globalState.get<boolean>(FOCUS_SIDEBAR_FLAG_KEY)
+	if (shouldFocusSidebar) {
+		await context.globalState.update(FOCUS_SIDEBAR_FLAG_KEY, false)
+		try {
+			await vscode.commands.executeCommand("kilo-code.SidebarProvider.focus")
+		} catch (error) {
+			outputChannel.appendLine(
+				`[WorkplaceFilesystem] Failed to focus sidebar: ${error instanceof Error ? error.message : String(error)}`,
+			)
+		}
+	}
 
 	// Initialize Roo Code Cloud service.
 	const postStateListener = () => ClineProvider.getVisibleInstance()?.postStateToWebview()

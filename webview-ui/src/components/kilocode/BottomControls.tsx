@@ -17,6 +17,7 @@ const BottomControls: React.FC<BottomControlsProps> = ({ showApiConfig = false }
 	}
 
 	const openOuterGate = () => {
+		vscode.postMessage({ type: "selectCompany", workplaceCompanyId: undefined })
 		vscode.postMessage({ type: "action", action: "switchTab", tab: "outerGate" })
 		if (typeof window !== "undefined") {
 			window.postMessage({ type: "action", action: "switchTab", tab: "outerGate" }, "*")

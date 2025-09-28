@@ -153,6 +153,8 @@ const App = () => {
 		setActiveSurface,
 		workplaceState,
 		workplaceRootConfigured,
+		workplaceRootUri,
+		cwd,
 	} = useExtensionState()
 
 	// Create a persistent state manager
@@ -181,6 +183,7 @@ const App = () => {
 
 	const [showAnnouncement, setShowAnnouncement] = useState(false)
 	const [tab, setTab] = useState<Tab>("outerGate")
+	const [autoTabContextKey, setAutoTabContextKey] = useState<string | undefined>(undefined)
 	const [route, setRoute] = useState<ViewRoute>(() =>
 		parsePath(typeof window !== "undefined" ? window.location.pathname : "/"),
 	)
@@ -394,6 +397,53 @@ const App = () => {
 			switchTab("outerGate")
 		}
 	}, [shouldShowProfileDialog, shouldShowRootDialog, tab, switchTab])
+
+	useEffect(() => {
+		if (!didHydrateState) {
+			return
+		}
+		if (shouldShowProfileDialog || shouldShowRootDialog) {
+			return
+		}
+
+		const normalizeFsPath = (value?: string | null): string | undefined => {
+			if (!value) {
+				return undefined
+			}
+			return value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase()
+		}
+
+		const normalizedRoot = normalizeFsPath(workplaceRootUri)
+		const normalizedCwd = normalizeFsPath(cwd)
+		const activeCompanyId = workplaceState?.activeCompanyId
+
+		if (!normalizedCwd) {
+			return
+		}
+
+		const inRootWorkspace = Boolean(normalizedRoot) && normalizedRoot === normalizedCwd
+		const desiredTab: Tab = inRootWorkspace || !activeCompanyId ? "outerGate" : "lobby"
+		const contextKey = `${desiredTab}::${normalizedCwd}::${activeCompanyId ?? ""}`
+
+		if (contextKey === autoTabContextKey) {
+			return
+		}
+
+		setAutoTabContextKey(contextKey)
+		if (tab !== desiredTab) {
+			switchTab(desiredTab)
+		}
+	}, [
+		autoTabContextKey,
+		cwd,
+		didHydrateState,
+		shouldShowProfileDialog,
+		shouldShowRootDialog,
+		switchTab,
+		tab,
+		workplaceRootUri,
+		workplaceState?.activeCompanyId,
+	])
 
 	// kilocode_change start
 	const telemetryDistinctId = useKiloIdentity(apiConfiguration?.kilocodeToken ?? "", machineId ?? "")

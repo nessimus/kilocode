@@ -37,6 +37,7 @@ import {
 	type OuterGateIntegration,
 } from "@roo/golden/outerGate"
 import { cn } from "@/lib/utils"
+import { vscode } from "@/utils/vscode"
 
 import "./outer-gate.css"
 import OuterGatePassionMap from "./OuterGatePassionMap"
@@ -144,6 +145,8 @@ const OuterGateView: React.FC = () => {
 		updateOuterGateInsight,
 		deleteOuterGateInsight,
 		workplaceState,
+		workplaceRootUri,
+		cwd,
 		createCompany,
 		updateCompany,
 		setCompanyFavorite,
@@ -230,6 +233,13 @@ const OuterGateView: React.FC = () => {
 	const cloverSessionCursor = cloverSessions?.cursor
 	const cloverSessionsLoaded = cloverSessions?.isInitialFetchComplete ?? false
 
+	const normalizeFsPath = useCallback((value?: string | null): string | undefined => {
+		if (!value) {
+			return undefined
+		}
+		return value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase()
+	}, [])
+
 	const handleCheckIn = useCallback(
 		(companyId?: string, companyName?: string) => {
 			const trimmedName = companyName?.trim()
@@ -241,10 +251,18 @@ const OuterGateView: React.FC = () => {
 				selectCompany(resolvedCompanyId)
 			}
 
-			window.postMessage({ type: "action", action: "switchTab", tab: "lobby" }, "*")
-			window.postMessage({ type: "action", action: "focusChatInput" }, "*")
+			const normalizedRoot = normalizeFsPath(workplaceRootUri)
+			const normalizedCwd = normalizeFsPath(cwd)
+			const inRootWorkspace = Boolean(normalizedRoot) && normalizedRoot === normalizedCwd
+
+			if (!inRootWorkspace) {
+				vscode.postMessage({ type: "action", action: "switchTab", tab: "lobby" })
+				vscode.postMessage({ type: "action", action: "focusChatInput" })
+				window.postMessage({ type: "action", action: "switchTab", tab: "lobby" }, "*")
+				window.postMessage({ type: "action", action: "focusChatInput" }, "*")
+			}
 		},
-		[courtyardCompanies, selectCompany],
+		[courtyardCompanies, cwd, normalizeFsPath, selectCompany, workplaceRootUri],
 	)
 
 	const activeCompanyContext = useMemo(() => {
@@ -687,11 +705,11 @@ const OuterGateView: React.FC = () => {
 		return () => window.removeEventListener("message", handler)
 	}, [handleEditCompanyModalChange])
 
-useEffect(() => {
-	if (!activeDeleteDialog) {
-		setDeleteConfirmationText("")
-	}
-}, [activeDeleteDialog])
+	useEffect(() => {
+		if (!activeDeleteDialog) {
+			setDeleteConfirmationText("")
+		}
+	}, [activeDeleteDialog])
 
 	useEffect(() => {
 		const companyIds = new Set(courtyardCompanies.map((entry) => entry.id))
@@ -912,237 +930,356 @@ useEffect(() => {
 										</div>
 									) : (
 										<div className="-mx-1 flex snap-x snap-mandatory gap-4 overflow-x-auto pb-2 px-1">
-									{courtyardCompanies.map((company) => {
-										const trimmedName = company.name?.trim() ?? ""
-										const customEmoji = company.emoji?.trim()
-										const fallbackLabel = trimmedName || "Untitled Company"
-										let companyIcon = customEmoji || "🏛️"
-										let companyLabel = fallbackLabel
-										if (!customEmoji) {
-											const leadingSymbol = trimmedName.match(/^[^\w\s]/u)?.[0]
-											if (leadingSymbol) {
-												companyIcon = leadingSymbol
-												const remainder = trimmedName.slice(leadingSymbol.length)
-												companyLabel =
-													remainder && /^\s/.test(remainder)
-														? remainder.trimStart() || fallbackLabel
-														: remainder || fallbackLabel
-											}
-										} else if (!trimmedName) {
-											companyLabel = fallbackLabel
-										}
-										const summary =
-											company.description?.trim() || company.mission?.trim() || company.vision?.trim()
-											const employeeCount = formatNumber(company.employees.length)
-											const departmentCount = formatNumber(company.departments.length)
-											const teamCount = formatNumber(company.teams.length)
-											const isFavoriteLoading = Boolean(favoritePending[company.id])
-											const isDeleteLoading = Boolean(deletePending[company.id])
-											const isUpdateLoading = Boolean(updatePending[company.id])
-											const isDeleting = Boolean(optimisticDeleted[company.id]) || isDeleteLoading
-											const isFavorited = optimisticFavorites[company.id] ?? company.isFavorite ?? false
-											const menuDisabled = isFavoriteLoading || isDeleteLoading || isUpdateLoading
-											const mutationError = mutationErrors[company.id]
-											const isDeleteDialogOpen = activeDeleteDialog === company.id
-											const confirmationTarget = companyLabel || trimmedName || "Untitled Company"
-											const confirmationValue = isDeleteDialogOpen ? deleteConfirmationText : ""
-											const normalizedConfirmationInput = confirmationValue.trim()
-											const isConfirmationAccurate = normalizedConfirmationInput === confirmationTarget
-											const showConfirmationHint = confirmationValue.length > 0 && !isConfirmationAccurate
+											{courtyardCompanies.map((company) => {
+												const trimmedName = company.name?.trim() ?? ""
+												const customEmoji = company.emoji?.trim()
+												const fallbackLabel = trimmedName || "Untitled Company"
+												let companyIcon = customEmoji || "🏛️"
+												let companyLabel = fallbackLabel
+												if (!customEmoji) {
+													const leadingSymbol = trimmedName.match(/^[^\w\s]/u)?.[0]
+													if (leadingSymbol) {
+														companyIcon = leadingSymbol
+														const remainder = trimmedName.slice(leadingSymbol.length)
+														companyLabel =
+															remainder && /^\s/.test(remainder)
+																? remainder.trimStart() || fallbackLabel
+																: remainder || fallbackLabel
+													}
+												} else if (!trimmedName) {
+													companyLabel = fallbackLabel
+												}
+												const summary =
+													company.description?.trim() ||
+													company.mission?.trim() ||
+													company.vision?.trim()
+												const employeeCount = formatNumber(company.employees.length)
+												const departmentCount = formatNumber(company.departments.length)
+												const teamCount = formatNumber(company.teams.length)
+												const isFavoriteLoading = Boolean(favoritePending[company.id])
+												const isDeleteLoading = Boolean(deletePending[company.id])
+												const isUpdateLoading = Boolean(updatePending[company.id])
+												const isDeleting =
+													Boolean(optimisticDeleted[company.id]) || isDeleteLoading
+												const isFavorited =
+													optimisticFavorites[company.id] ?? company.isFavorite ?? false
+												const menuDisabled =
+													isFavoriteLoading || isDeleteLoading || isUpdateLoading
+												const mutationError = mutationErrors[company.id]
+												const isDeleteDialogOpen = activeDeleteDialog === company.id
+												const confirmationTarget =
+													companyLabel || trimmedName || "Untitled Company"
+												const confirmationValue = isDeleteDialogOpen
+													? deleteConfirmationText
+													: ""
+												const normalizedConfirmationInput = confirmationValue.trim()
+												const isConfirmationAccurate =
+													normalizedConfirmationInput === confirmationTarget
+												const showConfirmationHint =
+													confirmationValue.length > 0 && !isConfirmationAccurate
 
-											return (
-												<div
-													key={company.id}
-													className={clsx(
-														"flex min-w-[280px] max-w-[320px] snap-start flex-col justify-between gap-4 rounded-2xl border border-[color-mix(in_srgb,var(--primary)_12%,rgba(255,255,255,0.18)_88%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_84%,rgba(255,255,255,0.08)_16%)] p-5 shadow-[0_16px_32px_rgba(8,5,1,0.24)] transition-transform hover:-translate-y-[2px]",
-														isDeleting && "opacity-60 pointer-events-none",
-													)}
-													aria-busy={isDeleteLoading || isUpdateLoading ? true : undefined}>
-												<div className="flex flex-col gap-3">
-										<div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1">
-											<span className="text-3xl leading-none" aria-hidden>
-												{companyIcon}
-											</span>
-											<div className="min-w-0">
-												<div className="flex items-start gap-2">
-													<h3 className="truncate text-base font-semibold text-[color-mix(in_srgb,var(--vscode-foreground)_90%,rgba(255,255,255,0.1)_10%)]">
-														{companyLabel}
-													</h3>
-													{isFavorited && (
-														<span className="inline-flex items-center gap-1 rounded-full border border-[color-mix(in_srgb,var(--primary)_36%,rgba(255,255,255,0.3)_64%)] bg-[color-mix(in_srgb,var(--primary)_24%,rgba(255,255,255,0.08)_76%)] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.22em] text-[color-mix(in_srgb,var(--primary-foreground,#211703)_90%,rgba(255,255,255,0.14)_10%)]">
-															<span className="codicon codicon-star-full" aria-hidden />
-															<span className="sr-only">Favorited workspace</span>
-														</span>
-													)}
-												</div>
-											</div>
-											<div className="col-start-3 row-start-1 self-start justify-self-end">
-												<DropdownMenu>
-													<DropdownMenuTrigger asChild>
-														<Button
-															variant="ghost"
-															size="icon"
-															aria-label={`${companyLabel} options`}
-															disabled={menuDisabled}
-															className="text-[color-mix(in_srgb,var(--vscode-foreground)_64%,rgba(255,255,255,0.24)_36%)] hover:bg-[color-mix(in_srgb,var(--vscode-editor-background)_70%,rgba(255,255,255,0.12)_30%)]">
-																{menuDisabled ? (
-																	<span className="codicon codicon-sync animate-spin" aria-hidden />
+												return (
+													<div
+														key={company.id}
+														className={clsx(
+															"flex min-w-[280px] max-w-[320px] snap-start flex-col justify-between gap-4 rounded-2xl border border-[color-mix(in_srgb,var(--primary)_12%,rgba(255,255,255,0.18)_88%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_84%,rgba(255,255,255,0.08)_16%)] p-5 shadow-[0_16px_32px_rgba(8,5,1,0.24)] transition-transform hover:-translate-y-[2px]",
+															isDeleting && "opacity-60 pointer-events-none",
+														)}
+														aria-busy={
+															isDeleteLoading || isUpdateLoading ? true : undefined
+														}>
+														<div className="flex flex-col gap-3">
+															<div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1">
+																<span className="text-3xl leading-none" aria-hidden>
+																	{companyIcon}
+																</span>
+																<div className="min-w-0">
+																	<div className="flex items-start gap-2">
+																		<h3 className="truncate text-base font-semibold text-[color-mix(in_srgb,var(--vscode-foreground)_90%,rgba(255,255,255,0.1)_10%)]">
+																			{companyLabel}
+																		</h3>
+																		{isFavorited && (
+																			<span className="inline-flex items-center gap-1 rounded-full border border-[color-mix(in_srgb,var(--primary)_36%,rgba(255,255,255,0.3)_64%)] bg-[color-mix(in_srgb,var(--primary)_24%,rgba(255,255,255,0.08)_76%)] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.22em] text-[color-mix(in_srgb,var(--primary-foreground,#211703)_90%,rgba(255,255,255,0.14)_10%)]">
+																				<span
+																					className="codicon codicon-star-full"
+																					aria-hidden
+																				/>
+																				<span className="sr-only">
+																					Favorited workspace
+																				</span>
+																			</span>
+																		)}
+																	</div>
+																</div>
+																<div className="col-start-3 row-start-1 self-start justify-self-end">
+																	<DropdownMenu>
+																		<DropdownMenuTrigger asChild>
+																			<Button
+																				variant="ghost"
+																				size="icon"
+																				aria-label={`${companyLabel} options`}
+																				disabled={menuDisabled}
+																				className="text-[color-mix(in_srgb,var(--vscode-foreground)_64%,rgba(255,255,255,0.24)_36%)] hover:bg-[color-mix(in_srgb,var(--vscode-editor-background)_70%,rgba(255,255,255,0.12)_30%)]">
+																				{menuDisabled ? (
+																					<span
+																						className="codicon codicon-sync animate-spin"
+																						aria-hidden
+																					/>
+																				) : (
+																					<span
+																						className="codicon codicon-kebab-vertical"
+																						aria-hidden
+																					/>
+																				)}
+																			</Button>
+																		</DropdownMenuTrigger>
+																		<DropdownMenuContent
+																			align="end"
+																			className="w-56 rounded-xl border border-[color-mix(in_srgb,var(--primary)_26%,rgba(255,255,255,0.28)_74%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_78%,rgba(15,12,4,0.36)_22%)]/95 p-1 text-sm shadow-[0_20px_40px_rgba(8,5,1,0.45)] backdrop-blur-md">
+																			<DropdownMenuItem
+																				onSelect={() =>
+																					handleFavoriteToggle(
+																						company.id,
+																						!isFavorited,
+																					)
+																				}
+																				disabled={
+																					isDeleteLoading || isUpdateLoading
+																				}>
+																				<span
+																					className={`codicon ${isFavorited ? "codicon-star-full" : "codicon-star-empty"}`}
+																					aria-hidden
+																				/>
+																				{isFavorited
+																					? "Unfavorite workspace"
+																					: "Favorite workspace"}
+																			</DropdownMenuItem>
+																			<DropdownMenuItem
+																				onSelect={() =>
+																					handleEditCompany(company.id)
+																				}
+																				disabled={
+																					isDeleteLoading || isUpdateLoading
+																				}>
+																				<span
+																					className="codicon codicon-edit"
+																					aria-hidden
+																				/>
+																				Edit details
+																			</DropdownMenuItem>
+																			<DropdownMenuSeparator />
+																			<DropdownMenuItem
+																				className="text-[color-mix(in_srgb,var(--vscode-editorError-foreground,#ff6b6b)_88%,rgba(255,255,255,0.24)_12%)] focus:bg-[color-mix(in_srgb,var(--vscode-editorError-foreground,#ff6b6b)_24%,rgba(255,255,255,0.12)_76%)] focus:text-[color-mix(in_srgb,var(--vscode-editorError-foreground,#ff9b9b)_92%,rgba(255,255,255,0.1)_8%)]"
+																				onSelect={() =>
+																					handleDeleteRequest(company.id)
+																				}>
+																				<span
+																					className="codicon codicon-trash"
+																					aria-hidden
+																				/>
+																				Delete workspace
+																			</DropdownMenuItem>
+																		</DropdownMenuContent>
+																	</DropdownMenu>
+																</div>
+																<p className="col-span-2 col-start-1 text-[11px] uppercase tracking-[0.18em] text-[color-mix(in_srgb,var(--vscode-foreground)_52%,rgba(255,255,255,0.28)_48%)] leading-[1.2]">
+																	Updated {formatDayTime(company.updatedAt)}
+																</p>
+															</div>
+															<p className="line-clamp-3 text-sm leading-relaxed text-[color-mix(in_srgb,var(--vscode-foreground)_70%,rgba(255,255,255,0.22)_30%)]">
+																{summary ??
+																	"Set a mission so Clover knows where to guide your check-ins."}
+															</p>
+															{isUpdateLoading && (
+																<p
+																	className="flex items-center gap-2 text-xs text-[color-mix(in_srgb,var(--vscode-foreground)_62%,rgba(255,255,255,0.2)_38%)]"
+																	role="status"
+																	aria-live="polite">
+																	<span
+																		className="codicon codicon-sync animate-spin"
+																		aria-hidden
+																	/>{" "}
+																	Saving changes…
+																</p>
+															)}
+															{isDeleteLoading && (
+																<p
+																	className="flex items-center gap-2 text-xs text-[color-mix(in_srgb,var(--vscode-foreground)_62%,rgba(255,255,255,0.2)_38%)]"
+																	role="status"
+																	aria-live="polite">
+																	<span
+																		className="codicon codicon-sync animate-spin"
+																		aria-hidden
+																	/>{" "}
+																	Deleting workspace…
+																</p>
+															)}
+														</div>
+														<div className="flex flex-col gap-3">
+															<div className="flex flex-wrap gap-2 text-[0.68rem] uppercase tracking-[0.18em] text-[color-mix(in_srgb,var(--vscode-foreground)_54%,rgba(255,255,255,0.26)_46%)]">
+																<Badge
+																	variant="outline"
+																	className="border-[color-mix(in_srgb,var(--primary)_18%,rgba(255,255,255,0.24)_82%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_80%,rgba(255,255,255,0.1)_20%)] px-3 py-1 text-[0.62rem] text-[color-mix(in_srgb,var(--primary)_58%,rgba(255,255,255,0.24)_42%)]">
+																	<span className="inline-flex items-center gap-1">
+																		<span
+																			className="codicon codicon-person"
+																			aria-hidden
+																		/>{" "}
+																		{employeeCount} teammates
+																	</span>
+																</Badge>
+																<Badge
+																	variant="outline"
+																	className="border-[color-mix(in_srgb,var(--primary)_18%,rgba(255,255,255,0.24)_82%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_80%,rgba(255,255,255,0.1)_20%)] px-3 py-1 text-[0.62rem] text-[color-mix(in_srgb,var(--primary)_58%,rgba(255,255,255,0.24)_42%)]">
+																	<span className="inline-flex items-center gap-1">
+																		<span
+																			className="codicon codicon-organization"
+																			aria-hidden
+																		/>{" "}
+																		{departmentCount} departments
+																	</span>
+																</Badge>
+																<Badge
+																	variant="outline"
+																	className="border-[color-mix(in_srgb,var(--primary)_18%,rgba(255,255,255,0.24)_82%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_80%,rgba(255,255,255,0.1)_20%)] px-3 py-1 text-[0.62rem] text-[color-mix(in_srgb,var(--primary)_58%,rgba(255,255,255,0.24)_42%)]">
+																	<span className="inline-flex items-center gap-1">
+																		<span
+																			className="codicon codicon-versions"
+																			aria-hidden
+																		/>{" "}
+																		{teamCount} teams
+																	</span>
+																</Badge>
+															</div>
+															<Button
+																variant="secondary"
+																disabled={isDeleteLoading || isUpdateLoading}
+																className="w-full items-center justify-center gap-2 rounded-2xl border border-[color-mix(in_srgb,var(--primary)_24%,rgba(255,255,255,0.26)_76%)] bg-[color-mix(in_srgb,var(--primary)_78%,rgba(255,255,255,0.08)_22%)] py-2.5 text-sm font-semibold text-[color-mix(in_srgb,var(--primary-foreground,#211703)_88%,rgba(255,255,255,0.08)_12%)] shadow-[0_16px_32px_rgba(212,175,55,0.32)] hover:-translate-y-[1px] hover:bg-[color-mix(in_srgb,var(--primary)_84%,rgba(255,255,255,0.12)_16%)] disabled:opacity-70"
+																onClick={() =>
+																	handleCheckIn(
+																		company.id,
+																		companyLabel || company.name,
+																	)
+																}>
+																{isDeleteLoading ? (
+																	<>
+																		<span
+																			className="codicon codicon-sync animate-spin"
+																			aria-hidden
+																		/>{" "}
+																		Deleting…
+																	</>
 																) : (
-																	<span className="codicon codicon-kebab-vertical" aria-hidden />
+																	<>
+																		Check-In Now
+																		<span
+																			className="codicon codicon-location"
+																			aria-hidden
+																		/>
+																	</>
 																)}
 															</Button>
-														</DropdownMenuTrigger>
-													<DropdownMenuContent
-														align="end"
-														className="w-56 rounded-xl border border-[color-mix(in_srgb,var(--primary)_26%,rgba(255,255,255,0.28)_74%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_78%,rgba(15,12,4,0.36)_22%)]/95 p-1 text-sm shadow-[0_20px_40px_rgba(8,5,1,0.45)] backdrop-blur-md">
-														<DropdownMenuItem
-															onSelect={() => handleFavoriteToggle(company.id, !isFavorited)}
-															disabled={isDeleteLoading || isUpdateLoading}>
-															<span className={`codicon ${isFavorited ? "codicon-star-full" : "codicon-star-empty"}`} aria-hidden />
-																{isFavorited ? "Unfavorite workspace" : "Favorite workspace"}
-															</DropdownMenuItem>
-														<DropdownMenuItem
-															onSelect={() => handleEditCompany(company.id)}
-															disabled={isDeleteLoading || isUpdateLoading}>
-															<span className="codicon codicon-edit" aria-hidden />
-															Edit details
-														</DropdownMenuItem>
-														<DropdownMenuSeparator />
-														<DropdownMenuItem
-															className="text-[color-mix(in_srgb,var(--vscode-editorError-foreground,#ff6b6b)_88%,rgba(255,255,255,0.24)_12%)] focus:bg-[color-mix(in_srgb,var(--vscode-editorError-foreground,#ff6b6b)_24%,rgba(255,255,255,0.12)_76%)] focus:text-[color-mix(in_srgb,var(--vscode-editorError-foreground,#ff9b9b)_92%,rgba(255,255,255,0.1)_8%)]"
-															onSelect={() => handleDeleteRequest(company.id)}>
-															<span className="codicon codicon-trash" aria-hidden />
-															Delete workspace
-														</DropdownMenuItem>
-													</DropdownMenuContent>
-												</DropdownMenu>
-											</div>
-											<p className="col-span-2 col-start-1 text-[11px] uppercase tracking-[0.18em] text-[color-mix(in_srgb,var(--vscode-foreground)_52%,rgba(255,255,255,0.28)_48%)] leading-[1.2]">
-												Updated {formatDayTime(company.updatedAt)}
-											</p>
-											</div>
-														<p className="line-clamp-3 text-sm leading-relaxed text-[color-mix(in_srgb,var(--vscode-foreground)_70%,rgba(255,255,255,0.22)_30%)]">
-															{summary ??
-																"Set a mission so Clover knows where to guide your check-ins."}
-														</p>
-													{isUpdateLoading && (
-														<p className="flex items-center gap-2 text-xs text-[color-mix(in_srgb,var(--vscode-foreground)_62%,rgba(255,255,255,0.2)_38%)]" role="status" aria-live="polite">
-															<span className="codicon codicon-sync animate-spin" aria-hidden /> Saving changes…
-														</p>
-													)}
-													{isDeleteLoading && (
-														<p className="flex items-center gap-2 text-xs text-[color-mix(in_srgb,var(--vscode-foreground)_62%,rgba(255,255,255,0.2)_38%)]" role="status" aria-live="polite">
-															<span className="codicon codicon-sync animate-spin" aria-hidden /> Deleting workspace…
-														</p>
-													)}
-													</div>
-													<div className="flex flex-col gap-3">
-														<div className="flex flex-wrap gap-2 text-[0.68rem] uppercase tracking-[0.18em] text-[color-mix(in_srgb,var(--vscode-foreground)_54%,rgba(255,255,255,0.26)_46%)]">
-															<Badge
-																variant="outline"
-																className="border-[color-mix(in_srgb,var(--primary)_18%,rgba(255,255,255,0.24)_82%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_80%,rgba(255,255,255,0.1)_20%)] px-3 py-1 text-[0.62rem] text-[color-mix(in_srgb,var(--primary)_58%,rgba(255,255,255,0.24)_42%)]">
-																<span className="inline-flex items-center gap-1">
-																	<span className="codicon codicon-person" aria-hidden /> {employeeCount} teammates
-																</span>
-															</Badge>
-															<Badge
-																variant="outline"
-																className="border-[color-mix(in_srgb,var(--primary)_18%,rgba(255,255,255,0.24)_82%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_80%,rgba(255,255,255,0.1)_20%)] px-3 py-1 text-[0.62rem] text-[color-mix(in_srgb,var(--primary)_58%,rgba(255,255,255,0.24)_42%)]">
-																<span className="inline-flex items-center gap-1">
-																	<span className="codicon codicon-organization" aria-hidden /> {departmentCount} departments
-																</span>
-															</Badge>
-															<Badge
-																variant="outline"
-																className="border-[color-mix(in_srgb,var(--primary)_18%,rgba(255,255,255,0.24)_82%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_80%,rgba(255,255,255,0.1)_20%)] px-3 py-1 text-[0.62rem] text-[color-mix(in_srgb,var(--primary)_58%,rgba(255,255,255,0.24)_42%)]">
-																<span className="inline-flex items-center gap-1">
-																	<span className="codicon codicon-versions" aria-hidden /> {teamCount} teams
-																</span>
-															</Badge>
 														</div>
-														<Button
-															variant="secondary"
-															disabled={isDeleteLoading || isUpdateLoading}
-															className="w-full items-center justify-center gap-2 rounded-2xl border border-[color-mix(in_srgb,var(--primary)_24%,rgba(255,255,255,0.26)_76%)] bg-[color-mix(in_srgb,var(--primary)_78%,rgba(255,255,255,0.08)_22%)] py-2.5 text-sm font-semibold text-[color-mix(in_srgb,var(--primary-foreground,#211703)_88%,rgba(255,255,255,0.08)_12%)] shadow-[0_16px_32px_rgba(212,175,55,0.32)] hover:-translate-y-[1px] hover:bg-[color-mix(in_srgb,var(--primary)_84%,rgba(255,255,255,0.12)_16%)] disabled:opacity-70"
-															onClick={() =>
-																handleCheckIn(company.id, companyLabel || company.name)}>
-															{isDeleteLoading ? (
-																<>
-																	<span className="codicon codicon-sync animate-spin" aria-hidden /> Deleting…
-																</>
-															) : (
-																<>
-																	Check-In Now
-																	<span className="codicon codicon-location" aria-hidden />
-																</>
-															)}
-														</Button>
-													</div>
 
-													{mutationError && (
-														<p
-															role="status"
-															aria-live="polite"
-															className="rounded-lg border border-[color-mix(in_srgb,var(--vscode-editorError-foreground,#ff6b6b)_60%,rgba(255,255,255,0.24)_40%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_80%,rgba(255,90,90,0.16)_20%)] px-3 py-2 text-xs text-[color-mix(in_srgb,var(--vscode-editorError-foreground,#ff8484)_88%,rgba(255,255,255,0.12)_12%)]">
-															{mutationError}
-														</p>
-													)}
+														{mutationError && (
+															<p
+																role="status"
+																aria-live="polite"
+																className="rounded-lg border border-[color-mix(in_srgb,var(--vscode-editorError-foreground,#ff6b6b)_60%,rgba(255,255,255,0.24)_40%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_80%,rgba(255,90,90,0.16)_20%)] px-3 py-2 text-xs text-[color-mix(in_srgb,var(--vscode-editorError-foreground,#ff8484)_88%,rgba(255,255,255,0.12)_12%)]">
+																{mutationError}
+															</p>
+														)}
 
-													<AlertDialog
-														open={activeDeleteDialog === company.id}
-														onOpenChange={(open) => setActiveDeleteDialog(open ? company.id : null)}>
-														<AlertDialogContent className="max-w-sm">
-															<AlertDialogHeader>
-																<AlertDialogTitle>Delete {confirmationTarget}</AlertDialogTitle>
-																<AlertDialogDescription className="space-y-3 text-sm text-[color-mix(in_srgb,var(--vscode-foreground)_82%,rgba(255,255,255,0.18)_18%)]">
-																	<p>
-																		This will permanently remove <span className="font-semibold text-[color-mix(in_srgb,var(--primary)_68%,rgba(255,255,255,0.28)_32%)]">{confirmationTarget}</span>
-																		and its AI teammates. Enter the workspace name exactly to confirm.
-																	</p>
-																	<div className="space-y-2">
-																		<Input
-																			type="text"
-																			value={confirmationValue}
-																			onChange={(event) => setDeleteConfirmationText(event.target.value)}
-																			autoFocus={isDeleteDialogOpen}
-																			placeholder={`Type ${confirmationTarget}`}
-																			aria-label={`Type ${confirmationTarget} to confirm deletion`}
-																			aria-invalid={showConfirmationHint ? true : undefined}
-																			disabled={!isDeleteDialogOpen || isDeleteLoading}
-																		/>
-																		<p
-																			className={cn(
-																				"text-xs text-[color-mix(in_srgb,var(--vscode-foreground)_60%,rgba(255,255,255,0.28)_40%)]",
-																				showConfirmationHint && "text-[color-mix(in_srgb,var(--vscode-editorError-foreground,#ff6b6b)_88%,rgba(255,255,255,0.22)_12%)]",
-																			)}
-																			aria-live="polite">
-																			Type <span className="font-semibold">{confirmationTarget}</span> to enable deletion.
+														<AlertDialog
+															open={activeDeleteDialog === company.id}
+															onOpenChange={(open) =>
+																setActiveDeleteDialog(open ? company.id : null)
+															}>
+															<AlertDialogContent className="max-w-sm">
+																<AlertDialogHeader>
+																	<AlertDialogTitle>
+																		Delete {confirmationTarget}
+																	</AlertDialogTitle>
+																	<AlertDialogDescription className="space-y-3 text-sm text-[color-mix(in_srgb,var(--vscode-foreground)_82%,rgba(255,255,255,0.18)_18%)]">
+																		<p>
+																			This will permanently remove{" "}
+																			<span className="font-semibold text-[color-mix(in_srgb,var(--primary)_68%,rgba(255,255,255,0.28)_32%)]">
+																				{confirmationTarget}
+																			</span>
+																			and its AI teammates. Enter the workspace
+																			name exactly to confirm.
 																		</p>
-																	</div>
-																</AlertDialogDescription>
-															</AlertDialogHeader>
-															<AlertDialogFooter>
-																<AlertDialogCancel asChild>
-																	<Button variant="secondary">Cancel</Button>
-																</AlertDialogCancel>
-																<AlertDialogAction asChild>
-																	<Button
-																		variant="destructive"
-																		onClick={() => handleConfirmDelete(company.id)}
-																		disabled={isDeleteLoading || !isConfirmationAccurate}>
-																		{isDeleteLoading ? (
-																			<span className="codicon codicon-sync animate-spin" aria-hidden />
-																		) : (
-																			<span className="codicon codicon-trash" aria-hidden />
-																		)}
-																		Delete workspace
-																	</Button>
-																</AlertDialogAction>
-															</AlertDialogFooter>
-														</AlertDialogContent>
-													</AlertDialog>
-												</div>
-											)
+																		<div className="space-y-2">
+																			<Input
+																				type="text"
+																				value={confirmationValue}
+																				onChange={(event) =>
+																					setDeleteConfirmationText(
+																						event.target.value,
+																					)
+																				}
+																				autoFocus={isDeleteDialogOpen}
+																				placeholder={`Type ${confirmationTarget}`}
+																				aria-label={`Type ${confirmationTarget} to confirm deletion`}
+																				aria-invalid={
+																					showConfirmationHint
+																						? true
+																						: undefined
+																				}
+																				disabled={
+																					!isDeleteDialogOpen ||
+																					isDeleteLoading
+																				}
+																			/>
+																			<p
+																				className={cn(
+																					"text-xs text-[color-mix(in_srgb,var(--vscode-foreground)_60%,rgba(255,255,255,0.28)_40%)]",
+																					showConfirmationHint &&
+																						"text-[color-mix(in_srgb,var(--vscode-editorError-foreground,#ff6b6b)_88%,rgba(255,255,255,0.22)_12%)]",
+																				)}
+																				aria-live="polite">
+																				Type{" "}
+																				<span className="font-semibold">
+																					{confirmationTarget}
+																				</span>{" "}
+																				to enable deletion.
+																			</p>
+																		</div>
+																	</AlertDialogDescription>
+																</AlertDialogHeader>
+																<AlertDialogFooter>
+																	<AlertDialogCancel asChild>
+																		<Button variant="secondary">Cancel</Button>
+																	</AlertDialogCancel>
+																	<AlertDialogAction asChild>
+																		<Button
+																			variant="destructive"
+																			onClick={() =>
+																				handleConfirmDelete(company.id)
+																			}
+																			disabled={
+																				isDeleteLoading ||
+																				!isConfirmationAccurate
+																			}>
+																			{isDeleteLoading ? (
+																				<span
+																					className="codicon codicon-sync animate-spin"
+																					aria-hidden
+																				/>
+																			) : (
+																				<span
+																					className="codicon codicon-trash"
+																					aria-hidden
+																				/>
+																			)}
+																			Delete workspace
+																		</Button>
+																	</AlertDialogAction>
+																</AlertDialogFooter>
+															</AlertDialogContent>
+														</AlertDialog>
+													</div>
+												)
 											})}
 										</div>
 									)}
@@ -1157,7 +1294,8 @@ useEffect(() => {
 												Recent Chats with Clover
 											</CardTitle>
 											<CardDescription className="text-xs text-[color-mix(in_srgb,var(--vscode-foreground)_68%,rgba(255,255,255,0.24)_32%)]">
-												Pick up where you left off or spin up a fresh concierge thread. Clover AI chats stay personal—they aren’t shared with any company.
+												Pick up where you left off or spin up a fresh concierge thread. Clover
+												AI chats stay personal—they aren’t shared with any company.
 											</CardDescription>
 										</div>
 										<Button
@@ -1170,12 +1308,12 @@ useEffect(() => {
 									</div>
 								</CardHeader>
 								<CardContent className="space-y-4">
-					{!cloverSessionsLoaded && isLoadingCloverSessions ? (
-						<div className="-mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto px-1 pb-2">
-							{[0, 1, 2, 3].map((index) => (
-								<div
-									key={index}
-									className="flex min-w-[280px] max-w-[320px] shrink-0 snap-start flex-col gap-3 rounded-2xl border border-[color-mix(in_srgb,var(--primary)_12%,rgba(255,255,255,0.18)_88%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_84%,rgba(255,255,255,0.08)_16%)] p-4 shadow-[0_16px_32px_rgba(8,5,1,0.18)] animate-pulse">
+									{!cloverSessionsLoaded && isLoadingCloverSessions ? (
+										<div className="-mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto px-1 pb-2">
+											{[0, 1, 2, 3].map((index) => (
+												<div
+													key={index}
+													className="flex min-w-[280px] max-w-[320px] shrink-0 snap-start flex-col gap-3 rounded-2xl border border-[color-mix(in_srgb,var(--primary)_12%,rgba(255,255,255,0.18)_88%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_84%,rgba(255,255,255,0.08)_16%)] p-4 shadow-[0_16px_32px_rgba(8,5,1,0.18)] animate-pulse">
 													<div className="h-4 w-2/3 rounded bg-[color-mix(in_srgb,var(--primary)_18%,rgba(255,255,255,0.22)_82%)]" />
 													<div className="h-3 w-1/3 rounded bg-[color-mix(in_srgb,var(--primary)_12%,rgba(255,255,255,0.18)_88%)]" />
 													<div className="h-12 rounded bg-[color-mix(in_srgb,var(--primary)_12%,rgba(255,255,255,0.14)_88%)]" />
@@ -1199,14 +1337,14 @@ useEffect(() => {
 										</div>
 									) : (
 										<>
-							<div className="-mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto px-1 pb-2">
+											<div className="-mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto px-1 pb-2">
 												{cloverSessionEntries.map((session) => {
 													const isActive = session.id === activeCloverSessionId
 													return (
 														<div
 															key={session.id}
-										className={clsx(
-											"flex min-w-[280px] max-w-[320px] shrink-0 snap-start flex-col justify-between gap-3 rounded-2xl border border-[color-mix(in_srgb,var(--primary)_12%,rgba(255,255,255,0.18)_88%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_84%,rgba(255,255,255,0.1)_16%)] p-4 shadow-[0_16px_32px_rgba(8,5,1,0.22)] transition-transform hover:-translate-y-[1px]",
+															className={clsx(
+																"flex min-w-[280px] max-w-[320px] shrink-0 snap-start flex-col justify-between gap-3 rounded-2xl border border-[color-mix(in_srgb,var(--primary)_12%,rgba(255,255,255,0.18)_88%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_84%,rgba(255,255,255,0.1)_16%)] p-4 shadow-[0_16px_32px_rgba(8,5,1,0.22)] transition-transform hover:-translate-y-[1px]",
 																isActive &&
 																	"border-[color-mix(in_srgb,var(--primary)_42%,rgba(255,255,255,0.32)_58%)]",
 															)}>
@@ -1241,10 +1379,10 @@ useEffect(() => {
 														</div>
 													)
 												})}
-											{hasMoreCloverSessions && (
-												<div ref={loadMoreSentinelRef} className="h-full w-1 shrink-0" />
-											)}
-										</div>
+												{hasMoreCloverSessions && (
+													<div ref={loadMoreSentinelRef} className="h-full w-1 shrink-0" />
+												)}
+											</div>
 											{isLoadingCloverSessions && (
 												<div className="flex items-center gap-2 text-xs text-[color-mix(in_srgb,var(--vscode-foreground)_60%,rgba(255,255,255,0.28)_40%)]">
 													<span
@@ -1299,9 +1437,9 @@ useEffect(() => {
 																className={clsx(
 																	"codicon",
 																	insightIconClass[insight.sourceType],
-															)}
-															aria-hidden
-														/>
+																)}
+																aria-hidden
+															/>
 															<span>{insight.recommendedWorkspace ?? "Unassigned"}</span>
 														</div>
 														<div className="flex items-start gap-2">
@@ -1320,26 +1458,34 @@ useEffect(() => {
 																		size="icon"
 																		aria-label="Insight options"
 																		className="h-7 w-7 rounded-full border border-[color-mix(in_srgb,var(--primary)_18%,rgba(255,255,255,0.24)_82%)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_78%,rgba(255,255,255,0.12)_22%)] text-[color-mix(in_srgb,var(--primary)_62%,rgba(255,255,255,0.22)_38%)] transition hover:border-[color-mix(in_srgb,var(--primary)_28%,rgba(255,255,255,0.3)_72%)]">
-																		<span className="codicon codicon-kebab-vertical" aria-hidden />
+																		<span
+																			className="codicon codicon-kebab-vertical"
+																			aria-hidden
+																		/>
 																	</Button>
 																</DropdownMenuTrigger>
-																<DropdownMenuContent align="end" className="min-w-[160px]">
-																	<DropdownMenuItem onSelect={() => handleEditInsight(insight)}>
+																<DropdownMenuContent
+																	align="end"
+																	className="min-w-[160px]">
+																	<DropdownMenuItem
+																		onSelect={() => handleEditInsight(insight)}>
 																		Edit insight
 																	</DropdownMenuItem>
 																	<DropdownMenuItem
-																		onSelect={() => handleDeleteInsightRequest(insight)}
+																		onSelect={() =>
+																			handleDeleteInsightRequest(insight)
+																		}
 																		className="text-[var(--vscode-errorForeground)] focus:text-[var(--vscode-errorForeground)]">
 																		Delete insight
 																	</DropdownMenuItem>
 																</DropdownMenuContent>
 															</DropdownMenu>
 														</div>
-												</div>
-												<div className="space-y-2">
-													<h3 className="text-base font-semibold text-[color-mix(in_srgb,var(--vscode-foreground)_88%,rgba(255,255,255,0.12)_12%)]">
-														{insight.title}
-													</h3>
+													</div>
+													<div className="space-y-2">
+														<h3 className="text-base font-semibold text-[color-mix(in_srgb,var(--vscode-foreground)_88%,rgba(255,255,255,0.12)_12%)]">
+															{insight.title}
+														</h3>
 														{insight.summary && (
 															<p className="text-sm text-[color-mix(in_srgb,var(--vscode-foreground)_70%,rgba(255,255,255,0.22)_30%)]">
 																{insight.summary}
@@ -1450,7 +1596,9 @@ useEffect(() => {
 
 						<div className="space-y-4">
 							<div className="flex flex-col gap-2">
-								<label htmlFor="outer-gate-insight-title" className="text-sm font-medium text-[var(--vscode-foreground)]">
+								<label
+									htmlFor="outer-gate-insight-title"
+									className="text-sm font-medium text-[var(--vscode-foreground)]">
 									Title
 								</label>
 								<Input
@@ -1462,12 +1610,16 @@ useEffect(() => {
 								/>
 							</div>
 							<div className="flex flex-col gap-2">
-								<label htmlFor="outer-gate-insight-stage" className="text-sm font-medium text-[var(--vscode-foreground)]">
+								<label
+									htmlFor="outer-gate-insight-stage"
+									className="text-sm font-medium text-[var(--vscode-foreground)]">
 									Stage
 								</label>
 								<Select
 									value={insightForm.stage}
-									onValueChange={(value) => handleInsightInputChange("stage", value as OuterGateInsightStage)}>
+									onValueChange={(value) =>
+										handleInsightInputChange("stage", value as OuterGateInsightStage)
+									}>
 									<SelectTrigger id="outer-gate-insight-stage" className="w-full">
 										<SelectValue placeholder="Select stage" />
 									</SelectTrigger>
@@ -1481,7 +1633,9 @@ useEffect(() => {
 								</Select>
 							</div>
 							<div className="flex flex-col gap-2">
-								<label htmlFor="outer-gate-insight-summary" className="text-sm font-medium text-[var(--vscode-foreground)]">
+								<label
+									htmlFor="outer-gate-insight-summary"
+									className="text-sm font-medium text-[var(--vscode-foreground)]">
 									Summary (optional)
 								</label>
 								<Textarea
@@ -1493,13 +1647,17 @@ useEffect(() => {
 								/>
 							</div>
 							<div className="flex flex-col gap-2">
-								<label htmlFor="outer-gate-insight-workspace" className="text-sm font-medium text-[var(--vscode-foreground)]">
+								<label
+									htmlFor="outer-gate-insight-workspace"
+									className="text-sm font-medium text-[var(--vscode-foreground)]">
 									Recommended workspace (optional)
 								</label>
 								<Input
 									id="outer-gate-insight-workspace"
 									value={insightForm.recommendedWorkspace}
-									onChange={(event) => handleInsightInputChange("recommendedWorkspace", event.target.value)}
+									onChange={(event) =>
+										handleInsightInputChange("recommendedWorkspace", event.target.value)
+									}
 									placeholder="Unassigned"
 								/>
 							</div>
@@ -1538,16 +1696,17 @@ useEffect(() => {
 				}}>
 				<AlertDialogContent className="max-w-sm">
 					<AlertDialogHeader>
-						<AlertDialogTitle>
-							Delete {insightToDelete?.title ?? "this insight"}?
-						</AlertDialogTitle>
+						<AlertDialogTitle>Delete {insightToDelete?.title ?? "this insight"}?</AlertDialogTitle>
 						<AlertDialogDescription className="text-sm text-[color-mix(in_srgb,var(--vscode-foreground)_82%,rgba(255,255,255,0.18)_18%)]">
-							This permanently removes the insight from your recent captures. You can always capture a new one later, but this action cannot be undone.
+							This permanently removes the insight from your recent captures. You can always capture a new
+							one later, but this action cannot be undone.
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
 						<AlertDialogCancel asChild>
-							<Button type="button" variant="secondary">Keep Insight</Button>
+							<Button type="button" variant="secondary">
+								Keep Insight
+							</Button>
 						</AlertDialogCancel>
 						<AlertDialogAction asChild>
 							<Button
@@ -1586,29 +1745,33 @@ useEffect(() => {
 								<Input
 									id="edit-company-name"
 									value={editCompanyForm.name}
-									onChange={(event) => setEditCompanyForm((prev) => ({ ...prev, name: event.target.value }))}
+									onChange={(event) =>
+										setEditCompanyForm((prev) => ({ ...prev, name: event.target.value }))
+									}
 									autoFocus
 									disabled={isEditSubmitting}
 									placeholder="Northwind Ventures"
 								/>
 							</div>
 
-						<div className="flex flex-col gap-2">
-							<label
-								htmlFor="edit-company-emoji"
-								className="text-sm font-medium text-[var(--vscode-foreground)]">
-								Company emoji (optional)
-							</label>
-							<EmojiPickerField
-								id="edit-company-emoji"
-								value={editCompanyForm.emoji}
-								onChange={(event) => setEditCompanyForm((prev) => ({ ...prev, emoji: event.target.value }))}
-								onEmojiSelect={(emoji) => setEditCompanyForm((prev) => ({ ...prev, emoji }))}
-								disabled={isEditSubmitting}
-								placeholder="🚀"
-								maxLength={4}
-							/>
-						</div>
+							<div className="flex flex-col gap-2">
+								<label
+									htmlFor="edit-company-emoji"
+									className="text-sm font-medium text-[var(--vscode-foreground)]">
+									Company emoji (optional)
+								</label>
+								<EmojiPickerField
+									id="edit-company-emoji"
+									value={editCompanyForm.emoji}
+									onChange={(event) =>
+										setEditCompanyForm((prev) => ({ ...prev, emoji: event.target.value }))
+									}
+									onEmojiSelect={(emoji) => setEditCompanyForm((prev) => ({ ...prev, emoji }))}
+									disabled={isEditSubmitting}
+									placeholder="🚀"
+									maxLength={4}
+								/>
+							</div>
 
 							<div className="flex flex-col gap-2">
 								<label
@@ -1619,7 +1782,9 @@ useEffect(() => {
 								<Textarea
 									id="edit-company-description"
 									value={editCompanyForm.description}
-									onChange={(event) => setEditCompanyForm((prev) => ({ ...prev, description: event.target.value }))}
+									onChange={(event) =>
+										setEditCompanyForm((prev) => ({ ...prev, description: event.target.value }))
+									}
 									disabled={isEditSubmitting}
 									placeholder="Summarize what this workspace is for."
 									rows={3}
@@ -1635,7 +1800,9 @@ useEffect(() => {
 								<Textarea
 									id="edit-company-mission"
 									value={editCompanyForm.mission}
-									onChange={(event) => setEditCompanyForm((prev) => ({ ...prev, mission: event.target.value }))}
+									onChange={(event) =>
+										setEditCompanyForm((prev) => ({ ...prev, mission: event.target.value }))
+									}
 									disabled={isEditSubmitting}
 									placeholder="Give Clover a guiding objective for this team."
 									rows={3}
@@ -1651,7 +1818,9 @@ useEffect(() => {
 								<Textarea
 									id="edit-company-vision"
 									value={editCompanyForm.vision}
-									onChange={(event) => setEditCompanyForm((prev) => ({ ...prev, vision: event.target.value }))}
+									onChange={(event) =>
+										setEditCompanyForm((prev) => ({ ...prev, vision: event.target.value }))
+									}
 									disabled={isEditSubmitting}
 									placeholder="Paint the future state you want Clover to steer toward."
 									rows={3}
@@ -1664,7 +1833,11 @@ useEffect(() => {
 						</div>
 
 						<DialogFooter>
-							<Button type="button" variant="ghost" onClick={() => handleEditCompanyModalChange(false)} disabled={isEditSubmitting}>
+							<Button
+								type="button"
+								variant="ghost"
+								onClick={() => handleEditCompanyModalChange(false)}
+								disabled={isEditSubmitting}>
 								Cancel
 							</Button>
 							<Button type="submit" disabled={isEditCompanySubmitDisabled || isEditSubmitting}>
@@ -1709,25 +1882,23 @@ useEffect(() => {
 								/>
 							</div>
 
-						<div className="flex flex-col gap-2">
-							<label
-								htmlFor="create-company-emoji"
-								className="text-sm font-medium text-[var(--vscode-foreground)]">
-								Company emoji (optional)
-							</label>
-							<EmojiPickerField
-								id="create-company-emoji"
-								value={createCompanyForm.emoji}
-								onChange={(event) =>
-									setCreateCompanyForm((prev) => ({ ...prev, emoji: event.target.value }))
-								}
-								onEmojiSelect={(emoji) =>
-									setCreateCompanyForm((prev) => ({ ...prev, emoji }))
-								}
-								placeholder="🚀"
-								maxLength={4}
-							/>
-						</div>
+							<div className="flex flex-col gap-2">
+								<label
+									htmlFor="create-company-emoji"
+									className="text-sm font-medium text-[var(--vscode-foreground)]">
+									Company emoji (optional)
+								</label>
+								<EmojiPickerField
+									id="create-company-emoji"
+									value={createCompanyForm.emoji}
+									onChange={(event) =>
+										setCreateCompanyForm((prev) => ({ ...prev, emoji: event.target.value }))
+									}
+									onEmojiSelect={(emoji) => setCreateCompanyForm((prev) => ({ ...prev, emoji }))}
+									placeholder="🚀"
+									maxLength={4}
+								/>
+							</div>
 
 							<div className="flex flex-col gap-2">
 								<label

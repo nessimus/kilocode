@@ -6,6 +6,14 @@ import type { WorkplaceStateObserver } from "./WorkplaceService"
 
 const ROOT_STATE_KEY = "goldenWorkplace.rootUri"
 const COMPANY_FOLDER_STATE_KEY = "goldenWorkplace.companyFolders"
+export const FOCUS_SIDEBAR_FLAG_KEY = "goldenWorkplace.focusSidebarOnActivate"
+
+type OpenCompanyWindowMode = "prompt" | "currentWindow" | "newWindow"
+type WindowChoiceAction = "current" | "new" | "rememberCurrent" | "rememberNew"
+
+interface WindowChoiceQuickPickItem extends vscode.QuickPickItem {
+	action?: WindowChoiceAction
+}
 
 export class WorkplaceFilesystemManager implements WorkplaceStateObserver {
 	private rootUri: vscode.Uri | undefined
@@ -61,9 +69,9 @@ export class WorkplaceFilesystemManager implements WorkplaceStateObserver {
 		const selected = await this.promptForRootFolder(
 			childFolderName
 				? {
-					title: "Choose Golden Workplace parent folder",
-					message: `Select where to create “${childFolderName}”. You can change this later.`,
-				}
+						title: "Choose Golden Workplace parent folder",
+						message: `Select where to create “${childFolderName}”. You can change this later.`,
+					}
 				: undefined,
 		)
 		if (!selected) {
@@ -113,6 +121,11 @@ export class WorkplaceFilesystemManager implements WorkplaceStateObserver {
 			const previous = this.previousActiveCompanyId
 			this.previousActiveCompanyId = nextActiveCompanyId
 			await this.handleActiveCompanyChange(nextActiveCompanyId, previous)
+		} else {
+			const targetUri = nextActiveCompanyId ? this.getCompanyFolderUri(nextActiveCompanyId) : this.rootUri
+			if (targetUri && !this.isCurrentWorkspace(targetUri)) {
+				await this.handleActiveCompanyChange(nextActiveCompanyId, this.previousActiveCompanyId)
+			}
 		}
 	}
 
@@ -132,10 +145,10 @@ export class WorkplaceFilesystemManager implements WorkplaceStateObserver {
 				return
 			}
 
-		this.rootUri = selected
-		await this.saveRootUri(selected)
-		await this.ensureRootDirectory()
-		await this.syncCompanyFolders(state)
+			this.rootUri = selected
+			await this.saveRootUri(selected)
+			await this.ensureRootDirectory()
+			await this.syncCompanyFolders(state)
 			await this.notifyConfigurationListeners()
 		} finally {
 			this.promptInFlight = false
@@ -313,6 +326,86 @@ export class WorkplaceFilesystemManager implements WorkplaceStateObserver {
 		return vscode.Uri.joinPath(this.rootUri, folderName)
 	}
 
+	private async resolveWindowPreference(currentCompanyId?: string): Promise<boolean> {
+		const config = vscode.workspace.getConfiguration(Package.name)
+		const mode = config.get<OpenCompanyWindowMode>("openCompanyWindowMode", "prompt")
+		if (mode === "currentWindow") {
+			return false
+		}
+		if (mode === "newWindow") {
+			return true
+		}
+
+		const legacyPreference = config.inspect<boolean>("openCompanyInNewWindow")
+		const legacyValue =
+			legacyPreference?.workspaceFolderValue ?? legacyPreference?.workspaceValue ?? legacyPreference?.globalValue
+		if (typeof legacyValue === "boolean") {
+			return legacyValue
+		}
+
+		const companyName = currentCompanyId
+			? this.lastState.companies.find((company) => company.id === currentCompanyId)?.name
+			: undefined
+
+		const quickPickItems: WindowChoiceQuickPickItem[] = [
+			{
+				label: "Open in current window",
+				detail: "Switch to this company's workspace in the window you already have open.",
+				action: "current",
+			},
+			{
+				label: "Open in new window",
+				detail: "Launch a separate VS Code window for this company.",
+				action: "new",
+			},
+			{ label: "", kind: vscode.QuickPickItemKind.Separator },
+			{
+				label: "Always use current window",
+				detail: "Stop asking and always reuse the existing window.",
+				action: "rememberCurrent",
+			},
+			{
+				label: "Always use new window",
+				detail: "Stop asking and always open a separate window.",
+				action: "rememberNew",
+			},
+		]
+
+		const selection = await vscode.window.showQuickPick(quickPickItems, {
+			title: companyName ? `Open ${companyName}` : "Open Golden Workplace",
+			placeHolder: "Choose how to open this company's workspace.",
+			ignoreFocusOut: true,
+		})
+
+		switch (selection?.action) {
+			case "new":
+				return true
+			case "rememberCurrent":
+				await this.persistWindowModePreference("currentWindow", false)
+				return false
+			case "rememberNew":
+				await this.persistWindowModePreference("newWindow", true)
+				return true
+			case "current":
+			default:
+				return false
+		}
+	}
+
+	private async persistWindowModePreference(mode: OpenCompanyWindowMode, openInNewWindow: boolean): Promise<void> {
+		const config = vscode.workspace.getConfiguration(Package.name)
+		try {
+			await config.update("openCompanyWindowMode", mode, vscode.ConfigurationTarget.Global)
+		} catch (error) {
+			console.error("[WorkplaceFilesystem] Failed to persist openCompanyWindowMode", error)
+		}
+		try {
+			await config.update("openCompanyInNewWindow", openInNewWindow, vscode.ConfigurationTarget.Global)
+		} catch (error) {
+			console.error("[WorkplaceFilesystem] Failed to persist openCompanyInNewWindow", error)
+		}
+	}
+
 	private async handleActiveCompanyChange(currentCompanyId: string | undefined, previous?: string | undefined) {
 		if (!this.rootUri) {
 			return
@@ -326,21 +419,30 @@ export class WorkplaceFilesystemManager implements WorkplaceStateObserver {
 			return
 		}
 
-		const openInNewWindow = currentCompanyId
-			? vscode.workspace.getConfiguration(Package.name).get<boolean>("openCompanyInNewWindow", true)
-			: false
+		const openInNewWindow = currentCompanyId ? await this.resolveWindowPreference(currentCompanyId) : false
+		const shouldSignalFocus = true
 
 		if (!openInNewWindow && this.isCurrentWorkspace(targetUri)) {
 			return
 		}
 
 		try {
+			if (shouldSignalFocus) {
+				await this.context.globalState.update(FOCUS_SIDEBAR_FLAG_KEY, true)
+			}
 			await vscode.commands.executeCommand("vscode.openFolder", targetUri, openInNewWindow)
 		} catch (error) {
 			console.error(
 				`[WorkplaceFilesystem] Failed to open workspace for company ${currentCompanyId ?? "root"}`,
 				error,
 			)
+			if (shouldSignalFocus) {
+				try {
+					await this.context.globalState.update(FOCUS_SIDEBAR_FLAG_KEY, false)
+				} catch (updateError) {
+					console.error("[WorkplaceFilesystem] Failed to reset sidebar focus flag", updateError)
+				}
+			}
 			// If we failed, revert previous active company id so we don't get stuck
 			this.previousActiveCompanyId = previous
 		}

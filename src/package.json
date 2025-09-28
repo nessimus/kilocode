@@ -522,10 +522,21 @@
 		"configuration": {
 			"title": "%configuration.title%",
 			"properties": {
+				"kilo-code.openCompanyWindowMode": {
+					"type": "string",
+					"enum": [
+						"prompt",
+						"newWindow",
+						"currentWindow"
+					],
+					"default": "prompt",
+					"description": "Choose how Golden Workplace opens company workspaces: prompt each time, always open in a new window, or reuse the current window."
+				},
 				"kilo-code.openCompanyInNewWindow": {
 					"type": "boolean",
 					"default": true,
-					"description": "Open each company workspace in a new VS Code window when you switch companies."
+					"description": "Open each company workspace in a new VS Code window when you switch companies.",
+					"deprecationMessage": "Use kilo-code.openCompanyWindowMode instead."
 				},
 				"kilo-code.allowedCommands": {
 					"type": "array",
