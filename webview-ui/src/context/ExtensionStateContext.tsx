@@ -26,7 +26,6 @@ import {
 import { BrowserInteractionStrategy, BrowserStreamFrame } from "@roo/browser"
 import { findLastIndex } from "@roo/array"
 import { McpServer } from "@roo/mcp"
-import { checkExistKey } from "@roo/checkExistApiConfig"
 import { Mode, defaultModeSlug, defaultPrompts } from "@roo/modes"
 import { CustomSupportPrompts } from "@roo/support-prompt"
 import { experimentDefault } from "@roo/experiments"
@@ -67,6 +66,7 @@ import type {
 	SetCompanyFavoritePayload,
 	DeleteCompanyPayload,
 	WorkplaceState,
+	WorkplaceOwnerProfile,
 	HaltWorkdayPayload,
 	UpdateEmployeeSchedulePayload,
 } from "@roo/golden/workplace"
@@ -264,6 +264,8 @@ export interface ExtensionStateContextType extends ExtensionState {
 	createShift: (payload: CreateShiftPayload) => void
 	updateShift: (payload: UpdateShiftPayload) => void
 	deleteShift: (payload: DeleteShiftPayload) => void
+	setOwnerProfileDefaults: (profile: WorkplaceOwnerProfile) => void
+	configureWorkplaceRoot: (ownerName?: string) => void
 	setShowWelcome: (value: boolean) => void
 	hubSnapshot?: HubSnapshot
 	createHubRoom: (title?: string, options?: { autonomous?: boolean; participants?: HubAgentBlueprint[] }) => void
@@ -630,7 +632,17 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 			case "state": {
 				const newState = message.state!
 				setState((prevState) => mergeExtensionState(prevState, newState))
-				setShowWelcome(!checkExistKey(newState.apiConfiguration))
+				const ownerProfile = newState.workplaceState?.ownerProfileDefaults
+				const ownerFirstComplete = Boolean(ownerProfile?.firstName && ownerProfile.firstName.trim().length > 0)
+				const ownerLastComplete = Boolean(ownerProfile?.lastName && ownerProfile.lastName.trim().length > 0)
+				const ownerRoleComplete = Boolean(ownerProfile?.role && ownerProfile.role.trim().length > 0)
+				const ownerMbtiComplete = Boolean(ownerProfile?.mbtiType && ownerProfile.mbtiType.trim().length > 0)
+				setShowWelcome((prev) => {
+					if (!ownerFirstComplete || !ownerLastComplete || !ownerRoleComplete || !ownerMbtiComplete) {
+						return true
+					}
+					return prev
+				})
 				setDidHydrateState(true)
 					// Update alwaysAllowFollowupQuestions if present in state message
 					if ((newState as any).alwaysAllowFollowupQuestions !== undefined) {
@@ -1170,6 +1182,10 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 			vscode.postMessage({ type: "updateShift", workplaceShiftUpdate: payload }),
 		deleteShift: (payload) =>
 			vscode.postMessage({ type: "deleteShift", workplaceShiftDelete: payload }),
+		setOwnerProfileDefaults: (profile) =>
+			vscode.postMessage({ type: "setOwnerProfileDefaults", workplaceOwnerProfileDefaults: profile }),
+		configureWorkplaceRoot: (ownerName) =>
+			vscode.postMessage({ type: "configureWorkplaceRoot", workplaceRootOwnerName: ownerName }),
 		setShowWelcome,
 		sendOuterGateMessage,
 		triggerOuterGateAction,

@@ -73,7 +73,26 @@ export class WorkplaceService {
         return this.sanitizeOwnerProfile(combined);
     }
     updateOwnerProfileDefaults(next) {
-        this.state.ownerProfileDefaults = this.sanitizeOwnerProfile(next);
+        const sanitized = this.sanitizeOwnerProfile(next);
+        this.state.ownerProfileDefaults = sanitized;
+        return sanitized;
+    }
+    async setOwnerProfileDefaults(profile) {
+        const sanitizedDefaults = this.updateOwnerProfileDefaults(profile);
+        const now = new Date().toISOString();
+        for (const company of this.state.companies) {
+            const existingProfile = company.ownerProfile;
+            const baseline = existingProfile ? this.sanitizeOwnerProfile(existingProfile) : sanitizedDefaults;
+            const mergedProfile = {
+                ...baseline,
+                ...sanitizedDefaults,
+            };
+            company.ownerProfile = mergedProfile;
+            company.updatedAt = now;
+        }
+        await this.persist();
+        this.logState("setOwnerProfileDefaults");
+        return this.getState();
     }
     logState(action, details) {
         if (!ENABLE_WORKPLACE_DEBUG_LOGS) {

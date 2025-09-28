@@ -33,15 +33,11 @@ import {
     toggleBlockCollapsed,
     createNoteSheetBlock,
 } from "./noteSheetModel"
+import { useNoteSheetHandlers } from "./NoteSheetContext"
 
 export interface NoteSheetNodeStateData {
     blocks: NoteSheetBlock[]
     focusedBlockId?: string
-}
-
-export interface NoteSheetNodeRenderData extends NoteSheetNodeStateData {
-    onBlocksChange: (updater: (blocks: NoteSheetBlock[]) => NoteSheetBlock[]) => void
-    onFocusBlock: (blockId: string | undefined) => void
 }
 
 type DropPosition = "before" | "after" | "inside"
@@ -74,11 +70,12 @@ const DEFAULT_BLOCK_AFTER: Record<NoteSheetBlockType, NoteSheetBlockType> = {
     image: "text",
 }
 
-const NoteSheetNode = memo(({ data, selected, dragging }: NodeProps<NoteSheetNodeRenderData>) => {
+const NoteSheetNodeComponent = ({ id, data, selected, dragging }: NodeProps<NoteSheetNodeStateData>) => {
     const { blocks, focusedBlockId } = data
     const [dragState, setDragState] = useState<DragState>({})
     const blockEditorsRef = useRef<Map<string, EditableElement>>(new Map())
     const pendingFocusRef = useRef<string | undefined>()
+    const { updateBlocks, focusBlock: focusBlockForNode } = useNoteSheetHandlers()
 
     useEffect(() => {
         if (!focusedBlockId) {
@@ -117,9 +114,9 @@ const NoteSheetNode = memo(({ data, selected, dragging }: NodeProps<NoteSheetNod
     const focusBlock = useCallback(
         (blockId: string | undefined) => {
             pendingFocusRef.current = blockId
-            data.onFocusBlock(blockId)
+            focusBlockForNode(id, blockId)
         },
-        [data],
+        [focusBlockForNode, id],
     )
 
     useEffect(() => {
@@ -130,9 +127,9 @@ const NoteSheetNode = memo(({ data, selected, dragging }: NodeProps<NoteSheetNod
 
     const handleBlocksMutation = useCallback(
         (updater: (blocks: NoteSheetBlock[]) => NoteSheetBlock[]) => {
-            data.onBlocksChange((current) => ensureAtLeastOneBlock(updater(current)))
+            updateBlocks(id, (current) => ensureAtLeastOneBlock(updater(current)))
         },
-        [data],
+        [id, updateBlocks],
     )
 
     const handleTextChange = useCallback(
@@ -582,7 +579,18 @@ const NoteSheetNode = memo(({ data, selected, dragging }: NodeProps<NoteSheetNod
             <Handle type="source" position={Position.Right} className="!h-3 !w-3 !border-none !bg-slate-300" />
         </div>
     )
-})
+}
+
+const areNoteSheetNodePropsEqual = (
+    prev: Readonly<NodeProps<NoteSheetNodeStateData>>,
+    next: Readonly<NodeProps<NoteSheetNodeStateData>>,
+) =>
+    prev.selected === next.selected &&
+    prev.dragging === next.dragging &&
+    prev.data.blocks === next.data.blocks &&
+    prev.data.focusedBlockId === next.data.focusedBlockId
+
+const NoteSheetNode = memo(NoteSheetNodeComponent, areNoteSheetNodePropsEqual)
 
 NoteSheetNode.displayName = "NoteSheetNode"
 

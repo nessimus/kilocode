@@ -26,6 +26,7 @@ import { formatDistanceToNow } from "date-fns"
 import {
 	PanelLeftClose,
 	PanelLeftOpen,
+	ChevronRight,
 	Plus,
 	Search,
 	Lightbulb,
@@ -40,6 +41,8 @@ import {
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import { nanoid } from "nanoid"
+import deepEqual from "fast-deep-equal"
+import type { JSONContent } from "@tiptap/core"
 
 import "reactflow/dist/style.css"
 
@@ -57,13 +60,22 @@ import AgentToolNode, {
 	type AgentToolNodeRenderData,
 	type AgentToolInput,
 } from "./AgentToolNode"
-import NoteSheetNode, {
-	type NoteSheetNodeRenderData,
-	type NoteSheetNodeStateData,
-} from "./NoteSheetNode"
+import NoteSheetNode, { type NoteSheetNodeStateData } from "./NoteSheetNode"
+import { NoteSheetHandlersProvider } from "./NoteSheetContext"
+import StickyNoteNode, {
+	type StickyNoteColorId,
+	type StickyNoteNodeRenderData,
+	type StickyNoteNodeStateData,
+} from "./StickyNoteNode"
+import TaskListNode, {
+	type TaskListNodeRenderData,
+	type TaskListNodeStateData,
+	createTaskListItem,
+} from "./TaskListNode"
 import { NoteSheetBlock, createInitialNoteSheetBlocks } from "./noteSheetModel"
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover"
 import { Input } from "@/components/ui/input"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import {
 	buildAgentToolTemplates,
 	buildAvailableTools,
@@ -72,18 +84,25 @@ import {
 	type IdeaNodeTemplate,
 } from "./nodeTemplates"
 
-type BrainstormIdeaNodeStateData = Omit<BrainstormIdeaNodeRenderData, "onDraftChange" | "onCommit" | "onCancel">
+type BrainstormIdeaNodeStateData = Omit<
+	BrainstormIdeaNodeRenderData,
+	"onDraftChange" | "onCommit" | "onCancel" | "onToggleComplete"
+>
 type BrainstormFileNodeStateData = Omit<BrainstormFileNodeData, "onSelectFile" | "onClearFile">
 
 type CanvasNodeStateData =
 	| BrainstormIdeaNodeStateData
 	| BrainstormFileNodeStateData
 	| NoteSheetNodeStateData
+	| StickyNoteNodeStateData
+	| TaskListNodeStateData
 	| AgentToolNodeData
 type CanvasNodeRenderData =
 	| BrainstormIdeaNodeRenderData
 	| BrainstormFileNodeData
-	| NoteSheetNodeRenderData
+	| NoteSheetNodeStateData
+	| StickyNoteNodeRenderData
+	| TaskListNodeRenderData
 	| AgentToolNodeRenderData
 type CanvasNode = Node<CanvasNodeStateData>
 type CanvasRenderNode = Node<CanvasNodeRenderData>
@@ -96,6 +115,8 @@ const IDEA_TEMPLATE_ICONS: Record<string, LucideIcon> = {
 	signal: Signal,
 	"note-sheet": NotebookPen,
 	"file-note": FileText,
+	"sticky-note": StickyNote,
+	"task-list": CheckSquare,
 }
 
 const DEFAULT_IDEA_ICON: LucideIcon = StickyNote
@@ -109,6 +130,26 @@ const AGENT_TOOL_ICON_BY_GROUP: Record<string, LucideIcon> = {
 	Edit: WandSparkles,
 	Command: WandSparkles,
 	Modes: WandSparkles,
+}
+
+const AGENT_TOOL_GROUP_ORDER = ["edit", "read", "browser", "web", "command", "mcp", "modes", "other"] as const
+
+type MenuSectionId = "ideas" | "agentTools"
+
+interface AgentToolGroupSection {
+	id: string
+	label: string
+	description?: string
+	badge?: string
+	templates: CanvasTemplate[]
+}
+
+interface MenuSection {
+	id: MenuSectionId
+	label: string
+	description?: string
+	templates: CanvasTemplate[]
+	groups?: AgentToolGroupSection[]
 }
 
 const getTemplateIcon = (template: CanvasTemplate): LucideIcon => {
@@ -140,7 +181,7 @@ const createDefaultNodes = (): CanvasNode[] => [
 	{
 		id: typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `starter-node-${nanoid(6)}`,
 		position: { x: 0, y: 0 },
-		data: { label: "Drop ideas here" },
+		data: { label: "Drop ideas here", variant: "idea", completed: false },
 		type: "brainstorm",
 	},
 ]
@@ -184,6 +225,15 @@ const createInitialSurfaces = (): BrainstormSurface[] =>
 		},
 	])
 
+const EMPTY_RICH_TEXT: JSONContent = {
+	type: "doc",
+	content: [
+		{
+			type: "paragraph",
+		},
+	],
+}
+
 const isIdeaNode = (node: CanvasNode | CanvasRenderNode): node is Node<BrainstormIdeaNodeStateData> => node.type === "brainstorm"
 
 const isAgentToolNode = (node: CanvasNode | CanvasRenderNode): node is Node<AgentToolNodeData> => node.type === "agentTool"
@@ -194,11 +244,23 @@ const isFileNode = (node: CanvasNode | CanvasRenderNode): node is Node<Brainstor
 const isNoteSheetNode = (node: CanvasNode | CanvasRenderNode): node is Node<NoteSheetNodeStateData> =>
 	node.type === "noteSheet"
 
-const normalizeIdeaNodeData = (data?: CanvasNodeStateData): BrainstormIdeaNodeStateData => ({
-	label: (data as BrainstormIdeaNodeStateData)?.label ?? "",
-	isEditing: (data as BrainstormIdeaNodeStateData)?.isEditing,
-	draft: (data as BrainstormIdeaNodeStateData)?.draft,
-})
+const isStickyNoteNode = (node: CanvasNode | CanvasRenderNode): node is Node<StickyNoteNodeStateData> =>
+	node.type === "stickyNote"
+
+const isTaskListNode = (node: CanvasNode | CanvasRenderNode): node is Node<TaskListNodeStateData> =>
+	node.type === "taskList"
+
+const normalizeIdeaNodeData = (data?: CanvasNodeStateData): BrainstormIdeaNodeStateData => {
+	const partial = (data as BrainstormIdeaNodeStateData) ?? {}
+	const variant = partial.variant ?? "idea"
+	const completed = typeof partial.completed === "boolean" ? partial.completed : false
+	return {
+		...partial,
+		label: partial.label ?? "",
+		variant,
+		completed,
+	}
+}
 
 const normalizeFileNodeData = (data?: CanvasNodeStateData): BrainstormFileNodeStateData => {
 	const partial = (data as BrainstormFileNodeStateData) ?? {}
@@ -292,6 +354,20 @@ const normalizeAgentToolNodeData = (data?: CanvasNodeStateData): AgentToolNodeDa
 		lastError: partial.lastError,
 		inputs: normalizedInputs,
 	}
+}
+
+const normalizeStickyNoteNodeData = (data?: CanvasNodeStateData): StickyNoteNodeStateData => {
+	const partial = (data as StickyNoteNodeStateData) ?? {}
+	return {
+		color: partial.color ?? "sunny",
+		content: partial.content ?? EMPTY_RICH_TEXT,
+	}
+}
+
+const normalizeTaskListNodeData = (data?: CanvasNodeStateData): TaskListNodeStateData => {
+	const partial = (data as TaskListNodeStateData) ?? {}
+	const items = Array.isArray(partial.items) && partial.items.length > 0 ? partial.items : [createTaskListItem()]
+	return { items }
 }
 
 interface MenuState {
@@ -495,14 +571,121 @@ const BrainstormCanvas: React.FC<BrainstormCanvasProps> = ({ initialSurfaceId })
 	const ideaSectionTemplates = filteredNodeTemplates.filter((template) => template.section === "ideas")
 	const agentSectionTemplates = filteredNodeTemplates.filter((template) => template.section === "agentTools")
 
+	const agentToolGroupCopy = useMemo(
+		() => ({
+			edit: {
+				label: t("common:brainstorm.agentToolsGroupEdit", {
+					defaultValue: "Workforce & file editing",
+				}),
+				description: t("common:brainstorm.agentToolsGroupEditDescription", {
+					defaultValue: "Apply structured changes to org data, files, and templates.",
+				}),
+			},
+			read: {
+				label: t("common:brainstorm.agentToolsGroupRead", {
+					defaultValue: "Workforce insights & lookup",
+				}),
+				description: t("common:brainstorm.agentToolsGroupReadDescription", {
+					defaultValue: "Pull org records, browse documentation, and gather quick context.",
+				}),
+			},
+			browser: {
+				label: t("common:brainstorm.agentToolsGroupBrowser", {
+					defaultValue: "Browser automation",
+				}),
+				description: t("common:brainstorm.agentToolsGroupBrowserDescription", {
+					defaultValue: "Launch guided browsing sessions and capture on-page actions.",
+				}),
+			},
+			web: {
+				label: t("common:brainstorm.agentToolsGroupWeb", {
+					defaultValue: "Web search & research",
+				}),
+				description: t("common:brainstorm.agentToolsGroupWebDescription", {
+					defaultValue: "Run curated web searches and summarize findings for the team.",
+				}),
+			},
+			command: {
+				label: t("common:brainstorm.agentToolsGroupCommand", {
+					defaultValue: "Command line operations",
+				}),
+				description: t("common:brainstorm.agentToolsGroupCommandDescription", {
+					defaultValue: "Execute shell commands when canvases call for heavier lifts.",
+				}),
+			},
+			mcp: {
+				label: t("common:brainstorm.agentToolsGroupMcp", {
+					defaultValue: "MCP integrations",
+				}),
+				description: t("common:brainstorm.agentToolsGroupMcpDescription", {
+					defaultValue: "Orchestrate Model Context Protocol tools and resources in one spot.",
+				}),
+			},
+			modes: {
+				label: t("common:brainstorm.agentToolsGroupModes", {
+					defaultValue: "Workflow modes & delegation",
+				}),
+				description: t("common:brainstorm.agentToolsGroupModesDescription", {
+					defaultValue: "Switch modes or spin up tasks without leaving the surface.",
+				}),
+			},
+			other: {
+				label: t("common:brainstorm.agentToolsGroupOther", {
+					defaultValue: "Other tools",
+				}),
+				description: t("common:brainstorm.agentToolsGroupOtherDescription", {
+					defaultValue: "Keep everything else handy for quick orchestration.",
+				}),
+			},
+		}),
+		[t],
+	)
+
+	const agentToolGroups = useMemo(() => {
+		if (agentSectionTemplates.length === 0) {
+			return [] as AgentToolGroupSection[]
+		}
+
+		const grouped = new Map<string, { templates: CanvasTemplate[]; badge?: string }>()
+		agentSectionTemplates.forEach((template) => {
+			const rawId = template.meta?.toolGroupId?.toLowerCase() ?? "other"
+			const groupId = Object.prototype.hasOwnProperty.call(agentToolGroupCopy, rawId) ? rawId : "other"
+			const current = grouped.get(groupId)
+			if (current) {
+				current.templates.push(template)
+				return
+			}
+			grouped.set(groupId, {
+				templates: [template],
+				badge: template.meta?.toolGroup,
+			})
+		})
+
+		const entries = Array.from(grouped.entries()).map(([groupId, value]) => {
+			const copy = agentToolGroupCopy[groupId as keyof typeof agentToolGroupCopy] ?? agentToolGroupCopy.other
+			return {
+				id: groupId,
+				label: copy.label,
+				description: copy.description,
+				badge: value.badge,
+				templates: value.templates.slice().sort((a, b) => a.name.localeCompare(b.name)),
+			} satisfies AgentToolGroupSection
+		})
+
+		entries.sort((a, b) => {
+			const indexA = AGENT_TOOL_GROUP_ORDER.indexOf(a.id as (typeof AGENT_TOOL_GROUP_ORDER)[number])
+			const indexB = AGENT_TOOL_GROUP_ORDER.indexOf(b.id as (typeof AGENT_TOOL_GROUP_ORDER)[number])
+			const safeA = indexA === -1 ? AGENT_TOOL_GROUP_ORDER.length : indexA
+			const safeB = indexB === -1 ? AGENT_TOOL_GROUP_ORDER.length : indexB
+			return safeA === safeB ? a.label.localeCompare(b.label) : safeA - safeB
+		})
+
+		return entries
+	}, [agentSectionTemplates, agentToolGroupCopy])
+
 	const menuSections = useMemo(
 		() => {
-			const sections: Array<{
-				id: "ideas" | "agentTools"
-				label: string
-				description?: string
-				templates: CanvasTemplate[]
-			}> = []
+			const sections: MenuSection[] = []
 
 			if (ideaSectionTemplates.length > 0) {
 				sections.push({
@@ -519,12 +702,14 @@ const BrainstormCanvas: React.FC<BrainstormCanvasProps> = ({ initialSurfaceId })
 					label: agentToolsSectionHeading,
 					description: agentToolsSectionDescription,
 					templates: agentSectionTemplates,
+					groups: agentToolGroups,
 				})
 			}
 
 			return sections
 		},
 		[
+			agentToolGroups,
 			agentSectionTemplates,
 			agentToolsSectionDescription,
 			agentToolsSectionHeading,
@@ -533,6 +718,12 @@ const BrainstormCanvas: React.FC<BrainstormCanvasProps> = ({ initialSurfaceId })
 			ideaSectionTemplates,
 		],
 	)
+
+	const [openSections, setOpenSections] = useState<Record<MenuSectionId, boolean>>({
+		ideas: true,
+		agentTools: true,
+	})
+	const [openAgentGroups, setOpenAgentGroups] = useState<Record<string, boolean>>({})
 
 	const [nodes, setNodesState] = useState<CanvasNode[]>(
 		() => initialSurfaces[0]?.nodes ?? createDefaultNodes(),
@@ -544,6 +735,8 @@ const BrainstormCanvas: React.FC<BrainstormCanvasProps> = ({ initialSurfaceId })
 			brainstorm: BrainstormNode,
 			fileNote: BrainstormFileNode,
 			noteSheet: NoteSheetNode,
+			stickyNote: StickyNoteNode,
+			taskList: TaskListNode,
 			agentTool: AgentToolNode,
 		}),
 		[],
@@ -661,7 +854,7 @@ const BrainstormCanvas: React.FC<BrainstormCanvasProps> = ({ initialSurfaceId })
 
 					if (node.id === nodeId) {
 						const nextData: BrainstormIdeaNodeStateData = {
-							label: baseData.label,
+							...baseData,
 							isEditing: true,
 							draft: baseData.draft ?? baseData.label,
 						}
@@ -742,6 +935,7 @@ const BrainstormCanvas: React.FC<BrainstormCanvasProps> = ({ initialSurfaceId })
 					return {
 						...node,
 						data: {
+							...baseData,
 							label: nextLabel,
 							isEditing: false,
 							draft: undefined,
@@ -790,21 +984,53 @@ const BrainstormCanvas: React.FC<BrainstormCanvasProps> = ({ initialSurfaceId })
 		[updateNodes],
 	)
 
-	const handleNoteSheetFocusChange = useCallback(
-		(nodeId: string, blockId: string | undefined) => {
+const handleNoteSheetFocusChange = useCallback(
+	(nodeId: string, blockId: string | undefined) => {
+		updateNodes((currentNodes) => {
+			let hasChanges = false
+			const updated = currentNodes.map((node) => {
+				if (node.id !== nodeId || !isNoteSheetNode(node)) {
+					return node
+				}
+
+				const baseData: NoteSheetNodeStateData = {
+					blocks: (node.data as NoteSheetNodeStateData)?.blocks ?? createInitialNoteSheetBlocks(),
+					focusedBlockId: (node.data as NoteSheetNodeStateData)?.focusedBlockId,
+				}
+
+				if (baseData.focusedBlockId === blockId) {
+					return node
+				}
+
+				hasChanges = true
+				return {
+					...node,
+					data: {
+						...baseData,
+						focusedBlockId: blockId,
+					},
+				}
+			})
+
+			return hasChanges ? updated : currentNodes
+		})
+	},
+	[updateNodes],
+)
+
+	const handleStickyNoteContentChange = useCallback(
+		(nodeId: string, content: JSONContent) => {
 			updateNodes((currentNodes) => {
 				let hasChanges = false
 				const updated = currentNodes.map((node) => {
-					if (node.id !== nodeId || !isNoteSheetNode(node)) {
+					if (node.id !== nodeId || !isStickyNoteNode(node)) {
 						return node
 					}
 
-					const baseData: NoteSheetNodeStateData = {
-						blocks: (node.data as NoteSheetNodeStateData)?.blocks ?? createInitialNoteSheetBlocks(),
-						focusedBlockId: (node.data as NoteSheetNodeStateData)?.focusedBlockId,
-					}
+					const baseData = normalizeStickyNoteNodeData(node.data)
+					const previousContent = baseData.content ?? EMPTY_RICH_TEXT
 
-					if (baseData.focusedBlockId === blockId) {
+					if (deepEqual(previousContent, content)) {
 						return node
 					}
 
@@ -813,7 +1039,167 @@ const BrainstormCanvas: React.FC<BrainstormCanvasProps> = ({ initialSurfaceId })
 						...node,
 						data: {
 							...baseData,
-							focusedBlockId: blockId,
+							content,
+						},
+					}
+				})
+
+				return hasChanges ? updated : currentNodes
+			})
+		},
+		[updateNodes],
+	)
+
+	const handleStickyNoteColorChange = useCallback(
+		(nodeId: string, color: StickyNoteColorId) => {
+			updateNodes((currentNodes) => {
+				let hasChanges = false
+				const updated = currentNodes.map((node) => {
+					if (node.id !== nodeId || !isStickyNoteNode(node)) {
+						return node
+					}
+
+					const baseData = normalizeStickyNoteNodeData(node.data)
+
+					if ((baseData.color ?? "sunny") === color) {
+						return node
+					}
+
+					hasChanges = true
+					return { ...node, data: { ...baseData, color } }
+				})
+
+				return hasChanges ? updated : currentNodes
+			})
+		},
+		[updateNodes],
+	)
+
+	const handleTaskListToggle = useCallback(
+		(nodeId: string, itemId: string, completed: boolean) => {
+			updateNodes((currentNodes) => {
+				let hasChanges = false
+				const updated = currentNodes.map((node) => {
+					if (node.id !== nodeId || !isTaskListNode(node)) {
+						return node
+					}
+
+					const baseData = normalizeTaskListNodeData(node.data)
+					let nodeUpdated = false
+					const nextItems = baseData.items.map((item) => {
+						if (item.id !== itemId) {
+							return item
+						}
+
+						if (Boolean(item.completed) === completed) {
+							return item
+						}
+
+						nodeUpdated = true
+						return { ...item, completed }
+					})
+
+					if (!nodeUpdated) {
+						return node
+					}
+
+					hasChanges = true
+					return { ...node, data: { ...baseData, items: nextItems } }
+				})
+
+				return hasChanges ? updated : currentNodes
+			})
+		},
+		[updateNodes],
+	)
+
+	const handleTaskListContentChange = useCallback(
+		(nodeId: string, itemId: string, content: JSONContent) => {
+			updateNodes((currentNodes) => {
+				let hasChanges = false
+				const updated = currentNodes.map((node) => {
+					if (node.id !== nodeId || !isTaskListNode(node)) {
+						return node
+					}
+
+					const baseData = normalizeTaskListNodeData(node.data)
+					let nodeUpdated = false
+					const nextItems = baseData.items.map((item) => {
+						if (item.id !== itemId) {
+							return item
+						}
+
+						const previous = item.content ?? EMPTY_RICH_TEXT
+						if (deepEqual(previous, content)) {
+							return item
+						}
+
+						nodeUpdated = true
+						return { ...item, content }
+					})
+
+					if (!nodeUpdated) {
+						return node
+					}
+
+					hasChanges = true
+					return { ...node, data: { ...baseData, items: nextItems } }
+				})
+
+				return hasChanges ? updated : currentNodes
+			})
+		},
+		[updateNodes],
+	)
+
+	const handleTaskListAddItem = useCallback(
+		(nodeId: string) => {
+			updateNodes((currentNodes) => {
+				let hasChanges = false
+				const updated = currentNodes.map((node) => {
+					if (node.id !== nodeId || !isTaskListNode(node)) {
+						return node
+					}
+
+					const baseData = normalizeTaskListNodeData(node.data)
+					hasChanges = true
+					return {
+						...node,
+						data: {
+							...baseData,
+							items: [...baseData.items, createTaskListItem()],
+						},
+					}
+				})
+
+				return hasChanges ? updated : currentNodes
+			})
+		},
+		[updateNodes],
+	)
+
+	const handleTaskListRemoveItem = useCallback(
+		(nodeId: string, itemId: string) => {
+			updateNodes((currentNodes) => {
+				let hasChanges = false
+				const updated = currentNodes.map((node) => {
+					if (node.id !== nodeId || !isTaskListNode(node)) {
+						return node
+					}
+
+					const baseData = normalizeTaskListNodeData(node.data)
+					const filtered = baseData.items.filter((item) => item.id !== itemId)
+
+					if (filtered.length === baseData.items.length) {
+						return node
+					}
+
+					hasChanges = true
+					return {
+						...node,
+						data: {
+							...baseData,
+							items: filtered.length > 0 ? filtered : [createTaskListItem()],
 						},
 					}
 				})
@@ -843,9 +1229,41 @@ const BrainstormCanvas: React.FC<BrainstormCanvasProps> = ({ initialSurfaceId })
 					return {
 						...node,
 						data: {
+							...baseData,
 							label: baseData.label,
 							isEditing: false,
 							draft: undefined,
+						},
+					}
+				})
+
+				return hasChanges ? updated : currentNodes
+			})
+		},
+		[updateNodes],
+	)
+
+	const handleNodeToggleComplete = useCallback(
+		(nodeId: string, nextCompleted: boolean) => {
+			updateNodes((currentNodes) => {
+				let hasChanges = false
+				const updated = currentNodes.map((node) => {
+					if (node.id !== nodeId || !isIdeaNode(node)) {
+						return node
+					}
+
+					const baseData = normalizeIdeaNodeData(node.data)
+
+					if (baseData.variant !== "task" || baseData.completed === nextCompleted) {
+						return node
+					}
+
+					hasChanges = true
+					return {
+						...node,
+						data: {
+							...baseData,
+							completed: nextCompleted,
 						},
 					}
 				})
@@ -1074,6 +1492,7 @@ const BrainstormCanvas: React.FC<BrainstormCanvasProps> = ({ initialSurfaceId })
 							onDraftChange: (value: string) => handleNodeDraftChange(node.id, value),
 							onCommit: () => handleNodeCommit(node.id),
 							onCancel: () => handleNodeCancel(node.id),
+							onToggleComplete: (checked: boolean) => handleNodeToggleComplete(node.id, checked),
 						},
 					}
 				}
@@ -1090,19 +1509,41 @@ const BrainstormCanvas: React.FC<BrainstormCanvasProps> = ({ initialSurfaceId })
 					}
 				}
 
-				if (isNoteSheetNode(node)) {
-					const baseData: NoteSheetNodeStateData = {
-						blocks: (node.data as NoteSheetNodeStateData)?.blocks ?? createInitialNoteSheetBlocks(),
-						focusedBlockId: (node.data as NoteSheetNodeStateData)?.focusedBlockId,
-					}
+			if (isNoteSheetNode(node)) {
+				const baseData: NoteSheetNodeStateData = {
+					blocks: (node.data as NoteSheetNodeStateData)?.blocks ?? createInitialNoteSheetBlocks(),
+					focusedBlockId: (node.data as NoteSheetNodeStateData)?.focusedBlockId,
+				}
+				return {
+					...node,
+					data: baseData,
+				}
+			}
+
+				if (isStickyNoteNode(node)) {
+					const baseData = normalizeStickyNoteNodeData(node.data)
 					return {
 						...node,
 						data: {
 							...baseData,
-							onBlocksChange: (blockUpdater: (blocks: NoteSheetBlock[]) => NoteSheetBlock[]) =>
-								handleNoteSheetBlocksChange(node.id, blockUpdater),
-							onFocusBlock: (blockId: string | undefined) =>
-								handleNoteSheetFocusChange(node.id, blockId),
+							onContentChange: (content: JSONContent) => handleStickyNoteContentChange(node.id, content),
+							onColorChange: (color: StickyNoteColorId) => handleStickyNoteColorChange(node.id, color),
+						},
+					}
+				}
+
+				if (isTaskListNode(node)) {
+					const baseData = normalizeTaskListNodeData(node.data)
+					return {
+						...node,
+						data: {
+							...baseData,
+							onToggleItem: (itemId: string, completed: boolean) =>
+								handleTaskListToggle(node.id, itemId, completed),
+							onContentChange: (itemId: string, content: JSONContent) =>
+								handleTaskListContentChange(node.id, itemId, content),
+							onAddItem: () => handleTaskListAddItem(node.id),
+							onRemoveItem: (itemId: string) => handleTaskListRemoveItem(node.id, itemId),
 						},
 					}
 				}
@@ -1131,13 +1572,26 @@ const BrainstormCanvas: React.FC<BrainstormCanvasProps> = ({ initialSurfaceId })
 			handleAgentToolRemoveInput,
 			handleFileNodeClear,
 			handleFileNodeSelect,
-			handleNoteSheetBlocksChange,
-			handleNoteSheetFocusChange,
 			handleNodeCancel,
 			handleNodeCommit,
 			handleNodeDraftChange,
+			handleNodeToggleComplete,
+			handleStickyNoteColorChange,
+			handleStickyNoteContentChange,
+			handleTaskListAddItem,
+			handleTaskListContentChange,
+			handleTaskListRemoveItem,
+			handleTaskListToggle,
 			nodes,
 		],
+	)
+
+	const noteSheetHandlers = useMemo(
+		() => ({
+			updateBlocks: handleNoteSheetBlocksChange,
+			focusBlock: handleNoteSheetFocusChange,
+		}),
+		[handleNoteSheetBlocksChange, handleNoteSheetFocusChange],
 	)
 
 	const closeMenu = useCallback(() => {
@@ -1202,6 +1656,49 @@ const BrainstormCanvas: React.FC<BrainstormCanvasProps> = ({ initialSurfaceId })
 			closeMenu()
 		},
 		[closeMenu, menuState.flowPosition.x, menuState.flowPosition.y, updateNodes],
+	)
+
+	const renderTemplateButton = useCallback(
+		(template: CanvasTemplate, options?: { showGroupBadge?: boolean }) => {
+			const Icon = getTemplateIcon(template)
+			const showGroupBadge = Boolean(options?.showGroupBadge && template.meta?.toolGroup)
+			return (
+				<button
+					key={template.id}
+					type="button"
+					onClick={() => handleAddNode(template)}
+					className="group flex w-full flex-col gap-2 rounded-sm border border-vscode-editorWidget-border/60 bg-vscode-editorWidget-background/95 p-3 text-left transition-colors hover:border-vscode-focusBorder hover:bg-vscode-editorWidget-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder">
+					<div className="flex items-start justify-between gap-2">
+						<div className="flex items-center gap-2">
+							<span className="flex size-8 items-center justify-center rounded-sm border border-vscode-editorWidget-border/80 bg-vscode-editorWidget-background text-vscode-descriptionForeground transition-colors group-hover:border-vscode-focusBorder group-hover:text-vscode-foreground">
+								<Icon className="size-4" aria-hidden="true" />
+							</span>
+							<span className="text-sm font-medium leading-none text-vscode-foreground">
+								{template.name}
+							</span>
+						</div>
+						{showGroupBadge ? (
+							<span className="rounded bg-vscode-badge-background px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-vscode-badge-foreground">
+								{template.meta?.toolGroup}
+							</span>
+						) : null}
+					</div>
+
+					<p className="text-xs leading-relaxed text-vscode-descriptionForeground">
+						{template.description}
+					</p>
+
+					{template.meta?.toolId && (
+						<span className="inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-wide text-vscode-descriptionForeground/80">
+							<span className="rounded-sm bg-vscode-editorWidget-background px-1 py-0.5">
+								{template.meta.toolId}
+							</span>
+						</span>
+					)}
+				</button>
+			)
+		},
+		[handleAddNode],
 	)
 
 	const handleConnect = useCallback(
@@ -1558,6 +2055,7 @@ const BrainstormCanvas: React.FC<BrainstormCanvasProps> = ({ initialSurfaceId })
 				</header>
 				<div className="relative flex-1 overflow-hidden">
 					<div className="relative h-full w-full" ref={canvasRef}>
+						<NoteSheetHandlersProvider value={noteSheetHandlers}>
 						<ReactFlow
 							nodes={nodesWithHandlers}
 							edges={edges}
@@ -1633,69 +2131,107 @@ const BrainstormCanvas: React.FC<BrainstormCanvasProps> = ({ initialSurfaceId })
 									</div>
 								) : (
 									<div className="space-y-5 pb-1">
-										{menuSections.map((section) => {
-											return (
-												<div key={section.id} className="space-y-2">
-													<div className="flex flex-col gap-1 px-1">
-														<span className="text-xs font-semibold uppercase tracking-wide text-vscode-descriptionForeground">
-															{section.label}
-														</span>
-														{section.description ? (
-															<p className="text-xs leading-relaxed text-vscode-descriptionForeground/80">
-																{section.description}
-															</p>
-														) : null}
-													</div>
+									{menuSections.map((section) => {
+										const sectionOpen = openSections[section.id] ?? true
 
-													<div className="grid gap-2">
-														{section.templates.map((template) => {
-															const Icon = getTemplateIcon(template)
-
-															return (
-																<button
-																	key={template.id}
-																	type="button"
-																	onClick={() => handleAddNode(template)}
-																	className="group flex w-full flex-col gap-2 rounded-sm border border-vscode-editorWidget-border/60 bg-vscode-editorWidget-background/95 p-3 text-left transition-colors hover:border-vscode-focusBorder hover:bg-vscode-editorWidget-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder">
-																	<div className="flex items-start justify-between gap-2">
-																		<div className="flex items-center gap-2">
-																			<span className="flex size-8 items-center justify-center rounded-sm border border-vscode-editorWidget-border/80 bg-vscode-editorWidget-background text-vscode-descriptionForeground transition-colors group-hover:border-vscode-focusBorder group-hover:text-vscode-foreground">
-																				<Icon className="size-4" aria-hidden="true" />
-																			</span>
-																			<span className="text-sm font-medium leading-none text-vscode-foreground">
-																				{template.name}
-																			</span>
-																		</div>
-																		{template.meta?.toolGroup && (
-																			<span className="rounded bg-vscode-badge-background px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-vscode-badge-foreground">
-																				{template.meta.toolGroup}
-																			</span>
-																		)}
-																	</div>
-
-																	<p className="text-xs leading-relaxed text-vscode-descriptionForeground">
-																		{template.description}
-																	</p>
-
-																	{template.meta?.toolId && (
-																		<span className="inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-wide text-vscode-descriptionForeground/80">
-																			<span className="rounded-sm bg-vscode-editorWidget-background px-1 py-0.5">
-																				{template.meta.toolId}
-																			</span>
-																		</span>
+										return (
+											<Collapsible
+												key={section.id}
+												open={sectionOpen}
+												onOpenChange={(nextOpen) =>
+													setOpenSections((prev) => ({ ...prev, [section.id]: nextOpen }))
+											}>
+												<div className="space-y-2">
+													<CollapsibleTrigger asChild>
+														<button
+															type="button"
+															className="group flex w-full items-start gap-2 rounded-sm px-1 py-1 text-left text-xs font-semibold uppercase tracking-wide text-vscode-descriptionForeground transition-colors hover:text-vscode-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder">
+																<ChevronRight
+																	className={cn(
+																		"size-4 shrink-0 transition-transform text-vscode-descriptionForeground",
+																		sectionOpen ? "rotate-90" : "",
 																	)}
-																</button>
-															)
-														})}
+																aria-hidden="true"
+															/>
+															<div className="flex flex-1 flex-col gap-1">
+																<span>{section.label}</span>
+																{section.description ? (
+																	<span className="text-xs font-normal normal-case text-vscode-descriptionForeground/80">
+																		{section.description}
+																	</span>
+																) : null}
+														</div>
+													</button>
+												</CollapsibleTrigger>
+												<CollapsibleContent forceMount>
+													{section.groups?.length ? (
+														<div className="space-y-3 pt-1">
+															{section.groups.map((group) => {
+																const groupOpen = openAgentGroups[group.id] ?? true
+																return (
+																	<Collapsible
+																		key={group.id}
+																		open={groupOpen}
+																		onOpenChange={(nextOpen) =>
+																			setOpenAgentGroups((prev) => ({ ...prev, [group.id]: nextOpen }))
+																	}>
+																		<div className="rounded-sm border border-vscode-editorWidget-border/60 bg-vscode-editorWidget-background/70 p-2">
+																			<CollapsibleTrigger asChild>
+																				<button
+																					type="button"
+																					className="group flex w-full items-start gap-2 text-left text-[11px] font-semibold uppercase tracking-wide text-vscode-descriptionForeground transition-colors hover:text-vscode-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder">
+																						<ChevronRight
+																							className={cn(
+																								"size-3.5 shrink-0 transition-transform text-vscode-descriptionForeground",
+																								groupOpen ? "rotate-90" : "",
+																							)}
+																							aria-hidden="true"
+																							/>
+																							<div className="flex flex-1 flex-col gap-1">
+																								<span>{group.label}</span>
+																								{group.description ? (
+																									<span className="text-[11px] font-normal normal-case text-vscode-descriptionForeground/80">
+																										{group.description}
+																									</span>
+																								) : null}
+																							</div>
+																							{group.badge ? (
+																								<span className="rounded bg-vscode-badge-background px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-vscode-badge-foreground">
+																									{group.badge}
+																								</span>
+																							) : null}
+																			</button>
+																		</CollapsibleTrigger>
+																		<CollapsibleContent forceMount>
+																			<div className="mt-2 grid gap-2">
+																				{group.templates.map((template) => renderTemplateButton(template))}
+																			</div>
+																		</CollapsibleContent>
+																</div>
+															</Collapsible>
+														)
+													})}
 													</div>
-												</div>
-											)
-										})}
-									</div>
-								)}
+												) : (
+														<div className="grid gap-2 pt-2">
+															{section.templates.map((template) =>
+																renderTemplateButton(template, {
+																	showGroupBadge: section.id === "agentTools",
+																})
+															)}
+													</div>
+												)}
+											</CollapsibleContent>
+										</div>
+										</Collapsible>
+									)
+								})}
+							</div>
+						)}
 							</div>
 						</PopoverContent>
-					</Popover>
+						</Popover>
+					</NoteSheetHandlersProvider>
 					</div>
 				</div>
 			</main>

@@ -96,6 +96,7 @@ import {
 	UpdateTeamPayload,
 	UpsertActionStatusPayload,
 	HaltWorkdayPayload,
+	WorkplaceOwnerProfile,
 } from "../../shared/golden/workplace"
 import type { HubAgentBlueprint, HubSettingsUpdate } from "../../shared/hub"
 
@@ -845,6 +846,37 @@ export const webviewMessageHandler = async (
 			} catch (error) {
 				const messageText = error instanceof Error ? error.message : String(error)
 				await vscode.window.showErrorMessage(`Unable to remove employee from team: ${messageText}`)
+			}
+			break
+		}
+		case "setOwnerProfileDefaults": {
+			const payload = message.workplaceOwnerProfileDefaults as WorkplaceOwnerProfile | undefined
+			if (!payload) {
+				console.warn("[webviewMessageHandler] Missing owner profile payload")
+				break
+			}
+			const service = provider.getWorkplaceService()
+			if (!service) {
+				await vscode.window.showErrorMessage("Workplace service is unavailable in this session.")
+				break
+			}
+			try {
+				await service.setOwnerProfileDefaults(payload)
+				await provider.postStateToWebview()
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to save profile: ${messageText}`)
+			}
+			break
+		}
+		case "configureWorkplaceRoot": {
+			try {
+				await provider.chooseWorkplaceRootFolder(message.workplaceRootOwnerName)
+				await provider.postStateToWebview()
+				await vscode.window.showInformationMessage("Golden Workplace folder configured.")
+			} catch (error) {
+				const messageText = error instanceof Error ? error.message : String(error)
+				await vscode.window.showErrorMessage(`Unable to configure Golden Workplace folder: ${messageText}`)
 			}
 			break
 		}

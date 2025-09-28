@@ -56,14 +56,32 @@ export class WorkplaceFilesystemManager implements WorkplaceStateObserver {
 		return this.rootUri
 	}
 
-	public async chooseRootFolder(): Promise<void> {
-		const selected = await this.promptForRootFolder()
+	public async chooseRootFolder(options?: { ownerName?: string }): Promise<void> {
+		const childFolderName = options?.ownerName ? this.buildRootFolderName(options.ownerName) : undefined
+		const selected = await this.promptForRootFolder(
+			childFolderName
+				? {
+					title: "Choose Golden Workplace parent folder",
+					message: `Select where to create “${childFolderName}”. You can change this later.`,
+				}
+				: undefined,
+		)
 		if (!selected) {
 			return
 		}
 
-		this.rootUri = selected
-		await this.saveRootUri(selected)
+		let target = selected
+		if (childFolderName) {
+			target = vscode.Uri.joinPath(selected, childFolderName)
+			try {
+				await vscode.workspace.fs.createDirectory(target)
+			} catch (error) {
+				console.error("[WorkplaceFilesystem] Failed to create root folder", error)
+			}
+		}
+
+		this.rootUri = target
+		await this.saveRootUri(target)
 		await this.ensureRootDirectory()
 		await this.syncCompanyFolders(this.lastState)
 		const currentActive = this.lastState.activeCompanyId
@@ -114,10 +132,10 @@ export class WorkplaceFilesystemManager implements WorkplaceStateObserver {
 				return
 			}
 
-			this.rootUri = selected
-			await this.saveRootUri(selected)
-			await this.ensureRootDirectory()
-			await this.syncCompanyFolders(state)
+		this.rootUri = selected
+		await this.saveRootUri(selected)
+		await this.ensureRootDirectory()
+		await this.syncCompanyFolders(state)
 			await this.notifyConfigurationListeners()
 		} finally {
 			this.promptInFlight = false
@@ -172,6 +190,24 @@ export class WorkplaceFilesystemManager implements WorkplaceStateObserver {
 	private guessDefaultUri(): vscode.Uri | undefined {
 		const workspaceFolder = vscode.workspace.workspaceFolders?.[0]
 		return workspaceFolder?.uri
+	}
+
+	private sanitizeFolderSegment(value?: string): string {
+		if (!value) {
+			return ""
+		}
+		return value
+			.replace(/[\\/:*?"<>|]/g, "")
+			.replace(/\s+/g, " ")
+			.trim()
+	}
+
+	private buildRootFolderName(ownerName?: string): string {
+		const sanitizedOwner = this.sanitizeFolderSegment(ownerName)
+		if (sanitizedOwner) {
+			return `Golden Workplace - ${sanitizedOwner}`
+		}
+		return "Golden Workplace"
 	}
 
 	private async ensureRootDirectory(): Promise<void> {

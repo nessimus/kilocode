@@ -49,6 +49,7 @@ import type {
 	StartWorkdayPayload,
 	HaltWorkdayPayload,
 	UpdateEmployeeSchedulePayload,
+	WorkplaceOwnerProfile,
 } from "./golden/workplace"
 export type ClineAskResponse =
 	| "yesButtonClicked"
@@ -173,6 +174,8 @@ export interface WebviewMessage {
 		| "removeTeamFromDepartment"
 		| "assignEmployeeToTeam"
 		| "removeEmployeeFromTeam"
+		| "setOwnerProfileDefaults"
+		| "configureWorkplaceRoot"
 		| "archiveDepartment"
 		| "selectCompany"
 		| "setActiveEmployee"
@@ -514,6 +517,8 @@ export interface WebviewMessage {
 	workplaceDepartmentArchive?: ArchiveDepartmentPayload
 	workplaceCompanyId?: string
 	workplaceEmployeeId?: string
+	workplaceOwnerProfileDefaults?: WorkplaceOwnerProfile
+	workplaceRootOwnerName?: string
 	workplaceActionItemPayload?: CreateActionItemPayload
 	workplaceActionItemUpdate?: UpdateActionItemPayload
 	workplaceActionItemDelete?: DeleteActionItemPayload

@@ -383,6 +383,13 @@ export class ClineProvider
 		return this.workplaceService
 	}
 
+	public async chooseWorkplaceRootFolder(ownerName?: string): Promise<void> {
+		if (!this.workplaceFilesystemManager) {
+			throw new Error("Workplace filesystem manager is unavailable")
+		}
+		await this.workplaceFilesystemManager.chooseRootFolder({ ownerName })
+	}
+
 	public attachCloverSessionService(service: CloverSessionService) {
 		this.cloverSessionService = service
 		ClineProvider.globalCloverSessionService = service

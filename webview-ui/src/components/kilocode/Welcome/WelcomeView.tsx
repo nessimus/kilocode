@@ -1,3 +1,5 @@
+// LEGACY: This view is deprecated and retained for reference only.
+// Do not connect this component to new navigation flows.
 import { Tab, TabContent } from "../../common/Tab"
 import WorkplacePanel from "../../workplace/WorkplacePanel"
 

@@ -149,8 +149,30 @@ export class WorkplaceService {
 		return this.sanitizeOwnerProfile(combined)
 	}
 
-	private updateOwnerProfileDefaults(next: WorkplaceOwnerProfile): void {
-		this.state.ownerProfileDefaults = this.sanitizeOwnerProfile(next)
+	private updateOwnerProfileDefaults(next: WorkplaceOwnerProfile): WorkplaceOwnerProfile {
+		const sanitized = this.sanitizeOwnerProfile(next)
+		this.state.ownerProfileDefaults = sanitized
+		return sanitized
+	}
+
+	public async setOwnerProfileDefaults(profile: WorkplaceOwnerProfile): Promise<WorkplaceState> {
+		const sanitizedDefaults = this.updateOwnerProfileDefaults(profile)
+		const now = new Date().toISOString()
+		for (const company of this.state.companies) {
+			const existingProfile = company.ownerProfile
+			const baseline: WorkplaceOwnerProfile = existingProfile
+				? this.sanitizeOwnerProfile(existingProfile)
+				: sanitizedDefaults
+			const mergedProfile: WorkplaceOwnerProfile = {
+				...baseline,
+				...sanitizedDefaults,
+			}
+			company.ownerProfile = mergedProfile
+			company.updatedAt = now
+		}
+		await this.persist()
+		this.logState("setOwnerProfileDefaults")
+		return this.getState()
 	}
 
 	private normalizeMinutes(value?: number): number | undefined {

@@ -2273,3 +2273,42 @@ vscode-link:hover {
 	display: block;
 	white-space: inherit;
 }
+
+/* Brainstorm rich text editor defaults */
+.brainstorm-prosemirror {
+	padding: 0.75rem;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 90%, #1f2937 10%);
+	font-size: var(--text-sm);
+	line-height: 1.45;
+	white-space: pre-wrap;
+}
+
+.brainstorm-prosemirror p {
+	margin: 0 0 0.5rem;
+}
+
+.brainstorm-prosemirror p:last-child {
+	margin-bottom: 0;
+}
+
+.brainstorm-prosemirror ul,
+.brainstorm-prosemirror ol {
+	padding-left: 1.25rem;
+	margin: 0.5rem 0;
+}
+
+.brainstorm-prosemirror li {
+	margin: 0.25rem 0;
+}
+
+.brainstorm-prosemirror strong {
+	font-weight: 600;
+}
+
+.brainstorm-prosemirror em {
+	font-style: italic;
+}
+
+.brainstorm-prosemirror u {
+	text-decoration: underline;
+}

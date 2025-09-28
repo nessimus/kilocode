@@ -16,7 +16,6 @@ import HubView from "./components/hub/HubView"
 import ChatsHubView from "./components/chats/ChatsHubView"
 import HistoryView from "./components/history/HistoryView"
 import SettingsView, { SettingsViewRef } from "./components/settings/SettingsView"
-import WelcomeView from "./components/kilocode/Welcome/WelcomeView" // kilocode_change
 import ProfileView from "./components/kilocode/profile/ProfileView" // kilocode_change
 import ActionWorkspaceView from "./components/workplace/ActionWorkspaceView"
 import WorkforceView from "./components/workplace/WorkforceView"
@@ -39,6 +38,8 @@ import OuterGateView from "./components/kilocode/outerGate/OuterGateView"
 import BrainstormHubPage from "./components/surfaces/BrainstormHubPage"
 import SurfaceDetailPage from "./components/surfaces/SurfaceDetailPage"
 import type { BrainstormSurfaceSummary } from "./components/surfaces/types"
+import OwnerProfileSetupDialog from "./components/kilocode/outerGate/OwnerProfileSetupDialog"
+import WorkplaceRootDialog from "./components/kilocode/outerGate/WorkplaceRootDialog"
 
 type Tab =
 	| "settings"
@@ -150,6 +151,8 @@ const App = () => {
 		endlessSurface,
 		createSurface,
 		setActiveSurface,
+		workplaceState,
+		workplaceRootConfigured,
 	} = useExtensionState()
 
 	// Create a persistent state manager
@@ -183,6 +186,15 @@ const App = () => {
 	)
 	const [brainstormSearch, setBrainstormSearch] = useState("")
 	const pendingSurfaceCreation = useRef(false)
+
+	const ownerProfile = workplaceState?.ownerProfileDefaults
+	const ownerFirstComplete = Boolean(ownerProfile?.firstName && ownerProfile.firstName.trim().length > 0)
+	const ownerLastComplete = Boolean(ownerProfile?.lastName && ownerProfile.lastName.trim().length > 0)
+	const ownerRoleComplete = Boolean(ownerProfile?.role && ownerProfile.role.trim().length > 0)
+	const ownerMbtiComplete = Boolean(ownerProfile?.mbtiType && ownerProfile.mbtiType.trim().length > 0)
+	const needsProfileSetup = !(ownerFirstComplete && ownerLastComplete && ownerRoleComplete && ownerMbtiComplete)
+	const shouldShowProfileDialog = showWelcome || needsProfileSetup
+	const shouldShowRootDialog = !shouldShowProfileDialog && !workplaceRootConfigured
 
 	const handleCreateSurface = useCallback(async () => {
 		pendingSurfaceCreation.current = true
@@ -377,6 +389,12 @@ const App = () => {
 		}
 	}, [shouldShowAnnouncement])
 
+	useEffect(() => {
+		if ((shouldShowProfileDialog || shouldShowRootDialog) && tab !== "outerGate") {
+			switchTab("outerGate")
+		}
+	}, [shouldShowProfileDialog, shouldShowRootDialog, tab, switchTab])
+
 	// kilocode_change start
 	const telemetryDistinctId = useKiloIdentity(apiConfiguration?.kilocodeToken ?? "", machineId ?? "")
 	useEffect(() => {
@@ -438,9 +456,7 @@ const App = () => {
 
 	// Do not conditionally load ChatView, it's expensive and there's state we
 	// don't want to lose (user input, disableInput, askResponse promise, etc.)
-	return showWelcome ? (
-		<WelcomeView />
-	) : (
+	return (
 		<>
 			{tab === "outerGate" && <OuterGateView />}
 			{tab === "modes" && <ModesView onDone={() => switchTab("lobby")} />}
@@ -461,19 +477,6 @@ const App = () => {
 					targetTab="mode"
 				/>
 			)}
-			{/* kilocode_change: no cloud view */}
-			{/* {tab === "cloud" && (
-				<CloudView
-					userInfo={cloudUserInfo}
-					isAuthenticated={cloudIsAuthenticated}
-					cloudApiUrl={cloudApiUrl}
-					onDone={() => switchTab("lobby")}
-				/>
-			)} */}
-			{/* kilocode_change: we have our own profile view */}
-			{/* {tab === "account" && (
-				<AccountView userInfo={cloudUserInfo} isAuthenticated={false} onDone={() => switchTab("lobby")} />
-			)} */}
 			<ChatView
 				ref={chatViewRef}
 				isHidden={tab !== "lobby"}
@@ -570,13 +573,13 @@ const App = () => {
 					}}
 				/>
 			)}
-			{/* kilocode_change */}
-			{/* Lobby, modes and history view contain their own bottom controls */}
 			{!["lobby", "chatsHub", "modes", "history", "outerGate"].includes(tab) && (
 				<div className="fixed inset-0 top-auto">
 					<BottomControls />
 				</div>
 			)}
+			<OwnerProfileSetupDialog open={shouldShowProfileDialog} />
+			<WorkplaceRootDialog open={shouldShowRootDialog} />
 		</>
 	)
 }

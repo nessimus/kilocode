@@ -10,8 +10,13 @@ import { DEFAULT_MODES, type ToolName } from "@roo-code/types"
 import { createInitialNoteSheetBlocks, type NoteSheetBlock } from "./noteSheetModel"
 import type { BrainstormFileNodeData } from "./BrainstormFileNode"
 import type { NoteSheetNodeStateData } from "./NoteSheetNode"
+import type { StickyNoteNodeStateData } from "./StickyNoteNode"
+import { createTaskListItem, type TaskListNodeStateData } from "./TaskListNode"
 import type { AgentToolNodeData } from "./AgentToolNode"
-import type { BrainstormNodeData as BrainstormIdeaNodeData } from "./BrainstormNode"
+import type {
+	BrainstormNodeData as BrainstormIdeaNodeData,
+	BrainstormNodeVariant,
+} from "./BrainstormNode"
 
 type NodeTemplateSection = "ideas" | "agentTools"
 
@@ -27,14 +32,22 @@ export interface NodeTemplate<TData> {
 	meta?: {
 		toolId?: string
 		toolGroup?: string
+		toolGroupId?: string
 	}
 }
 
+type IdeaNodeTemplateData =
+	| BrainstormIdeaNodeData
+	| BrainstormFileNodeData
+	| NoteSheetNodeStateData
+	| StickyNoteNodeStateData
+	| TaskListNodeStateData
+
 type IdeaTemplateDefinition = Omit<
-	NodeTemplate<BrainstormIdeaNodeData | BrainstormFileNodeData | NoteSheetNodeStateData>,
+	NodeTemplate<IdeaNodeTemplateData>,
 	"createData" | "searchValue"
 > & {
-	createData?: () => BrainstormIdeaNodeData | BrainstormFileNodeData | NoteSheetNodeStateData
+	createData?: () => IdeaNodeTemplateData
 }
 
 const IDEA_NODE_TEMPLATES: ReadonlyArray<IdeaTemplateDefinition> = [
@@ -80,6 +93,31 @@ const IDEA_NODE_TEMPLATES: ReadonlyArray<IdeaTemplateDefinition> = [
 			} satisfies NoteSheetNodeStateData),
 	},
 	{
+		id: "sticky-note",
+		name: "Sticky note",
+		description: "Drop a colorful sticky for quick thoughts with rich formatting.",
+		nodeType: "stickyNote",
+		section: "ideas" as const,
+		initialStyle: { width: 260 },
+		createData: () =>
+			({
+				color: "sunny",
+				content: undefined,
+			} satisfies StickyNoteNodeStateData),
+	},
+	{
+		id: "task-list",
+		name: "Task list",
+		description: "Organize follow-ups with checkboxes and multi-line rich text.",
+		nodeType: "taskList",
+		section: "ideas" as const,
+		initialStyle: { width: 320 },
+		createData: () =>
+			({
+				items: [createTaskListItem()],
+			} satisfies TaskListNodeStateData),
+	},
+	{
 		id: "file-note",
 		name: "File note",
 		description: "Upload a file with a spacious preview for the canvas.",
@@ -98,17 +136,37 @@ const IDEA_NODE_TEMPLATES: ReadonlyArray<IdeaTemplateDefinition> = [
 	},
 ]
 
-export const buildIdeaNodeTemplates = (): NodeTemplate<
-	BrainstormIdeaNodeData | BrainstormFileNodeData | NoteSheetNodeStateData
->[] => {
+const IDEA_VARIANT_BY_TEMPLATE: Partial<Record<string, BrainstormNodeVariant>> = {
+	idea: "idea",
+	question: "question",
+	task: "task",
+	signal: "signal",
+}
+
+export const buildIdeaNodeTemplates = (): NodeTemplate<IdeaNodeTemplateData>[] => {
 	return IDEA_NODE_TEMPLATES.map((template) => {
-		const defaultCreateData = () => ({ label: template.name } satisfies BrainstormIdeaNodeData)
+		const defaultCreateData = (): IdeaNodeTemplateData => {
+			const variant = IDEA_VARIANT_BY_TEMPLATE[template.id]
+			return {
+				label: template.name,
+				...(variant
+					? {
+						variant,
+						...(variant === "task" ? { completed: false } : {}),
+					}
+					: {}),
+			} satisfies BrainstormIdeaNodeData
+		}
 		const createData = template.createData ?? defaultCreateData
 		let extraKeywords = ""
 		if (template.id === "file-note") {
 			extraKeywords = " file upload media pdf image audio attachment"
 		} else if (template.id === "note-sheet") {
 			extraKeywords = " note sheet document checklist rich text block"
+		} else if (template.id === "sticky-note") {
+			extraKeywords = " sticky note color highlight rich text"
+		} else if (template.id === "task-list") {
+			extraKeywords = " checklist task list checkbox action items rich text"
 		}
 		return {
 			...template,
@@ -227,7 +285,8 @@ export const buildAgentToolTemplates = (
 	return tools.map((toolId) => {
 		const displayName = TOOL_DISPLAY_NAMES[toolId] ?? toolId
 		const groupEntry = Object.entries(TOOL_GROUPS).find(([, config]) => config.tools.includes(toolId))
-		const groupLabel = groupEntry ? formatToolGroupLabel(groupEntry[0]) : undefined
+		const groupId = groupEntry ? groupEntry[0] : undefined
+		const groupLabel = groupId ? formatToolGroupLabel(groupId) : undefined
 		const description = groupLabel
 			? t("common:brainstorm.agentToolDescription", {
 				defaultValue: `Add the ${displayName} tool (${groupLabel}) to orchestrate it from the canvas.`,
@@ -248,6 +307,7 @@ export const buildAgentToolTemplates = (
 			meta: {
 				toolId,
 				toolGroup: groupLabel,
+				toolGroupId: groupId,
 			},
 			createData: () => ({
 				toolId,

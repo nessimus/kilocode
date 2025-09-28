@@ -429,6 +429,12 @@ export class ClineProvider extends EventEmitter {
         }
         return this.workplaceService;
     }
+    async chooseWorkplaceRootFolder(ownerName) {
+        if (!this.workplaceFilesystemManager) {
+            throw new Error("Workplace filesystem manager is unavailable");
+        }
+        await this.workplaceFilesystemManager.chooseRootFolder({ ownerName });
+    }
     attachCloverSessionService(service) {
         this.cloverSessionService = service;
         ClineProvider.globalCloverSessionService = service;
