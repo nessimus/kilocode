@@ -2036,6 +2036,165 @@ vscode-link:hover {
 	justify-content: flex-end;
 }
 
+.workforce-hub__canvas {
+	min-height: 420px;
+	display: flex;
+	flex-direction: column;
+}
+
+.workforce-hub__canvas .workforce-canvas {
+	flex: 1;
+	height: auto;
+	min-height: 420px;
+}
+
+.workforce-hub__dialog {
+	position: fixed;
+	inset: 0;
+	padding: 48px 16px;
+	background: color-mix(in srgb, rgba(14, 14, 22, 0.55) 70%, rgba(0, 0, 0, 0.85) 30%);
+	backdrop-filter: blur(8px);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 120;
+}
+
+.workforce-hub__dialog-card {
+	width: min(480px, calc(100% - 32px));
+	max-height: calc(100vh - 96px);
+	overflow: auto;
+	background: color-mix(in srgb, var(--vscode-editor-background) 94%, rgba(255, 255, 255, 0.05) 6%);
+	border-radius: 16px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 75%, transparent 25%);
+	box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
+	padding: 24px;
+}
+
+.workforce-hub__dialog-close {
+	border: none;
+	background: transparent;
+	color: var(--vscode-foreground);
+	padding: 4px;
+	border-radius: 6px;
+	cursor: pointer;
+}
+
+.workforce-hub__dialog-close:hover,
+.workforce-hub__dialog-close:focus-visible {
+	background: color-mix(in srgb, var(--vscode-focusBorder) 18%, transparent 82%);
+	outline: none;
+}
+
+.workforce-hub__hire-stage {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	margin-top: 16px;
+}
+
+.workforce-hub__mode-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px;
+	border-radius: 999px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 65%, transparent 35%);
+	background: color-mix(in srgb, var(--vscode-editor-background) 94%, rgba(255, 255, 255, 0.06) 6%);
+}
+
+.workforce-hub__mode-button {
+	padding: 6px 14px;
+	border-radius: 999px;
+	border: none;
+	background: transparent;
+	color: var(--vscode-foreground);
+	font-size: 12px;
+	font-weight: 600;
+	cursor: pointer;
+}
+
+.workforce-hub__mode-button:hover,
+.workforce-hub__mode-button:focus-visible {
+	background: color-mix(in srgb, var(--vscode-focusBorder) 16%, transparent 84%);
+	outline: none;
+}
+
+.workforce-hub__mode-button.is-active {
+	background: color-mix(in srgb, var(--vscode-focusBorder) 25%, transparent 75%);
+}
+
+.workforce-hub__exec-reply {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.workforce-hub__exec-bubble {
+	display: inline-flex;
+	flex-direction: column;
+	gap: 4px;
+	max-width: 100%;
+	border-radius: 14px;
+	padding: 12px 14px;
+	background: color-mix(in srgb, var(--vscode-focusBorder) 18%, transparent 82%);
+	color: var(--vscode-foreground);
+}
+
+.workforce-hub__candidate-grid {
+	display: grid;
+	gap: 16px;
+	grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.workforce-hub__candidate-card {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	padding: 18px;
+	border-radius: 14px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 65%, transparent 35%);
+	background: color-mix(in srgb, var(--vscode-editor-background) 92%, rgba(255, 255, 255, 0.08) 8%);
+	box-shadow: 0 18px 34px rgba(0, 0, 0, 0.26);
+}
+
+.workforce-hub__candidate-header {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
+.workforce-hub__candidate-avatar {
+	display: grid;
+	place-items: center;
+	width: 44px;
+	height: 44px;
+	border-radius: 12px;
+	font-size: 22px;
+	background: color-mix(in srgb, var(--vscode-focusBorder) 25%, transparent 75%);
+}
+
+.workforce-hub__candidate-focus {
+	list-style: none;
+}
+
+.workforce-hub__candidate-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 6px 10px;
+	font-size: 11px;
+	border-radius: 999px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 60%, transparent 40%);
+	background: color-mix(in srgb, var(--vscode-editor-background) 94%, rgba(255, 255, 255, 0.12) 6%);
+}
+
+.workforce-hub__followup {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
 .workforce-canvas__minimap .react-flow__minimap-mask {
 	fill: color-mix(in srgb, rgba(212, 175, 55, 0.45) 70%, rgba(0, 0, 0, 0.4));
 }
@@ -2311,4 +2470,875 @@ vscode-link:hover {
 
 .brainstorm-prosemirror u {
 	text-decoration: underline;
+}
+
+/* Pre-chat hub */
+.prechat {
+	display: flex;
+	flex-direction: column;
+	background: var(--vscode-editor-background);
+	color: var(--vscode-foreground);
+	border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border) 55%, transparent 45%);
+}
+
+.prechat__scroll {
+	height: 100%;
+	overflow-y: auto;
+	padding: clamp(28px, 6vw, 48px) clamp(20px, 6vw, 48px) clamp(36px, 8vw, 64px);
+	display: flex;
+	flex-direction: column;
+	gap: clamp(24px, 5vw, 32px);
+}
+
+.prechat__hero {
+	display: block;
+}
+
+.prechat__hero-body {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: clamp(16px, 4vw, 24px);
+	padding: clamp(20px, 5vw, 32px);
+	border-radius: 24px;
+	border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 26%, transparent 74%);
+	background: linear-gradient(
+		140deg,
+		color-mix(in srgb, var(--vscode-focusBorder) 22%, transparent 78%) 0%,
+		color-mix(in srgb, var(--vscode-editor-background) 95%, rgba(255, 255, 255, 0.07) 5%) 60%
+	);
+	box-shadow: 0 24px 48px rgba(0, 0, 0, 0.22);
+	overflow: hidden;
+}
+
+.prechat__hero-columns {
+	display: grid;
+	gap: clamp(20px, 4vw, 32px);
+	grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.prechat__hero-column {
+	display: flex;
+	flex-direction: column;
+	gap: clamp(12px, 2vw, 20px);
+}
+
+.prechat__hero-column--primary {
+	gap: clamp(14px, 3vw, 24px);
+}
+
+.prechat__hero-column--secondary {
+	gap: clamp(14px, 3vw, 24px);
+}
+
+.prechat__lead {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.prechat__lead-select {
+	max-width: 240px;
+}
+
+.prechat__badge {
+	width: 56px;
+	height: 56px;
+	border-radius: 16px;
+	display: grid;
+	place-items: center;
+	font-weight: 600;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--vscode-editor-foreground, #fff) 80%, transparent 20%);
+	border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 40%, transparent 60%);
+	background: color-mix(in srgb, var(--vscode-focusBorder) 20%, var(--vscode-editor-background) 80%);
+}
+
+.prechat__hero-text {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.prechat__timestamp {
+	margin: 0;
+	font-size: 12px;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 80%, transparent 20%);
+}
+
+.prechat__greeting {
+	font-size: 13px;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 88%, transparent 12%);
+}
+
+.prechat__headline {
+	margin: 0;
+	font-size: clamp(22px, 4vw, 32px);
+	font-weight: 650;
+	letter-spacing: -0.01em;
+	color: var(--vscode-foreground);
+}
+
+.prechat__lede {
+	margin: 0;
+	font-size: clamp(14px, 1.8vw, 16px);
+	line-height: 1.5;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 90%, transparent 10%);
+}
+
+.prechat__mission-block {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 16px;
+	border-radius: 16px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 55%, transparent 45%);
+	background: color-mix(in srgb, var(--vscode-editor-background) 96%, rgba(255, 255, 255, 0.06) 4%);
+}
+
+.prechat__mission-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.prechat__mission-copy {
+	margin: 0;
+	font-size: 14px;
+	line-height: 1.5;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 88%, transparent 12%);
+}
+
+.prechat__mission-actions {
+	justify-content: flex-end;
+}
+
+.prechat__label {
+	font-size: 11px;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 78%, transparent 22%);
+	margin-bottom: 4px;
+}
+
+.prechat__dropdown {
+	min-width: 200px;
+}
+
+.prechat__participants {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.prechat__chip-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+}
+
+.prechat__chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 12px;
+	border-radius: 999px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 55%, transparent 45%);
+	background: color-mix(in srgb, var(--vscode-editor-background) 94%, rgba(255, 255, 255, 0.05) 6%);
+	color: var(--vscode-foreground);
+	font-size: 12px;
+	line-height: 1.2;
+}
+
+.prechat__chip-avatar {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	border-radius: 50%;
+	font-size: 12px;
+	font-weight: 600;
+	background: color-mix(in srgb, var(--vscode-focusBorder) 35%, transparent 65%);
+	color: var(--vscode-foreground);
+}
+
+.prechat__chip-text {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.prechat__chip-role {
+	font-size: 11px;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 78%, transparent 22%);
+}
+
+.prechat__chip--add {
+	cursor: pointer;
+	background: color-mix(in srgb, var(--vscode-focusBorder) 16%, transparent 84%);
+	border-style: dashed;
+	transition:
+		background-color 0.2s ease,
+		color 0.2s ease,
+		border-color 0.2s ease;
+}
+
+.prechat__chip--add:disabled {
+	opacity: 0.6;
+	cursor: not-allowed;
+	background: color-mix(in srgb, var(--vscode-panel-border) 24%, transparent 76%);
+	border-color: color-mix(in srgb, var(--vscode-panel-border) 60%, transparent 40%);
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 85%, transparent 15%);
+}
+
+.prechat__chip--add:hover,
+.prechat__chip--add:focus-visible {
+	background: color-mix(in srgb, var(--vscode-focusBorder) 22%, transparent 78%);
+	border-color: color-mix(in srgb, var(--vscode-focusBorder) 38%, transparent 62%);
+	outline: none;
+}
+
+.prechat__chip--add:disabled:hover,
+.prechat__chip--add:disabled:focus-visible {
+	background: color-mix(in srgb, var(--vscode-panel-border) 24%, transparent 76%);
+	border-color: color-mix(in srgb, var(--vscode-panel-border) 60%, transparent 40%);
+	outline: none;
+}
+
+.prechat__empty-copy {
+	font-size: 12px;
+	font-style: italic;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 75%, transparent 25%);
+}
+
+.prechat__hero-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+}
+
+.prechat__hero-visual {
+	position: relative;
+	border-radius: 24px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 55%, transparent 45%);
+	background: radial-gradient(circle at 30% 35%, rgba(120, 170, 255, 0.22), transparent 60%),
+		linear-gradient(165deg, color-mix(in srgb, var(--vscode-editor-background) 94%, rgba(255, 255, 255, 0.08) 6%), transparent 40%);
+	min-height: 260px;
+	overflow: hidden;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.prechat__orb {
+	position: absolute;
+	border-radius: 999px;
+	mix-blend-mode: screen;
+	opacity: 0.9;
+}
+
+.prechat__orb--primary {
+	width: 220px;
+	height: 220px;
+	top: -60px;
+	right: -40px;
+	background: radial-gradient(circle, rgba(120, 170, 255, 0.65), transparent);
+}
+
+.prechat__orb--secondary {
+	width: 180px;
+	height: 180px;
+	bottom: -50px;
+	right: 60px;
+	background: radial-gradient(circle, rgba(255, 120, 200, 0.45), transparent);
+}
+
+.prechat__orb--tertiary {
+	width: 160px;
+	height: 160px;
+	bottom: 40px;
+	left: -60px;
+	background: radial-gradient(circle, rgba(120, 255, 210, 0.4), transparent);
+}
+
+.prechat__grid {
+	display: grid;
+	gap: clamp(16px, 3vw, 24px);
+}
+
+.prechat__grid--primary,
+.prechat__grid--secondary {
+	grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.prechat__card {
+	display: flex;
+	flex-direction: column;
+	gap: clamp(14px, 2vw, 18px);
+	padding: clamp(18px, 3vw, 24px);
+	border-radius: 20px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 60%, transparent 40%);
+	background: color-mix(in srgb, var(--vscode-editor-background) 94%, rgba(255, 255, 255, 0.04) 6%);
+	box-shadow: 0 20px 32px rgba(0, 0, 0, 0.18);
+	min-height: 0;
+}
+
+.prechat__card-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.prechat__card-header--inline {
+	align-items: center;
+}
+
+.prechat__eyebrow {
+	display: block;
+	font-size: 11px;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	margin-bottom: 4px;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 80%, transparent 20%);
+}
+
+.prechat__card-title {
+	margin: 0;
+	font-size: 16px;
+	font-weight: 600;
+	color: var(--vscode-foreground);
+}
+
+.prechat__card-body {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	min-height: 0;
+}
+
+.prechat__card-body--stack {
+	gap: 16px;
+}
+
+.prechat__card-body--list {
+	gap: 10px;
+	max-height: 220px;
+	overflow-y: auto;
+	padding-right: 4px;
+}
+
+.prechat__card-body--fill {
+	gap: 14px;
+	flex: 1;
+}
+
+.prechat__card-copy {
+	margin: 0;
+	font-size: 14px;
+	line-height: 1.55;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 88%, transparent 12%);
+}
+
+.prechat__status-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	border-radius: 999px;
+	padding: 4px 10px;
+	font-size: 11px;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	background: color-mix(in srgb, var(--vscode-focusBorder) 18%, transparent 82%);
+	color: var(--vscode-foreground);
+}
+
+.prechat__speaker-pill {
+	display: inline-flex;
+	align-items: center;
+	padding: 2px 8px;
+	border-radius: 999px;
+	font-size: 10px;
+	letter-spacing: 0.05em;
+	text-transform: uppercase;
+	background: color-mix(in srgb, var(--vscode-focusBorder) 20%, transparent 80%);
+	color: var(--vscode-foreground);
+}
+
+.prechat__stats-row {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.prechat__stats {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 16px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.prechat__stat-value {
+	display: block;
+	font-size: 18px;
+	font-weight: 600;
+	color: var(--vscode-foreground);
+}
+
+.prechat__stat-label {
+	font-size: 11px;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 76%, transparent 24%);
+}
+
+.prechat__button-row {
+	display: flex;
+	gap: 10px;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+}
+
+.prechat__action-list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.prechat__action {
+	display: flex;
+	align-items: flex-start;
+	gap: 12px;
+	width: 100%;
+	padding: 10px 12px;
+	border-radius: 14px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 55%, transparent 45%);
+	background: color-mix(in srgb, var(--vscode-editor-background) 94%, rgba(255, 255, 255, 0.05) 6%);
+	text-align: left;
+	cursor: pointer;
+	transition:
+		border-color 0.2s ease,
+		transform 0.2s ease,
+		box-shadow 0.2s ease;
+}
+
+.prechat__action:hover,
+.prechat__action:focus-visible {
+	transform: translateY(-1px);
+	border-color: color-mix(in srgb, var(--vscode-focusBorder) 40%, transparent 60%);
+	box-shadow: 0 12px 24px rgba(0, 0, 0, 0.16);
+	outline: none;
+}
+
+.prechat__action-icon {
+	font-size: 18px;
+	margin-top: 2px;
+	color: color-mix(in srgb, var(--vscode-focusBorder) 40%, transparent 60%);
+}
+
+.prechat__action-copy {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.prechat__action-title {
+	font-weight: 500;
+	color: var(--vscode-foreground);
+}
+
+.prechat__action-subtitle {
+	font-size: 12px;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 82%, transparent 18%);
+	line-height: 1.35;
+}
+
+.prechat__helper {
+	font-size: 11px;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 76%, transparent 24%);
+}
+
+.prechat__person {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 10px 12px;
+	border-radius: 12px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 55%, transparent 45%);
+	background: color-mix(in srgb, var(--vscode-editor-background) 95%, rgba(255, 255, 255, 0.04) 5%);
+}
+
+.prechat__avatar {
+	width: 36px;
+	height: 36px;
+	border-radius: 10px;
+	display: grid;
+	place-items: center;
+	font-weight: 600;
+	background: color-mix(in srgb, var(--vscode-focusBorder) 28%, transparent 72%);
+	color: var(--vscode-foreground);
+}
+
+.prechat__person-info {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.prechat__person-name {
+	font-weight: 500;
+	color: var(--vscode-foreground);
+}
+
+.prechat__person-role {
+	font-size: 11px;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 78%, transparent 22%);
+}
+
+.prechat__person-actions {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.prechat__ghost-button {
+	appearance: none;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 55%, transparent 45%);
+	background: transparent;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 86%, transparent 14%);
+	border-radius: 8px;
+	padding: 4px 10px;
+	font-size: 12px;
+	cursor: pointer;
+	transition:
+		color 0.2s ease,
+		border-color 0.2s ease,
+		background-color 0.2s ease;
+}
+
+.prechat__ghost-button:hover,
+.prechat__ghost-button:focus-visible {
+	color: var(--vscode-foreground);
+	border-color: color-mix(in srgb, var(--vscode-focusBorder) 45%, transparent 55%);
+	background: color-mix(in srgb, var(--vscode-focusBorder) 18%, transparent 82%);
+	outline: none;
+}
+
+.prechat__list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.prechat__list-item {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 10px 12px;
+	border-radius: 10px;
+	background: color-mix(in srgb, var(--vscode-editor-background) 96%, rgba(255, 255, 255, 0.04) 4%);
+}
+
+.prechat__list-title {
+	font-weight: 500;
+	color: var(--vscode-foreground);
+}
+
+.prechat__list-meta {
+	font-size: 11px;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 75%, transparent 25%);
+}
+
+@media (max-width: 1100px) {
+	.prechat__hero-columns {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+@media (max-width: 720px) {
+	.prechat__scroll {
+		padding: 24px 20px 36px;
+	}
+
+	.prechat__hero-body {
+		padding: 20px;
+	}
+
+	.prechat__hero-actions {
+		flex-direction: column;
+		align-items: stretch;
+	}
+}
+
+.prechat__suggestions--inline {
+	margin-top: 4px;
+}
+
+.prechat__suggestions--inline .prechat__suggestion-row {
+	justify-content: flex-start;
+}
+
+.prechat__add-wrapper {
+	position: relative;
+}
+
+.prechat__add-menu {
+	position: absolute;
+	right: 0;
+	top: calc(100% + 8px);
+	min-width: 220px;
+	padding: 8px;
+	border-radius: 16px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 55%, transparent 45%);
+	background: color-mix(in srgb, var(--vscode-editor-background) 97%, rgba(255, 255, 255, 0.08) 3%);
+	box-shadow: 0 16px 32px rgba(0, 0, 0, 0.28);
+	z-index: 5;
+}
+
+.prechat__add-list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.prechat__add-option {
+	width: 100%;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 10px;
+	border-radius: 12px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 55%, transparent 45%);
+	background: color-mix(in srgb, var(--vscode-editor-background) 95%, rgba(255, 255, 255, 0.05) 5%);
+	color: var(--vscode-foreground);
+	font-size: 12px;
+	cursor: pointer;
+	transition:
+		border-color 0.2s ease,
+		background-color 0.2s ease,
+		transform 0.2s ease;
+}
+
+.prechat__add-option:hover,
+.prechat__add-option:focus-visible {
+	outline: none;
+	transform: translateY(-1px);
+	border-color: color-mix(in srgb, var(--vscode-focusBorder) 40%, transparent 60%);
+	background: color-mix(in srgb, var(--vscode-focusBorder) 18%, transparent 82%);
+}
+
+.prechat__add-avatar {
+	width: 28px;
+	height: 28px;
+	border-radius: 50%;
+	display: grid;
+	place-items: center;
+	font-weight: 600;
+	background: color-mix(in srgb, var(--vscode-focusBorder) 32%, transparent 68%);
+	color: var(--vscode-foreground);
+}
+
+.prechat__add-name {
+	font-weight: 500;
+	color: var(--vscode-foreground);
+}
+
+.prechat__add-role {
+	font-size: 11px;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 76%, transparent 24%);
+}
+
+.prechat__suggestions {
+	margin-top: 16px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.prechat__suggestion-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+}
+
+.prechat__suggestion-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+	padding: 8px 12px;
+	border-radius: 14px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 55%, transparent 45%);
+	background: color-mix(in srgb, var(--vscode-editor-background) 94%, rgba(255, 255, 255, 0.05) 6%);
+	cursor: pointer;
+	transition:
+		border-color 0.2s ease,
+		background-color 0.2s ease,
+		transform 0.2s ease;
+}
+
+.prechat__suggestion-chip:hover,
+.prechat__suggestion-chip:focus-visible {
+	outline: none;
+	transform: translateY(-1px);
+	border-color: color-mix(in srgb, var(--vscode-focusBorder) 40%, transparent 60%);
+	background: color-mix(in srgb, var(--vscode-focusBorder) 18%, transparent 82%);
+}
+
+.prechat__suggestion-avatar {
+	width: 30px;
+	height: 30px;
+	border-radius: 10px;
+	display: grid;
+	place-items: center;
+	font-weight: 600;
+	background: color-mix(in srgb, var(--vscode-focusBorder) 28%, transparent 72%);
+	color: var(--vscode-foreground);
+}
+
+.prechat__suggestion-meta {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.prechat__suggestion-name {
+	font-weight: 500;
+	color: var(--vscode-foreground);
+}
+
+.prechat__suggestion-role {
+	font-size: 11px;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 76%, transparent 24%);
+}
+
+.prechat__overview {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	margin-top: 18px;
+	padding: 18px;
+	border-radius: 18px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 48%, transparent 52%);
+	background: color-mix(in srgb, var(--vscode-editor-background) 96%, rgba(255, 255, 255, 0.08) 4%);
+}
+
+.prechat__overview-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+}
+
+.prechat__overview-content {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+}
+
+.prechat__overview-copy {
+	margin: 0;
+	font-size: 14px;
+	line-height: 1.55;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 88%, transparent 12%);
+}
+
+.prechat__overview .prechat__button-row {
+	justify-content: flex-start;
+}
+
+.prechat__summary-grid {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 16px;
+	align-items: flex-start;
+}
+
+.prechat__meta {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	min-width: 160px;
+}
+
+.prechat__meta--lead,
+.prechat__meta--recommended {
+	padding: 12px 14px;
+	border-radius: 14px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 45%, transparent 55%);
+	background: color-mix(in srgb, var(--vscode-editor-background) 95%, rgba(255, 255, 255, 0.08) 5%);
+}
+
+.prechat__meta-value {
+	font-weight: 600;
+	color: var(--vscode-foreground);
+}
+
+.prechat__meta-role {
+	display: block;
+	margin-top: 2px;
+	font-size: 12px;
+	letter-spacing: 0.03em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 70%, transparent 30%);
+}
+
+.prechat__add-text {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 2px;
+}
+
+.prechat__card-footer {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+}
+
+.prechat__card--notice {
+	align-self: stretch;
+	padding: clamp(16px, 3vw, 20px);
+	justify-content: center;
+}
+
+.prechat__task-list {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.prechat__panels {
+	display: grid;
+	gap: clamp(16px, 3vw, 24px);
+	grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }

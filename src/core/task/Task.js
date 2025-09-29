@@ -35,6 +35,7 @@ import { getWorkspacePath } from "../../utils/path";
 // prompts
 import { formatResponse } from "../prompts/responses";
 import { SYSTEM_PROMPT } from "../prompts/system";
+import { ConversationOrchestrator, createIngestHoldState, createManualHoldState, } from "./ConversationOrchestrator";
 // core modules
 import { ToolRepetitionDetector } from "../tools/ToolRepetitionDetector";
 import { restoreTodoListForTask } from "../tools/updateTodoListTool";
@@ -126,6 +127,10 @@ export class Task extends EventEmitter {
     idleAsk;
     resumableAsk;
     interactiveAsk;
+    conversationOrchestrator;
+    conversationHoldState;
+    lastOrchestratorAnalysis;
+    conversationAgents = [];
     didFinishAbortingStream = false;
     abandoned = false;
     isInitialized = false;
@@ -231,6 +236,7 @@ export class Task extends EventEmitter {
         this.apiConfiguration = apiConfiguration;
         this.api = buildApiHandler(apiConfiguration);
         this.autoApprovalHandler = new AutoApprovalHandler();
+        this.conversationOrchestrator = new ConversationOrchestrator();
         this.urlContentFetcher = new UrlContentFetcher(provider.context);
         this.browserSession = new BrowserSession(provider.context);
         this.diffEnabled = enableDiff;
@@ -355,6 +361,123 @@ export class Task extends EventEmitter {
             const errorMessage = `Failed to initialize task mode: ${error instanceof Error ? error.message : String(error)}`;
             provider.log(errorMessage);
         }
+    }
+    async pushConversationHoldState(state) {
+        this.conversationHoldState = state;
+        const provider = this.providerRef.deref();
+        if (!provider) {
+            return;
+        }
+        try {
+            await provider.postMessageToWebview({
+                type: "conversationHoldState",
+                conversationHoldState: state,
+                payload: {
+                    taskId: this.taskId,
+                    state,
+                },
+            });
+        }
+        catch (error) {
+            console.error("[Task#pushConversationHoldState] Failed to post hold state", error);
+        }
+    }
+    async pushOrchestratorAnalysis(analysis, agents, addToTimeline = true) {
+        this.lastOrchestratorAnalysis = analysis;
+        this.conversationAgents = agents;
+        const provider = this.providerRef.deref();
+        if (!provider) {
+            return;
+        }
+        try {
+            await provider.postMessageToWebview({
+                type: "orchestratorAnalysis",
+                conversationAgents: agents,
+                lastOrchestratorAnalysis: analysis,
+                payload: {
+                    taskId: this.taskId,
+                    analysis,
+                    agents,
+                    appendTimeline: addToTimeline,
+                },
+            });
+        }
+        catch (error) {
+            console.error("[Task#pushOrchestratorAnalysis] Failed to post orchestrator analysis", error);
+        }
+    }
+    deriveConversationAgentsFromState(state) {
+        const companies = state?.workplaceState?.companies ?? [];
+        if (!companies.length) {
+            return [];
+        }
+        const activeCompanyId = state?.workplaceState?.activeCompanyId;
+        const company = companies.find((entry) => entry.id === activeCompanyId) ??
+            companies[0];
+        if (!company) {
+            return [];
+        }
+        const activeEmployeeId = company.activeEmployeeId ?? state?.workplaceState?.activeEmployeeId;
+        return company.employees.map((employee) => ({
+            id: employee.id,
+            name: employee.name,
+            role: employee.role,
+            isActive: employee.id === activeEmployeeId,
+        }));
+    }
+    buildOrchestratorMessageMetadata() {
+        const analysis = this.lastOrchestratorAnalysis;
+        const holdMode = this.conversationHoldState?.mode;
+        const respondedViaOrchestrator = Boolean(analysis);
+        const queueState = holdMode === "manual_hold" || holdMode === "ingest_hold"
+            ? "queued"
+            : holdMode === "responding"
+                ? "released"
+                : undefined;
+        if (!respondedViaOrchestrator && !queueState && !holdMode) {
+            return undefined;
+        }
+        return {
+            respondedViaOrchestrator: respondedViaOrchestrator || undefined,
+            queueState,
+            holdMode,
+            rationale: analysis?.rationale,
+            primarySpeakers: analysis?.primarySpeakers,
+            secondarySpeakers: analysis?.secondaryCandidates,
+            suppressedAgents: analysis?.suppressedAgents,
+        };
+    }
+    async ensureRespondingHold() {
+        if (!this.conversationHoldState) {
+            return;
+        }
+        if (this.conversationHoldState.mode === "manual_hold") {
+            return;
+        }
+        if (this.conversationHoldState.mode === "ingest_hold") {
+            await this.pushConversationHoldState({
+                ...this.conversationHoldState,
+                mode: "responding",
+                initiatedBy: "system",
+                activatedAt: Date.now(),
+            });
+        }
+    }
+    async maybeReleaseAutomaticHold() {
+        if (!this.conversationHoldState) {
+            return;
+        }
+        if (this.conversationHoldState.mode === "manual_hold") {
+            return;
+        }
+        if (this.conversationHoldState.mode === "idle") {
+            return;
+        }
+        await this.pushConversationHoldState({
+            mode: "idle",
+            initiatedBy: "system",
+            activatedAt: Date.now(),
+        });
     }
     /**
      * Wait for the task mode to be initialized before proceeding.
@@ -774,6 +897,30 @@ export class Task extends EventEmitter {
             }
             const provider = this.providerRef.deref();
             if (provider) {
+                let providerState;
+                try {
+                    providerState = (await provider.getState?.());
+                }
+                catch (stateError) {
+                    console.warn("[Task#submitUserMessage] Unable to read provider state for orchestrator analysis", stateError);
+                }
+                const agents = this.deriveConversationAgentsFromState(providerState);
+                const isManualHoldActive = this.conversationHoldState?.mode === "manual_hold";
+                let activeHoldState = this.conversationHoldState;
+                if (!isManualHoldActive) {
+                    activeHoldState = createIngestHoldState();
+                    await this.pushConversationHoldState(activeHoldState);
+                }
+                if (agents.length) {
+                    const activeAgentId = agents.find((agent) => agent.isActive)?.id ?? providerState?.workplaceState?.activeEmployeeId;
+                    const analysis = this.conversationOrchestrator.analyze({
+                        text,
+                        agents,
+                        activeAgentId,
+                        holdState: activeHoldState,
+                    });
+                    await this.pushOrchestratorAnalysis(analysis, agents, true);
+                }
                 if (mode) {
                     await provider.setMode(mode);
                 }
@@ -790,6 +937,38 @@ export class Task extends EventEmitter {
         catch (error) {
             console.error("[Task#submitUserMessage] Failed to submit user message:", error);
         }
+    }
+    async applyConversationHold(state) {
+        if (!state) {
+            await this.pushConversationHoldState(undefined);
+            return;
+        }
+        if (state.mode === "manual_hold") {
+            await this.pushConversationHoldState(createManualHoldState(state.initiatedBy ?? "user"));
+            return;
+        }
+        if (state.mode === "ingest_hold") {
+            await this.pushConversationHoldState(createIngestHoldState());
+            return;
+        }
+        await this.pushConversationHoldState({
+            ...state,
+            activatedAt: Date.now(),
+        });
+    }
+    async releaseQueuedResponses(agentIds) {
+        const releasedAgentIds = agentIds && agentIds.length
+            ? agentIds
+            : this.lastOrchestratorAnalysis?.primarySpeakers?.map((agent) => agent.id) ?? [];
+        if (releasedAgentIds.length) {
+            this.conversationOrchestrator.registerResponse(releasedAgentIds);
+        }
+        await this.pushConversationHoldState({
+            mode: "responding",
+            initiatedBy: "user",
+            activatedAt: Date.now(),
+        });
+        await this.maybeReleaseAutomaticHold();
     }
     async handleTerminalOperation(terminalOperation) {
         if (terminalOperation === "continue") {
@@ -851,6 +1030,13 @@ export class Task extends EventEmitter {
         if (this.abort) {
             throw new Error(`[Kilo Code#say] task ${this.taskId}.${this.instanceId} aborted`);
         }
+        const orchestratorMetadata = !options.isNonInteractive ? this.buildOrchestratorMessageMetadata() : undefined;
+        const mergedMetadata = orchestratorMetadata
+            ? { ...(options.metadata ?? {}), orchestrator: orchestratorMetadata }
+            : options.metadata;
+        if (!options.isNonInteractive) {
+            await this.ensureRespondingHold();
+        }
         if (partial !== undefined) {
             const lastMessage = this.clineMessages.at(-1);
             const isUpdatingPreviousPartial = lastMessage && lastMessage.partial && lastMessage.type === "say" && lastMessage.say === type;
@@ -861,6 +1047,13 @@ export class Task extends EventEmitter {
                     lastMessage.images = images;
                     lastMessage.partial = partial;
                     lastMessage.progressStatus = progressStatus;
+                    if (mergedMetadata) {
+                        const messageWithMetadata = lastMessage;
+                        if (!messageWithMetadata.metadata) {
+                            messageWithMetadata.metadata = {};
+                        }
+                        Object.assign(messageWithMetadata.metadata, mergedMetadata);
+                    }
                     this.updateClineMessage(lastMessage);
                 }
                 else {
@@ -877,7 +1070,7 @@ export class Task extends EventEmitter {
                         images,
                         partial,
                         contextCondense,
-                        metadata: options.metadata,
+                        metadata: mergedMetadata,
                     });
                 }
             }
@@ -893,19 +1086,21 @@ export class Task extends EventEmitter {
                     lastMessage.images = images;
                     lastMessage.partial = false;
                     lastMessage.progressStatus = progressStatus;
-                    if (options.metadata) {
-                        // Add metadata to the message
+                    if (mergedMetadata) {
                         const messageWithMetadata = lastMessage;
                         if (!messageWithMetadata.metadata) {
                             messageWithMetadata.metadata = {};
                         }
-                        Object.assign(messageWithMetadata.metadata, options.metadata);
+                        Object.assign(messageWithMetadata.metadata, mergedMetadata);
                     }
                     // Instead of streaming partialMessage events, we do a save
                     // and post like normal to persist to disk.
                     await this.saveClineMessages();
                     // More performant than an entire `postStateToWebview`.
                     this.updateClineMessage(lastMessage);
+                    if (!options.isNonInteractive) {
+                        await this.maybeReleaseAutomaticHold();
+                    }
                 }
                 else {
                     // This is a new and complete message, so add it like normal.
@@ -920,8 +1115,11 @@ export class Task extends EventEmitter {
                         text,
                         images,
                         contextCondense,
-                        metadata: options.metadata,
+                        metadata: mergedMetadata,
                     });
+                    if (!options.isNonInteractive) {
+                        await this.maybeReleaseAutomaticHold();
+                    }
                 }
             }
         }
@@ -943,7 +1141,11 @@ export class Task extends EventEmitter {
                 images,
                 checkpoint,
                 contextCondense,
+                metadata: mergedMetadata,
             });
+            if (!options.isNonInteractive) {
+                await this.maybeReleaseAutomaticHold();
+            }
         }
     }
     async sayAndCreateMissingParamError(toolName, paramName, relPath) {
@@ -2368,6 +2570,15 @@ export class Task extends EventEmitter {
     }
     get queuedMessages() {
         return this.messageQueueService.messages;
+    }
+    get currentConversationHoldState() {
+        return this.conversationHoldState;
+    }
+    get currentOrchestratorAnalysis() {
+        return this.lastOrchestratorAnalysis;
+    }
+    get currentConversationAgents() {
+        return this.conversationAgents;
     }
     get tokenUsage() {
         if (this.tokenUsageSnapshot && this.tokenUsageSnapshotAt) {

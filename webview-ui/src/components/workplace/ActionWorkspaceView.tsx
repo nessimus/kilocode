@@ -13,7 +13,6 @@ import { cn } from "@/lib/utils"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { vscode } from "@/utils/vscode"
 import WorkdayScheduleBoard from "./WorkdayScheduleBoard"
-import type { HubMessage, HubRoom } from "@roo/hub"
 import type {
 	WorkplaceActionItem,
 	WorkplaceActionStatus,
@@ -257,8 +256,6 @@ const ActionWorkspaceView = ({ onDone }: ActionWorkspaceViewProps) => {
 		updateShift,
 		deleteShift,
 		setActiveEmployee,
-		hubSnapshot,
-		setActiveHubRoom,
 	} = useExtensionState()
 
 	const companies = useMemo(() => workplaceState?.companies ?? [], [workplaceState?.companies])
@@ -366,48 +363,6 @@ const ActionWorkspaceView = ({ onDone }: ActionWorkspaceViewProps) => {
 	const activeCount = workday?.activeEmployeeIds?.length ?? 0
 	const { available: availableCount, flexible: flexibleCount, onCall: onCallCount, suspended: suspendedCount } = availabilityStats
 	const autoEligibleCount = autoEligibleEmployeeIds.length
-	const workdayRoom: HubRoom | undefined = useMemo(() => {
-		if (!hubSnapshot?.rooms || !activeCompany) {
-			return undefined
-		}
-		const expectedTitle = `${activeCompany.name} • Workday Ops`
-		const byTitle = hubSnapshot.rooms.find((room) => room.title === expectedTitle)
-		if (byTitle) {
-			return byTitle
-		}
-		const employeeIds = new Set(activeCompany.employees.map((employee) => employee.id))
-		return hubSnapshot.rooms.find((room) =>
-			room.participants.some((participant) => {
-				const employeeId = participant.persona?.employeeId
-				return Boolean(employeeId && employeeIds.has(employeeId))
-			}),
-		)
-	}, [hubSnapshot?.rooms, activeCompany])
-	const workdayMessagesByEmployeeId = useMemo(() => {
-		if (!workdayRoom) {
-			return new Map<string, HubMessage>()
-		}
-		const participantById = new Map(workdayRoom.participants.map((participant) => [participant.id, participant]))
-		const map = new Map<string, HubMessage>()
-		for (const message of workdayRoom.messages) {
-			if (!message) {
-				continue
-			}
-			if (message.status === "streaming") {
-				continue
-			}
-			const participant = participantById.get(message.participantId)
-			const employeeId = participant?.persona?.employeeId
-			if (!employeeId) {
-				continue
-			}
-			const previous = map.get(employeeId)
-			if (!previous || message.createdAt > previous.createdAt) {
-				map.set(employeeId, message)
-			}
-		}
-		return map
-	}, [workdayRoom])
 	const activeAssignmentsByEmployeeId = useMemo(() => {
 		if (!activeCompany) {
 			return new Map<string, WorkplaceActionItem>()
@@ -1022,17 +977,14 @@ const ActionWorkspaceView = ({ onDone }: ActionWorkspaceViewProps) => {
 
 	const handleOpenEmployeeActivity = useCallback(
 		(employeeId: string) => {
-			if (!workdayRoom) {
+			if (!activeCompanyId) {
 				return
 			}
-			setActiveHubRoom(workdayRoom.id)
-			vscode.postMessage({ type: "action", action: "switchTab", tab: "hub" })
-			window.postMessage({ type: "action", action: "switchTab", tab: "hub" }, "*")
-			if (activeCompanyId) {
-				setActiveEmployee(activeCompanyId, employeeId)
-			}
+			setActiveEmployee(activeCompanyId, employeeId)
+			vscode.postMessage({ type: "action", action: "switchTab", tab: "workforce" })
+			window.postMessage({ type: "action", action: "switchTab", tab: "workforce" }, "*")
 		},
-		[workdayRoom, setActiveHubRoom, activeCompanyId, setActiveEmployee],
+		[activeCompanyId, setActiveEmployee],
 	)
 
 	const selectedEmployee = useMemo(
@@ -1390,16 +1342,13 @@ const ActionWorkspaceView = ({ onDone }: ActionWorkspaceViewProps) => {
 						const isActive = activeWorkdayEmployeeIds.has(employee.id)
 						const overrideSelected = workdayOverrides.has(employee.id)
 						const assignment = activeAssignmentsByEmployeeId.get(employee.id)
-						const latestMessage = workdayMessagesByEmployeeId.get(employee.id)
 						const assignmentStatusName = assignment ? statusById.get(assignment.statusId)?.name : undefined
 						const assignmentTime = assignment?.lastStartedAt ?? assignment?.updatedAt ?? assignment?.createdAt
-						const lastInteractionLabel = latestMessage
-							? formatRelativeTime(latestMessage.createdAt)
-							: assignmentTime
-								? formatRelativeTime(assignmentTime)
-								: workday?.startedAt
-									? formatRelativeTime(workday.startedAt)
-									: "moments ago"
+						const lastInteractionLabel = assignmentTime
+							? formatRelativeTime(assignmentTime)
+							: workday?.startedAt
+								? formatRelativeTime(workday.startedAt)
+								: "moments ago"
 						const activityMetaParts: string[] = []
 						if (assignmentStatusName) {
 							activityMetaParts.push(assignmentStatusName)
@@ -1408,14 +1357,10 @@ const ActionWorkspaceView = ({ onDone }: ActionWorkspaceViewProps) => {
 							activityMetaParts.push(lastInteractionLabel)
 						}
 						const activityMeta = activityMetaParts.join(" • ")
-						const activitySnippet = latestMessage
-							? createMessageSnippet(latestMessage.content)
-							: createMessageSnippet(assignment?.description)
+						const activitySnippet = createMessageSnippet(assignment?.description)
 						const activityPrimaryLabel = assignment
 							? `Working on “${assignment.title}”`
-							: latestMessage
-								? `Collaborating in ${workdayRoom?.title ?? "the hub"}`
-								: "Standing by for the next task"
+							: "Standing by for the next task"
 						return (
 							<div
 								key={employee.id}
@@ -1440,12 +1385,9 @@ const ActionWorkspaceView = ({ onDone }: ActionWorkspaceViewProps) => {
 											<button
 												type="button"
 												onClick={() => handleOpenEmployeeActivity(employee.id)}
-												disabled={!workdayRoom}
 												className={cn(
 													"group inline-flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-[12px] font-semibold transition-[transform,box-shadow,border-color]",
-													workdayRoom
-														? "border-[color-mix(in_srgb,var(--vscode-foreground)_12%,transparent)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_88%,transparent)] text-[var(--vscode-foreground)] shadow-[0_8px_20px_rgba(0,0,0,0.24)] hover:-translate-y-[1px] hover:border-[color-mix(in_srgb,var(--vscode-foreground)_22%,transparent)] hover:shadow-[0_14px_32px_rgba(0,0,0,0.28)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--vscode-focusBorder)]"
-													: "cursor-not-allowed border-[color-mix(in_srgb,var(--vscode-panel-border)_72%,transparent)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_90%,transparent)] text-[color-mix(in_srgb,var(--vscode-descriptionForeground)_88%,transparent)] opacity-70",
+													"border-[color-mix(in_srgb,var(--vscode-foreground)_12%,transparent)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_88%,transparent)] text-[var(--vscode-foreground)] shadow-[0_8px_20px_rgba(0,0,0,0.24)] hover:-translate-y-[1px] hover:border-[color-mix(in_srgb,var(--vscode-foreground)_22%,transparent)] hover:shadow-[0_14px_32px_rgba(0,0,0,0.28)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--vscode-focusBorder)]",
 												)}
 											>
 												<div className="flex flex-1 flex-col gap-0.5">

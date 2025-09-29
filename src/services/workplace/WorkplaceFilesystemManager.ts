@@ -1,7 +1,17 @@
+import * as path from "node:path"
+
 import * as vscode from "vscode"
 
 import { Package } from "../../shared/package"
 import { cloneWorkplaceState, WorkplaceCompany, WorkplaceState } from "../../shared/golden/workplace"
+import {
+	FileCabinetFileKind,
+	FileCabinetFileSummary,
+	FileCabinetPreview,
+	FileCabinetSnapshot,
+	FileCabinetFolderSummary,
+	FileCabinetWriteRequest,
+} from "../../shared/fileCabinet"
 import type { WorkplaceStateObserver } from "./WorkplaceService"
 
 const ROOT_STATE_KEY = "goldenWorkplace.rootUri"
@@ -14,6 +24,70 @@ type WindowChoiceAction = "current" | "new" | "rememberCurrent" | "rememberNew"
 interface WindowChoiceQuickPickItem extends vscode.QuickPickItem {
 	action?: WindowChoiceAction
 }
+
+const MAX_SCAN_ENTRIES = 1000
+const MAX_PREVIEW_BYTES = 256 * 1024
+const MAX_IMAGE_BYTES = 1.5 * 1024 * 1024
+const BINARY_EXTENSIONS = new Set([
+	".png",
+	".jpg",
+	".jpeg",
+	".gif",
+	".webp",
+	".svg",
+	".mp4",
+	".mov",
+	".mp3",
+	".wav",
+	".pdf",
+	".zip",
+	".gz",
+	".tar",
+	".ppt",
+	".pptx",
+	".doc",
+	".docx",
+	".xls",
+	".xlsx",
+])
+
+const MARKDOWN_EXTENSIONS = new Set([".md", ".mdx"]) as Set<string>
+const TEXT_EXTENSIONS = new Set([
+	".txt",
+	".json",
+	".ts",
+	".tsx",
+	".js",
+	".jsx",
+	".py",
+	".rb",
+	".go",
+	".rs",
+	".java",
+	".c",
+	".cpp",
+	".sql",
+	".yml",
+	".yaml",
+	".csv",
+	".log",
+]) as Set<string>
+
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"]) as Set<string>
+const VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".mkv", ".avi"]) as Set<string>
+const AUDIO_EXTENSIONS = new Set([".mp3", ".wav", ".m4a", ".flac"]) as Set<string>
+const SPREADSHEET_EXTENSIONS = new Set([".xls", ".xlsx", ".csv"]) as Set<string>
+const PRESENTATION_EXTENSIONS = new Set([".ppt", ".pptx", ".key"]) as Set<string>
+const DOC_EXTENSIONS = new Set([".doc", ".docx", ".pdf"])
+const ARCHIVE_EXTENSIONS = new Set([".zip", ".tar", ".gz", ".tgz", ".rar"])
+
+const IGNORED_DIRECTORY_NAMES = new Set([".git", "node_modules", ".DS_Store", "__pycache__"])
+
+const posixJoin = (...segments: string[]): string =>
+	segments
+		.filter(Boolean)
+		.join("/")
+		.replace(/\\/g, "/")
 
 export class WorkplaceFilesystemManager implements WorkplaceStateObserver {
 	private rootUri: vscode.Uri | undefined
@@ -178,6 +252,144 @@ export class WorkplaceFilesystemManager implements WorkplaceStateObserver {
 		await Promise.allSettled(calls)
 	}
 
+	public async getFileCabinetSnapshot(companyId: string): Promise<FileCabinetSnapshot | undefined> {
+		const companyUri = this.getCompanyFolderUri(companyId)
+		if (!companyUri) {
+			return undefined
+		}
+
+		const files: FileCabinetFileSummary[] = []
+		const folderPaths = new Set<string>()
+		const counter = { count: 0 }
+
+		await this.scanCompanyDirectory(companyId, companyUri, "", files, folderPaths, counter)
+
+		const folders = this.buildFolderSummaries(folderPaths, files)
+
+		return {
+			companyId,
+			rootUri: companyUri.toString(),
+			generatedAt: new Date().toISOString(),
+			folders,
+			files,
+		}
+	}
+
+	public async getFileCabinetPreview(companyId: string, targetPath: string): Promise<FileCabinetPreview | undefined> {
+		const companyUri = this.getCompanyFolderUri(companyId)
+		if (!companyUri) {
+			return undefined
+		}
+		const relative = this.sanitizeRelativePath(targetPath)
+		if (relative === undefined) {
+			return {
+				companyId,
+				path: targetPath,
+				kind: "other",
+				byteSize: 0,
+				createdAt: new Date().toISOString(),
+				modifiedAt: new Date().toISOString(),
+				error: "Invalid path",
+			}
+		}
+
+		const fileUri = vscode.Uri.joinPath(companyUri, relative)
+		let stat: vscode.FileStat
+		try {
+			stat = await vscode.workspace.fs.stat(fileUri)
+		} catch (error) {
+			console.error(
+				`[WorkplaceFilesystem] Failed to stat preview target ${fileUri.toString()} for company ${companyId}`,
+				error,
+			)
+			return {
+				companyId,
+				path: `/${relative}`,
+				kind: "other",
+				byteSize: 0,
+				createdAt: new Date().toISOString(),
+				modifiedAt: new Date().toISOString(),
+				error: "Unable to read file metadata",
+			}
+		}
+
+		const extension = path.extname(relative) ?? ""
+		const kind = this.detectFileKind(extension)
+		const preview: FileCabinetPreview = {
+			companyId,
+			path: `/${relative}`,
+			kind,
+			byteSize: stat.size,
+			createdAt: new Date(stat.ctime).toISOString(),
+			modifiedAt: new Date(stat.mtime).toISOString(),
+			contentType: this.guessContentType(extension),
+		}
+
+		if (stat.size > MAX_PREVIEW_BYTES && kind !== "image") {
+			preview.error = "File is too large to preview"
+			return preview
+		}
+
+		try {
+			const data = await vscode.workspace.fs.readFile(fileUri)
+			const decoder = new TextDecoder("utf-8")
+			const lowercaseExt = extension.toLowerCase()
+			if (kind === "markdown") {
+				preview.markdown = decoder.decode(data.slice(0, MAX_PREVIEW_BYTES))
+				return preview
+			}
+			const isPlainText =
+				kind === "text" ||
+				kind === "code" ||
+				(lowercaseExt === ".csv")
+
+			if (isPlainText) {
+				preview.text = decoder.decode(data.slice(0, MAX_PREVIEW_BYTES))
+				return preview
+			}
+			if (kind === "image" && stat.size <= MAX_IMAGE_BYTES) {
+				preview.base64 = Buffer.from(data).toString("base64")
+				return preview
+			}
+			if (kind === "pdf") {
+				preview.error = "PDF preview not yet supported"
+				return preview
+			}
+			preview.error = "Preview not available"
+		} catch (error) {
+			console.error(
+				`[WorkplaceFilesystem] Failed to read preview data for ${fileUri.toString()} (${companyId})`,
+				error,
+			)
+			preview.error = "Unable to load preview"
+		}
+
+		return preview
+	}
+
+	public async writeCompanyFile(request: FileCabinetWriteRequest): Promise<void> {
+		const companyUri = this.getCompanyFolderUri(request.companyId)
+		if (!companyUri) {
+			throw new Error("Workplace root is not configured")
+		}
+		const relative = this.sanitizeRelativePath(request.path)
+		if (relative === undefined) {
+			throw new Error("Invalid path")
+		}
+
+		const targetUri = vscode.Uri.joinPath(companyUri, relative)
+		const data =
+			request.encoding === "base64"
+				? Buffer.from(request.contents, "base64")
+				: Buffer.from(request.contents, "utf8")
+
+		const directoryRelative = path.posix.dirname(relative)
+		if (directoryRelative && directoryRelative !== ".") {
+			await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(companyUri, directoryRelative))
+		}
+		await vscode.workspace.fs.writeFile(targetUri, data)
+	}
+
 	private async promptForRootFolder(options?: { title?: string; message?: string }): Promise<vscode.Uri | undefined> {
 		if (options?.message) {
 			void vscode.window.showInformationMessage(options.message)
@@ -324,6 +536,210 @@ export class WorkplaceFilesystemManager implements WorkplaceStateObserver {
 			return undefined
 		}
 		return vscode.Uri.joinPath(this.rootUri, folderName)
+	}
+
+	private detectFileKind(extension: string): FileCabinetFileKind {
+		const normalized = extension.toLowerCase()
+		if (IMAGE_EXTENSIONS.has(normalized)) {
+			return "image"
+		}
+		if (VIDEO_EXTENSIONS.has(normalized)) {
+			return "video"
+		}
+		if (AUDIO_EXTENSIONS.has(normalized)) {
+			return "audio"
+		}
+		if (SPREADSHEET_EXTENSIONS.has(normalized)) {
+			return "spreadsheet"
+		}
+		if (PRESENTATION_EXTENSIONS.has(normalized)) {
+			return "presentation"
+		}
+		if (MARKDOWN_EXTENSIONS.has(normalized)) {
+			return "markdown"
+		}
+		if (TEXT_EXTENSIONS.has(normalized)) {
+			return "text"
+		}
+		if (DOC_EXTENSIONS.has(normalized)) {
+			return normalized === ".pdf" ? "pdf" : "doc"
+		}
+		if (ARCHIVE_EXTENSIONS.has(normalized)) {
+			return "archive"
+		}
+		if (normalized.endsWith("ts") || normalized.endsWith("js") || normalized.endsWith("py") || normalized.endsWith("go")) {
+			return "code"
+		}
+		return "other"
+	}
+
+	private sanitizeRelativePath(target: string): string | undefined {
+		const normalized = target.replace(/\\/g, "/")
+		const trimmed = normalized.startsWith("/") ? normalized.slice(1) : normalized
+		const resolved = path.posix.normalize(trimmed)
+		if (resolved.startsWith("..")) {
+			return undefined
+		}
+		return resolved
+	}
+
+	private async scanCompanyDirectory(
+		companyId: string,
+		folderUri: vscode.Uri,
+		relativePath: string,
+		files: FileCabinetFileSummary[],
+		folderPaths: Set<string>,
+		counter: { count: number },
+	): Promise<void> {
+		if (counter.count >= MAX_SCAN_ENTRIES) {
+			return
+		}
+
+		let entries: [string, vscode.FileType][] = []
+		try {
+			entries = await vscode.workspace.fs.readDirectory(folderUri)
+		} catch (error) {
+			console.error(
+				`[WorkplaceFilesystem] Failed to read directory ${(folderUri?.toString() ?? "")} for company ${companyId}`,
+				error,
+			)
+			return
+		}
+
+		for (const [name, type] of entries) {
+			if (IGNORED_DIRECTORY_NAMES.has(name)) {
+				continue
+			}
+
+			const childRelativePath = posixJoin(relativePath, name)
+			const childUri = vscode.Uri.joinPath(folderUri, name)
+
+			if (type === vscode.FileType.Directory) {
+				folderPaths.add(childRelativePath)
+				await this.scanCompanyDirectory(companyId, childUri, childRelativePath, files, folderPaths, counter)
+				continue
+			}
+
+			if (type === vscode.FileType.File || type === (vscode.FileType.File | vscode.FileType.SymbolicLink)) {
+				if (counter.count >= MAX_SCAN_ENTRIES) {
+					return
+				}
+				let stat: vscode.FileStat
+				try {
+					stat = await vscode.workspace.fs.stat(childUri)
+				} catch (error) {
+					console.error(
+						`[WorkplaceFilesystem] Failed to stat file ${(childUri?.toString() ?? "")} for company ${companyId}`,
+						error,
+					)
+					continue
+				}
+
+				const extension = path.extname(name) ?? ""
+				const kind = this.detectFileKind(extension)
+				const segments = childRelativePath.split("/")
+				const id = `${companyId}:${childRelativePath}`
+				files.push({
+					id,
+					name,
+					path: `/${childRelativePath}`,
+					extension,
+					segments,
+					byteSize: stat.size,
+					createdAt: new Date(stat.ctime).toISOString(),
+					modifiedAt: new Date(stat.mtime).toISOString(),
+					kind,
+					isBinary: BINARY_EXTENSIONS.has(extension.toLowerCase()),
+					contentType: this.guessContentType(extension),
+					topLevelFolder: segments.length > 1 ? segments[0] : undefined,
+				})
+				counter.count += 1
+			}
+		}
+	}
+
+	private guessContentType(extension: string): string | undefined {
+		switch (extension.toLowerCase()) {
+			case ".png":
+				return "image/png"
+			case ".jpg":
+			case ".jpeg":
+				return "image/jpeg"
+			case ".gif":
+				return "image/gif"
+			case ".webp":
+				return "image/webp"
+			case ".svg":
+				return "image/svg+xml"
+			case ".mp4":
+				return "video/mp4"
+			case ".mov":
+				return "video/quicktime"
+			case ".mp3":
+				return "audio/mpeg"
+			case ".wav":
+				return "audio/wav"
+			case ".pdf":
+				return "application/pdf"
+			case ".json":
+				return "application/json"
+			case ".csv":
+				return "text/csv"
+			case ".md":
+			case ".mdx":
+				return "text/markdown"
+			case ".txt":
+				return "text/plain"
+			default:
+				return undefined
+		}
+	}
+
+	private buildFolderSummaries(
+		folderPaths: Set<string>,
+		files: FileCabinetFileSummary[],
+	): FileCabinetFolderSummary[] {
+		const fileCountMap = new Map<string, number>()
+		for (const file of files) {
+			if (file.segments.length <= 1) {
+				continue
+			}
+			let current = ""
+			for (let i = 0; i < file.segments.length - 1; i += 1) {
+				current = current ? `${current}/${file.segments[i]}` : file.segments[i]
+				fileCountMap.set(current, (fileCountMap.get(current) ?? 0) + 1)
+			}
+		}
+
+		const subfolderMap = new Map<string, Set<string>>()
+		for (const folderPath of folderPaths) {
+			if (!folderPath) {
+				continue
+			}
+			const parent = folderPath.includes("/") ? folderPath.slice(0, folderPath.lastIndexOf("/")) : ""
+			if (parent) {
+				const existing = subfolderMap.get(parent) ?? new Set<string>()
+				existing.add(folderPath)
+				subfolderMap.set(parent, existing)
+			}
+		}
+
+		return Array.from(folderPaths)
+			.map((folderPath) => {
+				const segments = folderPath ? folderPath.split("/") : []
+				const name = segments[segments.length - 1] ?? ""
+				const depth = segments.length
+				const parentPath = depth > 1 ? segments.slice(0, -1).join("/") : undefined
+				return {
+					path: folderPath,
+					name,
+					depth,
+					parentPath,
+					fileCount: fileCountMap.get(folderPath) ?? 0,
+					subfolderCount: subfolderMap.get(folderPath)?.size ?? 0,
+				}
+			})
+			.sort((a, b) => a.path.localeCompare(b.path))
 	}
 
 	private async resolveWindowPreference(currentCompanyId?: string): Promise<boolean> {

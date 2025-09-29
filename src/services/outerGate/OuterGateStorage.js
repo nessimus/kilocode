@@ -81,6 +81,14 @@ export class OuterGateStorage {
         }
         await this.persist();
     }
+    async removeInsight(id) {
+        if (!this.data.insights[id]) {
+            return false;
+        }
+        delete this.data.insights[id];
+        await this.persist();
+        return true;
+    }
     async removeInsightsByIntegration(integrationId) {
         let didMutate = false;
         for (const [insightId, insight] of Object.entries(this.data.insights)) {

@@ -5,17 +5,20 @@ import { randomUUID } from "crypto";
 import EventEmitter from "events";
 import delay from "delay";
 import axios from "axios";
+import pWaitFor from "p-wait-for";
 import * as vscode from "vscode";
-import { TSNE } from "tsne-js";
-import { RooCodeEventName, requestyDefaultModelId, openRouterDefaultModelId, glamaDefaultModelId, } from "@roo-code/types";
+import { RooCodeEventName, requestyDefaultModelId, openRouterDefaultModelId, glamaDefaultModelId, DEFAULT_TERMINAL_OUTPUT_CHARACTER_LIMIT, DEFAULT_WRITE_DELAY_MS, ORGANIZATION_ALLOW_ALL, DEFAULT_MODES, } from "@roo-code/types";
 import { TelemetryService } from "@roo-code/telemetry";
-import { CloudService, BridgeOrchestrator } from "@roo-code/cloud";
+import { CloudService, BridgeOrchestrator, getRooCodeApiUrl } from "@roo-code/cloud";
 import { Package } from "../../shared/package";
 import { findLast } from "../../shared/array";
 import { supportPrompt } from "../../shared/support-prompt";
 import { GlobalFileNames } from "../../shared/globalFileNames";
 import { defaultModeSlug, getModeBySlug } from "../../shared/modes";
+import { experimentDefault } from "../../shared/experiments";
+import { formatLanguage } from "../../shared/language";
 import { EMBEDDING_MODEL_PROFILES } from "../../shared/embeddingModels";
+import { ProfileValidator } from "../../shared/ProfileValidator";
 import { Terminal } from "../../integrations/terminal/Terminal";
 import { downloadTask } from "../../integrations/misc/export-markdown";
 import { getTheme } from "../../integrations/theme/getTheme";
@@ -23,29 +26,35 @@ import WorkspaceTracker from "../../integrations/workspace/WorkspaceTracker";
 import { McpServerManager } from "../../services/mcp/McpServerManager";
 import { MarketplaceManager } from "../../services/marketplace";
 import { ShadowCheckpointService } from "../../services/checkpoints/ShadowCheckpointService";
+import { CodeIndexManager } from "../../services/code-index/manager";
 import { fileExistsAtPath } from "../../utils/fs";
 import { setTtsEnabled, setTtsSpeed } from "../../utils/tts";
+import { getWorkspaceGitInfo } from "../../utils/git";
 import { getWorkspacePath } from "../../utils/path";
 import { OrganizationAllowListViolationError } from "../../utils/errors";
 import { setPanel } from "../../activate/registerCommands";
 import { t } from "../../i18n";
 import { buildApiHandler } from "../../api";
 import { forceFullModelDetailsLoad, hasLoadedFullDetails } from "../../api/providers/fetchers/lmstudio";
-import { ContextProxy } from "../config/ContextProxy";
+import { getEnabledRules } from "./kilorules";
 import { ProviderSettingsManager } from "../config/ProviderSettingsManager";
 import { CustomModesManager } from "../config/CustomModesManager";
 import { Task } from "../task/Task";
+import { getSystemPromptFilePath } from "../prompts/sections/custom-system-prompt";
 import { webviewMessageHandler } from "./webviewMessageHandler";
 import { getNonce } from "./getNonce";
 import { getUri } from "./getUri";
-import { ConversationHubService } from "../hub/ConversationHubService";
 import { singleCompletionHandler } from "../../utils/single-completion-handler";
 import { countTokens } from "../../utils/countTokens";
+import { additionalToolLibraryItems } from "../../shared/toolLibraryData";
+import { OpenRouterHandler } from "../../api/providers";
+import { stringifyError } from "../../shared/kilocode/errorUtils";
+import isWsl from "is-wsl";
+import { getKilocodeDefaultModel } from "../../api/providers/kilocode/getKilocodeDefaultModel";
+import { getKiloCodeWrapperProperties } from "../../core/kilocode/wrapper";
 import { defaultOuterGateState, } from "../../shared/golden/outerGate";
-import { cloverAutomationFunctionNames, cloverAutomationFunctionPromptList, cloverAutomationFunctions, } from "../../shared/golden/cloverAutomation";
 import { CloverSessionService, DEFAULT_CLOVER_SESSION_PAGE_SIZE } from "../../services/outerGate/CloverSessionService";
 import { OuterGateIntegrationManager } from "../../services/outerGate/OuterGateIntegrationManager";
-import { optionalString, normalizeOwnerProfileInput, normalizeBooleanInput } from "../tools/helpers/workplace";
 const ENABLE_VERBOSE_PROVIDER_LOGS = false;
 const verboseProviderLog = (...args) => {
     if (!ENABLE_VERBOSE_PROVIDER_LOGS) {
@@ -56,218 +65,18 @@ const verboseProviderLog = (...args) => {
 const CLOVER_MAX_MESSAGES = 18;
 const CLOVER_SESSION_SUMMARY_LIMIT = DEFAULT_CLOVER_SESSION_PAGE_SIZE * 4;
 const CLOVER_SESSION_RETRY_DELAY_MS = 60_000;
-const CLOVER_CONVERSATION_INTEGRATION_ID = "clover-chat";
-const CLOVER_MAX_AUTOMATION_PASSES = 4;
-const PASSION_COLOR_PALETTE = ["#F97316", "#6366F1", "#10B981", "#EC4899", "#14B8A6", "#F59E0B", "#8B5CF6", "#0EA5E9"];
-const PASSION_STOP_WORDS = new Set([
-    "the",
-    "and",
-    "for",
-    "with",
-    "that",
-    "have",
-    "from",
-    "this",
-    "about",
-    "into",
-    "your",
-    "their",
-    "they",
-    "been",
-    "will",
-    "would",
-    "there",
-    "what",
-    "when",
-    "which",
-    "make",
-    "work",
-    "project",
-    "projects",
-    "idea",
-    "ideas",
-    "note",
-    "notes",
-    "plan",
-    "plans",
-    "draft",
-    "updates",
-    "update",
-    "task",
-    "tasks",
-    "team",
-    "teams",
-    "just",
-    "like",
-    "really",
-    "also",
-    "still",
-    "keep",
-    "need",
-    "take",
-    "over",
-    "next",
-    "past",
-    "week",
-    "weeks",
-    "month",
-    "months",
-    "today",
-    "yesterday",
-    "tomorrow",
-    "going",
-    "should",
-    "could",
-    "might",
-    "through",
-    "more",
-    "much",
-    "very",
-    "every",
-    "each",
-    "other",
-    "some",
-    "than",
-    "because",
-    "while",
-    "where",
-    "well",
-    "good",
-    "great",
-    "awesome",
-    "amazing",
-    "super",
-    "even",
-    "maybe",
-    "thing",
-    "things",
-    "people",
-    "person",
-    "user",
-    "users",
-    "customer",
-    "customers",
-    "client",
-    "clients",
-    "company",
-    "companies",
-    "product",
-    "products",
-    "service",
-    "services",
-    "data",
-    "info",
-    "information",
-    "document",
-    "documents",
-    "file",
-    "files",
-    "meeting",
-    "meetings",
-    "call",
-    "calls",
-    "review",
-    "reviews",
-    "feedback",
-    "version",
-    "versions",
-    "story",
-    "stories",
-    "sprint",
-    "sprints",
-    "goal",
-    "goals",
-    "target",
-    "targets",
-    "kpi",
-    "kpis",
-    "metric",
-    "metrics",
-    "result",
-    "results",
-    "outcome",
-    "outcomes",
-    "progress",
-    "status",
-    "share",
-    "shared",
-    "sharing",
-    "getting",
-    "using",
-    "looking",
-    "think",
-    "thinks",
-    "thought",
-    "thoughts",
-    "brainstorm",
-    "brainstorms",
-    "brainstorming",
-    "discuss",
-    "discussion",
-    "discussions",
-    "maybe",
-    "ensure",
-    "ensuring",
-    "provide",
-    "provided",
-    "provides",
-    "follow",
-    "following",
-    "followed",
-    "followup",
-    "follow-up",
-    "action",
-    "actions",
-    "item",
-    "items",
-    "todo",
-    "todos",
-    "list",
-    "lists",
-    "track",
-    "tracking",
-    "tracked",
-    "deliver",
-    "delivered",
-    "delivery",
-    "deliveries",
-    "ship",
-    "shipping",
-    "shipped",
-    "story",
-    "stories",
-    "across",
-    "around",
-    "between",
-    "among",
-    "again",
-    "already",
-    "per",
-    "etc",
-    "kind",
-    "sort",
-    "really",
-    "maybe",
-    "just",
-    "even",
-    "ever",
-    "never",
-    "soon",
-    "later",
-    "early",
-    "late",
-    "first",
-    "second",
-    "third",
-]);
-const PASSION_POINT_DECIMAL_PLACES = 4;
-const CLOVER_LOOKUP_DEFAULT_LIMIT = 10;
-const CLOVER_LOOKUP_MIN_LIMIT = 1;
-const CLOVER_LOOKUP_MAX_LIMIT = 25;
-const CLOVER_LOOKUP_SUMMARY_LIMIT = 120;
-const CLOVER_SYSTEM_PROMPT = `You are Clover AI, the concierge for Golden Workplace's Outer Gates. Your role is to help founders surface passions, route raw context into the right company workspaces, and recommend actionable next steps.\n\nGuidelines:\n- Greet warmly yet concisely; speak like a strategic partner who understands venture building.\n- Ask focused clarifying questions when the goal or next step is uncertain.\n- Summarize the essence of what you heard before proposing actions.\n- Recommend an existing workspace or suggest creating a new one when appropriate.\n- Offer up to three concrete next steps formatted as short bullet prompts starting with \">\" or "▶".\n- Highlight relevant artifacts or integrations already connected to the Outer Gates.\n- Capture breakthrough ideas as insights when you detect a durable pattern, even if the user doesn’t explicitly ask.\n- Before calling update_company or update_insight, run list_companies or list_insights to confirm the exact id unless it was already surfaced in this session.\n- Keep responses under roughly 170 words, using short paragraphs and a motivating closing invitation.\n- Never fabricate tools or integrations that aren't in the provided data.\n- When it's time to take workspace action, explain the plan first and then encode the exact operations in a function call block.\n\nAvailable Automation Functions:\n${cloverAutomationFunctionPromptList}\n\nFunction Call Format:\n- If no automated action is required, omit the block entirely.\n- Otherwise append a <functionCalls>...</functionCalls> block after your conversational reply.\n- Inside the block provide strictly valid JSON in one of these shapes: {"function_calls": [ ... ]}, [ ... ], or a single call object.\n- Each call object must include a "name" and an "arguments" object containing the payload.\n\nExample:\n<functionCalls>\n{\n  "function_calls": [\n    {\n      "name": "create_company",\n      "arguments": {\n        "companies": [\n          {\n            "name": "Orchid Labs",\n            "vision": "Launch regenerative retreats across the Pacific Northwest"\n          }\n        ]\n      }\n    }\n  ]\n}\n</functionCalls>`;
-const CLOVER_AUTOMATION_DEFINITION_BY_NAME = new Map(cloverAutomationFunctions.map((fn) => [fn.name, fn]));
+const CLOVER_SYSTEM_PROMPT = `You are Clover AI, the concierge for Golden Workplace's Outer Gates. Your role is to help founders surface passions, route raw context into the right company workspaces, and recommend actionable next steps.\n\nGuidelines:\n- Greet warmly yet concisely; speak like a strategic partner who understands venture building.\n- Ask focused clarifying questions when the goal or next step is uncertain.\n- Summarize the essence of what you heard before proposing actions.\n- Recommend an existing workspace or suggest creating a new one when appropriate.\n- Offer up to three concrete next steps formatted as short bullet prompts starting with \">" or "▶".\n- Highlight relevant artifacts or integrations already connected to the Outer Gates.\n- Keep responses under roughly 170 words, using short paragraphs and a motivating closing invitation.\n- Never fabricate tools or integrations that aren't in the provided data.`;
 const CLOVER_WELCOME_TEXT = "Welcome back to the Outer Gates! Tell me what spark you want to explore and I’ll line it up with the right workspace.";
+const PASSION_COLOR_PALETTE = [
+    "#F97316",
+    "#6366F1",
+    "#10B981",
+    "#EC4899",
+    "#14B8A6",
+    "#F59E0B",
+    "#8B5CF6",
+    "#0EA5E9",
+];
 export class ClineProvider extends EventEmitter {
     context;
     outputChannel;
@@ -296,9 +105,9 @@ export class ClineProvider extends EventEmitter {
     taskEventListeners = new WeakMap();
     currentWorkspacePath;
     workplaceService;
+    workplaceFilesystemManager;
     endlessSurfaceService;
     cloverSessionService;
-    isApplyingExternalOuterGateState = false;
     cloverSessionsInitialized = false;
     cloverSessionWarningShown = false;
     lastCloverSessionFetchErrorAt;
@@ -309,7 +118,6 @@ export class ClineProvider extends EventEmitter {
     recentTasksCache;
     pendingOperations = new Map();
     static PENDING_OPERATION_TIMEOUT_MS = 30000; // 30 seconds
-    conversationHub;
     isViewLaunched = false;
     settingsImportedAt;
     latestAnnouncementId = "aug-25-2025-grok-code-fast"; // Update for Grok Code Fast announcement
@@ -353,10 +161,6 @@ export class ClineProvider extends EventEmitter {
             this.log(`Failed to initialize MCP Hub: ${error}`);
         });
         this.marketplaceManager = new MarketplaceManager(this.context, this.customModesManager);
-        this.conversationHub = new ConversationHubService(this);
-        this.conversationHub.on("stateChanged", () => {
-            void this.postStateToWebview();
-        });
         // Forward <most> task events to the provider.
         // We do something fairly similar for the IPC-based API.
         this.taskCreationCallback = (instance) => {
@@ -422,6 +226,9 @@ export class ClineProvider extends EventEmitter {
     attachWorkplaceService(service) {
         this.workplaceService = service;
         ClineProvider.globalWorkplaceService = service;
+    }
+    attachWorkplaceFilesystemManager(manager) {
+        this.workplaceFilesystemManager = manager;
     }
     getWorkplaceService() {
         if (!this.workplaceService && ClineProvider.globalWorkplaceService) {
@@ -493,9 +300,6 @@ export class ClineProvider extends EventEmitter {
     handleEndlessSurfaceStateChange = () => {
         void this.postStateToWebview();
     };
-    getConversationHub() {
-        return this.conversationHub;
-    }
     /**
      * Override EventEmitter's on method to match TaskProviderLike interface
      */
@@ -564,6 +368,171 @@ export class ClineProvider extends EventEmitter {
         catch (error) {
             this.log(`Error syncing cloud profiles: ${error}`);
         }
+    }
+    clampToZero(value) {
+        return value < 0 ? 0 : value;
+    }
+    applyStageTransition(pool, previous, next, timestampIso) {
+        let processing = pool.processing;
+        let ready = pool.ready;
+        let assigned = pool.assignedThisWeek;
+        if (previous === "processing") {
+            processing = this.clampToZero(processing - 1);
+        }
+        else if (previous === "ready") {
+            ready = this.clampToZero(ready - 1);
+        }
+        else if (previous === "assigned") {
+            assigned = this.clampToZero(assigned - 1);
+        }
+        if (next === "processing") {
+            processing += 1;
+        }
+        else if (next === "ready") {
+            ready += 1;
+        }
+        else if (next === "assigned") {
+            assigned += 1;
+        }
+        return {
+            ...pool,
+            processing,
+            ready,
+            assignedThisWeek: assigned,
+            lastUpdatedIso: timestampIso,
+        };
+    }
+    applyStageRemoval(pool, removedStage, timestampIso) {
+        let processing = pool.processing;
+        let ready = pool.ready;
+        let assigned = pool.assignedThisWeek;
+        if (removedStage === "processing") {
+            processing = this.clampToZero(processing - 1);
+        }
+        else if (removedStage === "ready") {
+            ready = this.clampToZero(ready - 1);
+        }
+        else if (removedStage === "assigned") {
+            assigned = this.clampToZero(assigned - 1);
+        }
+        return {
+            ...pool,
+            totalCaptured: this.clampToZero(pool.totalCaptured - 1),
+            processing,
+            ready,
+            assignedThisWeek: assigned,
+            lastUpdatedIso: timestampIso,
+        };
+    }
+    async updateOuterGateInsight(id, updates) {
+        if (!id) {
+            return;
+        }
+        const baseState = this.ensureOuterGateState();
+        const existing = baseState.recentInsights.find((insight) => insight.id === id);
+        if (!existing) {
+            return;
+        }
+        const nowIso = new Date().toISOString();
+        const trimmedTitle = updates.title !== undefined ? updates.title.trim() : undefined;
+        const trimmedSummary = updates.summary !== undefined && updates.summary !== null
+            ? updates.summary.trim()
+            : updates.summary ?? undefined;
+        const trimmedWorkspace = updates.recommendedWorkspace !== undefined && updates.recommendedWorkspace !== null
+            ? updates.recommendedWorkspace.trim()
+            : updates.recommendedWorkspace ?? undefined;
+        const trimmedCompanyId = updates.assignedCompanyId !== undefined && updates.assignedCompanyId !== null
+            ? updates.assignedCompanyId.trim()
+            : updates.assignedCompanyId ?? undefined;
+        const nextStage = updates.stage ?? existing.stage;
+        if (!["captured", "processing", "ready", "assigned"].includes(nextStage)) {
+            return;
+        }
+        const updatedInsight = { ...existing };
+        if (trimmedTitle !== undefined && trimmedTitle.length > 0) {
+            updatedInsight.title = trimmedTitle;
+        }
+        if (trimmedSummary !== undefined) {
+            if (trimmedSummary && trimmedSummary.length > 0) {
+                updatedInsight.summary = trimmedSummary;
+            }
+            else {
+                delete updatedInsight.summary;
+            }
+        }
+        if (trimmedWorkspace !== undefined) {
+            if (trimmedWorkspace && trimmedWorkspace.length > 0) {
+                updatedInsight.recommendedWorkspace = trimmedWorkspace;
+            }
+            else {
+                delete updatedInsight.recommendedWorkspace;
+            }
+        }
+        if (trimmedCompanyId !== undefined) {
+            if (trimmedCompanyId && trimmedCompanyId.length > 0) {
+                updatedInsight.assignedCompanyId = trimmedCompanyId;
+            }
+            else {
+                delete updatedInsight.assignedCompanyId;
+            }
+        }
+        updatedInsight.stage = nextStage;
+        let nextAnalysisPool = { ...baseState.analysisPool, lastUpdatedIso: nowIso };
+        if (existing.stage !== nextStage) {
+            nextAnalysisPool = this.applyStageTransition(nextAnalysisPool, existing.stage, nextStage, nowIso);
+        }
+        const nextInsights = baseState.recentInsights.map((insight) => insight.id === id ? updatedInsight : insight);
+        this.updateOuterGateState({
+            ...baseState,
+            recentInsights: nextInsights,
+            analysisPool: nextAnalysisPool,
+        });
+        try {
+            const manager = await this.getOuterGateManager();
+            const stored = manager?.getStoredInsightById(id);
+            if (manager && stored) {
+                await manager.updateStoredInsight(id, {
+                    title: updatedInsight.title,
+                    summary: updatedInsight.summary,
+                    stage: updatedInsight.stage,
+                    recommendedWorkspace: updatedInsight.recommendedWorkspace,
+                    assignedCompanyId: updatedInsight.assignedCompanyId,
+                });
+            }
+        }
+        catch (error) {
+            console.error("[ClineProvider] Failed to persist insight update", error);
+        }
+        await this.postStateToWebview();
+    }
+    async deleteOuterGateInsight(id) {
+        if (!id) {
+            return;
+        }
+        const baseState = this.ensureOuterGateState();
+        const existing = baseState.recentInsights.find((insight) => insight.id === id);
+        if (!existing) {
+            return;
+        }
+        const nowIso = new Date().toISOString();
+        const nextInsights = baseState.recentInsights.filter((insight) => insight.id !== id);
+        const nextAnalysisPool = this.applyStageRemoval(baseState.analysisPool, existing.stage, nowIso);
+        this.updateOuterGateState({
+            ...baseState,
+            recentInsights: nextInsights,
+            analysisPool: nextAnalysisPool,
+        });
+        try {
+            const manager = await this.getOuterGateManager();
+            const stored = manager?.getStoredInsightById(id);
+            if (manager && stored) {
+                await manager.deleteStoredInsight(id);
+            }
+        }
+        catch (error) {
+            console.error("[ClineProvider] Failed to delete stored insight", error);
+        }
+        await this.postStateToWebview();
     }
     /**
      * Initialize cloud profile synchronization when CloudService is ready
@@ -756,7 +725,6 @@ export class ClineProvider extends EventEmitter {
         this.mcpHub = undefined;
         this.marketplaceManager?.cleanup();
         this.customModesManager?.dispose();
-        this.conversationHub.dispose();
         this.cleanupEndlessSurfaceListeners();
         this.endlessSurfaceService = undefined;
         this.log("Disposed all disposables");
@@ -1739,19 +1707,6 @@ export class ClineProvider extends EventEmitter {
                 ...next.cloverSessions,
                 entries: [...next.cloverSessions.entries].slice(0, CLOVER_SESSION_SUMMARY_LIMIT),
             },
-            passionMap: {
-                ...next.passionMap,
-                points: next.passionMap.points.slice(0, 500).map((point) => ({
-                    ...point,
-                    coordinates: { ...point.coordinates },
-                    metadata: point.metadata ? { ...point.metadata } : undefined,
-                })),
-                clusters: next.passionMap.clusters.map((cluster) => ({
-                    ...cluster,
-                    topKeywords: [...cluster.topKeywords],
-                    centroid: { ...cluster.centroid },
-                })),
-            },
         };
     }
     getOuterGateStateSnapshot() {
@@ -1834,7 +1789,6 @@ export class ClineProvider extends EventEmitter {
                 },
             };
             this.updateOuterGateState(refreshedState);
-            await this.broadcastOuterGateStateSnapshot(refreshedState);
             if (syncActiveSession) {
                 await this.syncActiveCloverSessionMessages(service.getActiveSessionId());
             }
@@ -1853,7 +1807,6 @@ export class ClineProvider extends EventEmitter {
                 },
             };
             this.updateOuterGateState(fallbackState);
-            await this.broadcastOuterGateStateSnapshot(fallbackState);
             if (!this.cloverSessionWarningShown) {
                 void vscode.window.showWarningMessage(this.formatCloverSessionFetchError(error));
                 this.cloverSessionWarningShown = true;
@@ -1902,39 +1855,6 @@ export class ClineProvider extends EventEmitter {
         }
         await service.setActiveSessionId(sessionId);
         await this.syncActiveCloverSessionMessages(sessionId);
-    }
-    async broadcastOuterGateStateSnapshot(snapshot) {
-        if (this.isApplyingExternalOuterGateState) {
-            return;
-        }
-        const stateSnapshot = snapshot ?? this.getOuterGateStateSnapshot();
-        const otherInstances = Array.from(ClineProvider.activeInstances).filter((instance) => instance !== this);
-        if (!otherInstances.length) {
-            return;
-        }
-        await Promise.all(otherInstances.map((instance) => instance.applyExternalOuterGateState(cloneOuterGateState(stateSnapshot))));
-    }
-    async applyExternalOuterGateState(snapshot) {
-        this.isApplyingExternalOuterGateState = true;
-        try {
-            this.updateOuterGateState(snapshot);
-            if (snapshot.cloverSessions.isInitialFetchComplete) {
-                this.cloverSessionsInitialized = true;
-            }
-            await this.postOuterGateStateSnapshot(snapshot);
-        }
-        finally {
-            this.isApplyingExternalOuterGateState = false;
-        }
-    }
-    async postOuterGateStateSnapshot(snapshot) {
-        if (!this.view?.webview) {
-            return;
-        }
-        await this.postMessageToWebview({
-            type: "outerGateState",
-            outerGateState: cloneOuterGateState(snapshot),
-        });
     }
     getActiveCompanyContext() {
         const workplace = this.getWorkplaceService();
@@ -2022,7 +1942,6 @@ export class ClineProvider extends EventEmitter {
         this.updateOuterGateState(nextState);
         await service.setActiveSessionId(session.id);
         await this.postStateToWebview();
-        await this.broadcastOuterGateStateSnapshot();
     }
     async activateCloverSession(sessionId) {
         await this.ensureCloverSessionsInitialized();
@@ -2052,7 +1971,6 @@ export class ClineProvider extends EventEmitter {
             },
         });
         await this.postStateToWebview();
-        await this.broadcastOuterGateStateSnapshot();
     }
     async loadMoreCloverSessions(cursor, limit) {
         await this.ensureCloverSessionsInitialized();
@@ -2065,6 +1983,7 @@ export class ClineProvider extends EventEmitter {
         await this.postStateToWebview();
     }
     async generateOuterGatePassionMap() {
+        await this.ensureCloverSessionsInitialized();
         const requestIso = new Date().toISOString();
         const initialState = this.ensureOuterGateState();
         this.updateOuterGateState({
@@ -2083,34 +2002,31 @@ export class ClineProvider extends EventEmitter {
                 throw new Error("Pool analysis service is not configured yet.");
             }
             const analysis = await service.fetchAnalysisItems({ limit: 250 });
-            const { points, clusters, summary } = buildPassionMapFromAnalysis(analysis.items);
+            const { points, clusters, summary } = buildSimplePassionMap(analysis.items);
             const refreshedState = this.ensureOuterGateState();
-            const readyCount = analysis.items.filter((item) => item.status === "ready").length;
-            const processingCount = analysis.items.filter((item) => item.status === "processing").length;
-            const capturedCount = analysis.items.filter((item) => item.status === "captured").length;
+            const statusCounts = countAnalysisStatuses(analysis.items);
+            const generatedIso = analysis.generatedAt ?? new Date().toISOString();
             const totalCaptured = typeof analysis.totalItems === "number"
                 ? analysis.totalItems
-                : readyCount + processingCount + capturedCount;
-            const generatedIso = analysis.generatedAt ?? new Date().toISOString();
-            const passionMapState = {
-                status: "ready",
-                points,
-                clusters,
-                summary,
-                generatedAtIso: generatedIso,
-                lastRequestedIso: requestIso,
-                error: undefined,
-            };
+                : statusCounts.ready + statusCounts.processing + statusCounts.captured;
             this.updateOuterGateState({
                 ...refreshedState,
                 analysisPool: {
                     ...refreshedState.analysisPool,
                     totalCaptured,
-                    processing: processingCount,
-                    ready: readyCount,
+                    processing: statusCounts.processing,
+                    ready: statusCounts.ready,
                     lastUpdatedIso: generatedIso,
                 },
-                passionMap: passionMapState,
+                passionMap: {
+                    status: "ready",
+                    points,
+                    clusters,
+                    summary,
+                    generatedAtIso: generatedIso,
+                    lastRequestedIso: requestIso,
+                    error: undefined,
+                },
             });
         }
         catch (error) {
@@ -2139,7 +2055,6 @@ export class ClineProvider extends EventEmitter {
             });
         }
         await this.postStateToWebview();
-        await this.broadcastOuterGateStateSnapshot();
     }
     buildOuterGatePrompt(latestUserMessage) {
         const state = this.ensureOuterGateState();
@@ -2185,15 +2100,16 @@ Clover:`;
             return undefined;
         }
     }
-    async generateOuterGateResponse(prompt) {
+    async generateOuterGateResponse(latestUserMessage) {
         const { apiConfiguration } = await this.getState();
         if (!apiConfiguration || Object.keys(apiConfiguration).length === 0) {
             throw new Error("No language model configuration is available. Configure a provider in API settings to chat with Clover.");
         }
+        const prompt = this.buildOuterGatePrompt(latestUserMessage);
         const response = await singleCompletionHandler(apiConfiguration, prompt);
         return response.trim();
     }
-    async handleOuterGateMessage(text, clientMessageId, options) {
+    async handleOuterGateMessage(text, clientMessageId) {
         const trimmed = text.trim();
         if (!trimmed) {
             return;
@@ -2213,12 +2129,26 @@ Clover:`;
         };
         const hasMessage = baseState.cloverMessages.some((message) => message.id === messageId);
         const nextMessages = hasMessage ? [...baseState.cloverMessages] : [...baseState.cloverMessages, userMessage];
+        const recommendedWorkspace = this.getActiveWorkspaceName();
+        const newInsightId = messageId;
+        const newInsight = {
+            id: newInsightId,
+            title: trimmed.length > 90 ? `${trimmed.slice(0, 87)}…` : trimmed,
+            sourceType: "conversation",
+            stage: "processing",
+            recommendedWorkspace,
+            capturedAtIso: nowIso,
+            assignedCompanyId: recommendedWorkspace,
+        };
         let updatedState = {
             ...baseState,
             analysisPool: {
                 ...baseState.analysisPool,
+                totalCaptured: baseState.analysisPool.totalCaptured + 1,
+                processing: baseState.analysisPool.processing + 1,
                 lastUpdatedIso: nowIso,
             },
+            recentInsights: [newInsight, ...baseState.recentInsights.filter((insight) => insight.id !== newInsightId)],
             cloverMessages: nextMessages,
             isCloverProcessing: true,
         };
@@ -2238,29 +2168,34 @@ Clover:`;
         }
         this.updateOuterGateState(updatedState);
         await this.postStateToWebview();
-        const prompt = this.buildOuterGatePrompt(trimmed);
         try {
-            const rawAssistantReply = await this.generateOuterGateResponse(prompt);
-            const { text: cleanedAssistantReply, calls: functionCalls, parseErrors } = this.extractCloverFunctionCalls(rawAssistantReply);
-            const displayReply = cleanedAssistantReply.trim().length
-                ? cleanedAssistantReply
-                : "Automation request submitted.";
-            const assistantTokens = await this.estimateCloverTokenCount(displayReply);
+            const assistantReply = await this.generateOuterGateResponse(trimmed);
+            const assistantTokens = await this.estimateCloverTokenCount(assistantReply);
             const replyMessage = {
                 id: randomUUID(),
                 speaker: "clover",
-                text: displayReply,
+                text: assistantReply,
                 timestamp: new Date().toISOString(),
                 tokens: assistantTokens,
-                systemPromptPreview: prompt,
             };
             const readyState = this.ensureOuterGateState();
+            const summaryText = assistantReply.split("\n").find((line) => line.trim().length > 0) ?? assistantReply;
+            const responseInsights = readyState.recentInsights.map((insight) => insight.id === newInsightId
+                ? {
+                    ...insight,
+                    stage: "ready",
+                    summary: summaryText.length > 280 ? `${summaryText.slice(0, 277)}…` : summaryText,
+                }
+                : insight);
             let stateWithReply = {
                 ...readyState,
                 analysisPool: {
                     ...readyState.analysisPool,
+                    processing: Math.max(0, readyState.analysisPool.processing - 1),
+                    ready: readyState.analysisPool.ready + 1,
                     lastUpdatedIso: replyMessage.timestamp,
                 },
+                recentInsights: responseInsights,
                 cloverMessages: [...readyState.cloverMessages, replyMessage],
                 isCloverProcessing: false,
             };
@@ -2279,12 +2214,6 @@ Clover:`;
                 };
             }
             this.updateOuterGateState(stateWithReply);
-            try {
-                await this.executeCloverFunctionCalls(functionCalls, parseErrors, sessionId, options?.automationPass ?? 0);
-            }
-            catch (automationError) {
-                console.error("[ClineProvider] Clover automation failed", automationError);
-            }
         }
         catch (error) {
             console.error("[ClineProvider] Clover response failed", error);
@@ -2299,14 +2228,15 @@ Clover:`;
                 text: fallbackMessage,
                 timestamp: new Date().toISOString(),
                 tokens: errorTokens,
-                systemPromptPreview: prompt,
             };
             let stateWithError = {
                 ...readyState,
                 analysisPool: {
                     ...readyState.analysisPool,
+                    processing: Math.max(0, readyState.analysisPool.processing - 1),
                     lastUpdatedIso: errorReply.timestamp,
                 },
+                recentInsights: readyState.recentInsights.map((insight) => insight.id === newInsightId ? { ...insight, stage: "captured" } : insight),
                 cloverMessages: [...readyState.cloverMessages, errorReply],
                 isCloverProcessing: false,
             };
@@ -2327,2705 +2257,1286 @@ Clover:`;
             this.updateOuterGateState(stateWithError);
         }
         await this.postStateToWebview();
-        await this.broadcastOuterGateStateSnapshot();
     }
-    extractCloverFunctionCalls(raw) {
-        if (!raw) {
-            return { text: "", calls: [], parseErrors: [] };
+    async postStateToWebview() {
+        try {
+            const state = await this.getStateToPostToWebview();
+            verboseProviderLog("postStateToWebview", {
+                activeCompanyId: state.workplaceState?.activeCompanyId,
+                activeEmployeeId: state.workplaceState?.activeEmployeeId,
+                companyCount: state.workplaceState?.companies?.length ?? 0,
+            });
+            this.postMessageToWebview({ type: "state", state });
         }
-        const calls = [];
-        const parseErrors = [];
-        let text = raw;
-        const regex = /<functionCalls>([\s\S]*?)<\/functionCalls>/gi;
-        text = text.replace(regex, (_, block) => {
-            try {
-                const parsed = parseCloverFunctionCallBlock(block);
-                calls.push(...parsed);
+        catch (error) {
+            console.error("[ClineProvider.postStateToWebview] failed to send state", error);
+        }
+        // Check MDM compliance and send user to account tab if not compliant
+        // Only redirect if there's an actual MDM policy requiring authentication
+        if (this.mdmService?.requiresCloudAuth() && !this.checkMdmCompliance()) {
+            await this.postMessageToWebview({ type: "action", action: "cloudButtonClicked" });
+        }
+    }
+    async handleWorkdayStatusChange(companyId, state) {
+        void companyId;
+        void state;
+    }
+    // kilocode_change start
+    async postRulesDataToWebview() {
+        const workspacePath = this.cwd;
+        if (workspacePath) {
+            this.postMessageToWebview({
+                type: "rulesData",
+                ...(await getEnabledRules(workspacePath, this.contextProxy, this.context)),
+            });
+        }
+    }
+    // kilocode_change end
+    /**
+     * Fetches marketplace dataon demand to avoid blocking main state updates
+     */
+    async fetchMarketplaceData() {
+        try {
+            const [marketplaceResult, marketplaceInstalledMetadata] = await Promise.all([
+                this.marketplaceManager.getMarketplaceItems().catch((error) => {
+                    console.error("Failed to fetch marketplace items:", error);
+                    return { organizationMcps: [], marketplaceItems: [], errors: [error.message] };
+                }),
+                this.marketplaceManager.getInstallationMetadata().catch((error) => {
+                    console.error("Failed to fetch installation metadata:", error);
+                    return { project: {}, global: {} };
+                }),
+            ]);
+            // Send marketplace data separately
+            this.postMessageToWebview({
+                type: "marketplaceData",
+                organizationMcps: marketplaceResult.organizationMcps || [],
+                marketplaceItems: marketplaceResult.marketplaceItems || [],
+                marketplaceInstalledMetadata: marketplaceInstalledMetadata || { project: {}, global: {} },
+                errors: marketplaceResult.errors,
+            });
+        }
+        catch (error) {
+            console.error("Failed to fetch marketplace data:", error);
+            // Send empty data on error to prevent UI from hanging
+            this.postMessageToWebview({
+                type: "marketplaceData",
+                organizationMcps: [],
+                marketplaceItems: [],
+                marketplaceInstalledMetadata: { project: {}, global: {} },
+                errors: [error instanceof Error ? error.message : String(error)],
+            });
+            // Show user-friendly error notification for network issues
+            if (error instanceof Error && error.message.includes("timeout")) {
+                vscode.window.showWarningMessage("Marketplace data could not be loaded due to network restrictions. Core functionality remains available.");
             }
-            catch (error) {
-                const message = error instanceof Error ? error.message : String(error);
-                parseErrors.push(message);
-            }
-            return "";
+        }
+    }
+    /**
+     * Checks if there is a file-based system prompt override for the given mode
+     */
+    async hasFileBasedSystemPromptOverride(mode) {
+        const promptFilePath = getSystemPromptFilePath(this.cwd, mode);
+        return await fileExistsAtPath(promptFilePath);
+    }
+    /**
+     * Merges allowed commands from global state and workspace configuration
+     * with proper validation and deduplication
+     */
+    mergeAllowedCommands(globalStateCommands) {
+        return this.mergeCommandLists("allowedCommands", "allowed", globalStateCommands);
+    }
+    /**
+     * Merges denied commands from global state and workspace configuration
+     * with proper validation and deduplication
+     */
+    mergeDeniedCommands(globalStateCommands) {
+        return this.mergeCommandLists("deniedCommands", "denied", globalStateCommands);
+    }
+    /**
+     * Common utility for merging command lists from global state and workspace configuration.
+     * Implements the Command Denylist feature's merging strategy with proper validation.
+     *
+     * @param configKey - VSCode workspace configuration key
+     * @param commandType - Type of commands for error logging
+     * @param globalStateCommands - Commands from global state
+     * @returns Merged and deduplicated command list
+     */
+    mergeCommandLists(configKey, commandType, globalStateCommands) {
+        try {
+            // Validate and sanitize global state commands
+            const validGlobalCommands = Array.isArray(globalStateCommands)
+                ? globalStateCommands.filter((cmd) => typeof cmd === "string" && cmd.trim().length > 0)
+                : [];
+            // Get workspace configuration commands
+            const workspaceCommands = vscode.workspace.getConfiguration(Package.name).get(configKey) || [];
+            // Validate and sanitize workspace commands
+            const validWorkspaceCommands = Array.isArray(workspaceCommands)
+                ? workspaceCommands.filter((cmd) => typeof cmd === "string" && cmd.trim().length > 0)
+                : [];
+            // Combine and deduplicate commands
+            // Global state takes precedence over workspace configuration
+            const mergedCommands = [...new Set([...validGlobalCommands, ...validWorkspaceCommands])];
+            return mergedCommands;
+        }
+        catch (error) {
+            console.error(`Error merging ${commandType} commands:`, error);
+            // Return empty array as fallback to prevent crashes
+            return [];
+        }
+    }
+    async getEndlessSurfaceViewState() {
+        const service = this.getEndlessSurfaceService();
+        if (!service) {
+            return undefined;
+        }
+        const state = service.getState();
+        const activeSurfaceId = state.activeSurfaceId;
+        const activeSurface = activeSurfaceId ? await service.getSurfaceData(activeSurfaceId) : undefined;
+        return {
+            ...state,
+            activeSurface,
+        };
+    }
+    async getStateToPostToWebview() {
+        await this.ensureCloverSessionsInitialized();
+        const state = await this.getState();
+        const endlessSurfaceViewState = await this.getEndlessSurfaceViewState();
+        const { apiConfiguration, customInstructions, alwaysAllowReadOnly, alwaysAllowReadOnlyOutsideWorkspace, alwaysAllowWrite, alwaysAllowWriteOutsideWorkspace, alwaysAllowWriteProtected, alwaysAllowExecute, allowedCommands, deniedCommands, alwaysAllowBrowser, alwaysAllowMcp, alwaysAllowModeSwitch, alwaysAllowSubtasks, alwaysAllowUpdateTodoList, allowedMaxRequests, allowedMaxCost, autoCondenseContext, autoCondenseContextPercent, soundEnabled, ttsEnabled, ttsSpeed, diffEnabled, enableCheckpoints, taskHistory, soundVolume, browserViewportSize, screenshotQuality, remoteBrowserHost, remoteBrowserEnabled, cachedChromeHostUrl, writeDelayMs, terminalOutputLineLimit, terminalOutputCharacterLimit, terminalShellIntegrationTimeout, terminalShellIntegrationDisabled, terminalCommandDelay, terminalPowershellCounter, terminalZshClearEolMark, terminalZshOhMy, terminalZshP10k, terminalZdotdir, fuzzyMatchThreshold, 
+        // mcpEnabled,  // kilocode_change: always true
+        enableMcpServerCreation, alwaysApproveResubmit, requestDelaySeconds, currentApiConfigName, listApiConfigMeta, pinnedApiConfigs, mode, customModePrompts, customSupportPrompts, enhancementApiConfigId, commitMessageApiConfigId, // kilocode_change
+        terminalCommandApiConfigId, // kilocode_change
+        autoApprovalEnabled, customModes, experiments, maxOpenTabsContext, maxWorkspaceFiles, browserToolEnabled, browserInteractionStrategy, telemetrySetting, showRooIgnoredFiles, language, showAutoApproveMenu, // kilocode_change
+        showTaskTimeline, // kilocode_change
+        maxReadFileLine, maxImageFileSize, maxTotalImageSize, terminalCompressProgressBar, historyPreviewCollapsed, cloudUserInfo, cloudIsAuthenticated, sharingEnabled, organizationAllowList, organizationSettingsVersion, maxConcurrentFileReads, allowVeryLargeReads, // kilocode_change
+        ghostServiceSettings, // kilocode_changes
+        condensingApiConfigId, customCondensingPrompt, codebaseIndexConfig, codebaseIndexModels, profileThresholds, systemNotificationsEnabled, // kilocode_change
+        dismissedNotificationIds, // kilocode_change
+        morphApiKey, // kilocode_change
+        alwaysAllowFollowupQuestions, followupAutoApproveTimeoutMs, includeDiagnosticMessages, maxDiagnosticMessages, includeTaskHistoryInEnhance, remoteControlEnabled, openRouterImageApiKey, kiloCodeImageApiKey, openRouterImageGenerationSelectedModel, notificationEmail, notificationSmsNumber, notificationSmsGateway, notificationTelegramChatId, openRouterUseMiddleOutTransform, } = state;
+        verboseProviderLog("getStateToPostToWebview", {
+            renderContext: this.renderContext,
+            activeCompanyId: state.workplaceState?.activeCompanyId,
+            activeEmployeeId: state.workplaceState?.activeEmployeeId,
+            companyCount: state.workplaceState?.companies?.length ?? 0,
+            companyNames: state.workplaceState?.companies?.map((entry) => entry.name) ?? [],
         });
-        const cleaned = text
-            .replace(/[\n\r]{3,}/g, "\n\n")
-            .replace(/[ \t]{2,}/g, " ")
-            .trim();
-        return { text: cleaned, calls, parseErrors };
-    }
-    parseListCompaniesOptions(args) {
-        const record = coerceRecord(args, "list_companies arguments must be an object");
-        const search = toOptionalText(record.search ?? record.query ?? record.name);
-        const limit = this.normalizeLookupLimit(record.limit ?? record.count ?? record.max ?? record.page_size, "limit");
+        const telemetryKey = process.env.KILOCODE_POSTHOG_API_KEY;
+        const machineId = vscode.env.machineId;
+        const mergedAllowedCommands = this.mergeAllowedCommands(allowedCommands);
+        const mergedDeniedCommands = this.mergeDeniedCommands(deniedCommands);
+        const cwd = this.cwd;
+        // Check if there's a system prompt override for the current mode
+        const currentMode = mode ?? defaultModeSlug;
+        const hasSystemPromptOverride = await this.hasFileBasedSystemPromptOverride(currentMode);
+        // kilocode_change start wrapper information
+        const kiloCodeWrapperProperties = getKiloCodeWrapperProperties();
+        // kilocode_change end
+        const workplaceService = this.getWorkplaceService();
+        const workplaceStateSnapshot = workplaceService?.getState();
+        const companyNames = workplaceStateSnapshot?.companies?.map((company) => company.name) ?? [];
+        verboseProviderLog("getState", {
+            renderContext: this.renderContext,
+            hasWorkplace: Boolean(workplaceService),
+            companyCount: workplaceStateSnapshot?.companies?.length ?? 0,
+            companyNames,
+        });
         return {
-            search,
-            limit,
+            version: this.context.extension?.packageJSON?.version ?? "",
+            apiConfiguration,
+            customInstructions,
+            alwaysAllowReadOnly: alwaysAllowReadOnly ?? true,
+            alwaysAllowReadOnlyOutsideWorkspace: alwaysAllowReadOnlyOutsideWorkspace ?? true,
+            alwaysAllowWrite: alwaysAllowWrite ?? true,
+            alwaysAllowWriteOutsideWorkspace: alwaysAllowWriteOutsideWorkspace ?? false,
+            alwaysAllowWriteProtected: alwaysAllowWriteProtected ?? false,
+            alwaysAllowExecute: alwaysAllowExecute ?? true,
+            alwaysAllowBrowser: alwaysAllowBrowser ?? true,
+            alwaysAllowMcp: alwaysAllowMcp ?? true,
+            alwaysAllowModeSwitch: alwaysAllowModeSwitch ?? true,
+            alwaysAllowSubtasks: alwaysAllowSubtasks ?? true,
+            alwaysAllowUpdateTodoList: alwaysAllowUpdateTodoList ?? true,
+            allowedMaxRequests,
+            allowedMaxCost,
+            autoCondenseContext: autoCondenseContext ?? true,
+            autoCondenseContextPercent: autoCondenseContextPercent ?? 100,
+            uriScheme: vscode.env.uriScheme,
+            uiKind: vscode.UIKind[vscode.env.uiKind], // kilocode_change
+            kiloCodeWrapperProperties, // kilocode_change wrapper information
+            kilocodeDefaultModel: await getKilocodeDefaultModel(apiConfiguration.kilocodeToken, apiConfiguration.kilocodeOrganizationId),
+            currentTaskItem: this.getCurrentTask()?.taskId
+                ? (taskHistory || []).find((item) => item.id === this.getCurrentTask()?.taskId)
+                : undefined,
+            clineMessages: this.getCurrentTask()?.clineMessages || [],
+            currentTaskTodos: this.getCurrentTask()?.todoList || [],
+            messageQueue: this.getCurrentTask()?.messageQueueService?.messages,
+            conversationHoldState: this.getCurrentTask()?.currentConversationHoldState,
+            conversationAgents: this.getCurrentTask()?.currentConversationAgents ?? [],
+            lastOrchestratorAnalysis: this.getCurrentTask()?.currentOrchestratorAnalysis,
+            taskHistory: (taskHistory || [])
+                .filter((item) => item.ts && item.task)
+                .sort((a, b) => b.ts - a.ts),
+            soundEnabled: soundEnabled ?? false,
+            ttsEnabled: ttsEnabled ?? false,
+            ttsSpeed: ttsSpeed ?? 1.0,
+            diffEnabled: diffEnabled ?? true,
+            enableCheckpoints: enableCheckpoints ?? true,
+            shouldShowAnnouncement: false, // kilocode_change
+            allowedCommands: mergedAllowedCommands,
+            deniedCommands: mergedDeniedCommands,
+            soundVolume: soundVolume ?? 0.5,
+            browserViewportSize: browserViewportSize ?? "900x600",
+            screenshotQuality: screenshotQuality ?? 75,
+            remoteBrowserHost,
+            remoteBrowserEnabled: remoteBrowserEnabled ?? false,
+            cachedChromeHostUrl: cachedChromeHostUrl,
+            writeDelayMs: writeDelayMs ?? DEFAULT_WRITE_DELAY_MS,
+            terminalOutputLineLimit: terminalOutputLineLimit ?? 500,
+            terminalOutputCharacterLimit: terminalOutputCharacterLimit ?? DEFAULT_TERMINAL_OUTPUT_CHARACTER_LIMIT,
+            terminalShellIntegrationTimeout: terminalShellIntegrationTimeout ?? Terminal.defaultShellIntegrationTimeout,
+            terminalShellIntegrationDisabled: terminalShellIntegrationDisabled ?? true, // kilocode_change: default
+            terminalCommandDelay: terminalCommandDelay ?? 0,
+            terminalPowershellCounter: terminalPowershellCounter ?? false,
+            terminalZshClearEolMark: terminalZshClearEolMark ?? true,
+            terminalZshOhMy: terminalZshOhMy ?? false,
+            terminalZshP10k: terminalZshP10k ?? false,
+            terminalZdotdir: terminalZdotdir ?? false,
+            fuzzyMatchThreshold: fuzzyMatchThreshold ?? 1.0,
+            mcpEnabled: true, // kilocode_change: always true
+            enableMcpServerCreation: enableMcpServerCreation ?? true,
+            alwaysApproveResubmit: alwaysApproveResubmit ?? false,
+            requestDelaySeconds: requestDelaySeconds ?? 10,
+            currentApiConfigName: currentApiConfigName ?? "default",
+            listApiConfigMeta: listApiConfigMeta ?? [],
+            pinnedApiConfigs: pinnedApiConfigs ?? {},
+            mode: mode ?? defaultModeSlug,
+            customModePrompts: customModePrompts ?? {},
+            customSupportPrompts: customSupportPrompts ?? {},
+            enhancementApiConfigId,
+            commitMessageApiConfigId, // kilocode_change
+            terminalCommandApiConfigId, // kilocode_change
+            autoApprovalEnabled: autoApprovalEnabled ?? true,
+            customModes,
+            experiments: experiments ?? experimentDefault,
+            mcpServers: this.mcpHub?.getAllServers() ?? [],
+            maxOpenTabsContext: maxOpenTabsContext ?? 20,
+            maxWorkspaceFiles: maxWorkspaceFiles ?? 200,
+            cwd,
+            browserToolEnabled: browserToolEnabled ?? true,
+            browserInteractionStrategy: browserInteractionStrategy ?? "legacy",
+            telemetrySetting,
+            telemetryKey,
+            machineId,
+            showRooIgnoredFiles: showRooIgnoredFiles ?? false,
+            showAutoApproveMenu: showAutoApproveMenu ?? false, // kilocode_change
+            showTaskTimeline: showTaskTimeline ?? true, // kilocode_change
+            language, // kilocode_change
+            renderContext: this.renderContext,
+            maxReadFileLine: maxReadFileLine ?? -1,
+            maxImageFileSize: maxImageFileSize ?? 5,
+            maxTotalImageSize: maxTotalImageSize ?? 20,
+            maxConcurrentFileReads: maxConcurrentFileReads ?? 5,
+            allowVeryLargeReads: allowVeryLargeReads ?? false, // kilocode_change
+            settingsImportedAt: this.settingsImportedAt,
+            terminalCompressProgressBar: terminalCompressProgressBar ?? true,
+            hasSystemPromptOverride,
+            historyPreviewCollapsed: historyPreviewCollapsed ?? false,
+            cloudUserInfo,
+            cloudIsAuthenticated: cloudIsAuthenticated ?? false,
+            sharingEnabled: sharingEnabled ?? false,
+            organizationAllowList,
+            // kilocode_change start
+            ghostServiceSettings: ghostServiceSettings ?? {
+                enableQuickInlineTaskKeybinding: true,
+                enableSmartInlineTaskKeybinding: true,
+            },
+            // kilocode_change end
+            organizationSettingsVersion,
+            condensingApiConfigId,
+            customCondensingPrompt,
+            codebaseIndexModels: codebaseIndexModels ?? EMBEDDING_MODEL_PROFILES,
+            codebaseIndexConfig: {
+                codebaseIndexEnabled: codebaseIndexConfig?.codebaseIndexEnabled ?? true,
+                codebaseIndexQdrantUrl: codebaseIndexConfig?.codebaseIndexQdrantUrl ?? "http://localhost:6333",
+                codebaseIndexEmbedderProvider: codebaseIndexConfig?.codebaseIndexEmbedderProvider ?? "openai",
+                codebaseIndexEmbedderBaseUrl: codebaseIndexConfig?.codebaseIndexEmbedderBaseUrl ?? "",
+                codebaseIndexEmbedderModelId: codebaseIndexConfig?.codebaseIndexEmbedderModelId ?? "",
+                codebaseIndexEmbedderModelDimension: codebaseIndexConfig?.codebaseIndexEmbedderModelDimension ?? 1536,
+                codebaseIndexOpenAiCompatibleBaseUrl: codebaseIndexConfig?.codebaseIndexOpenAiCompatibleBaseUrl,
+                codebaseIndexSearchMaxResults: codebaseIndexConfig?.codebaseIndexSearchMaxResults,
+                codebaseIndexSearchMinScore: codebaseIndexConfig?.codebaseIndexSearchMinScore,
+            },
+            // Only set mdmCompliant if there's an actual MDM policy
+            // undefined means no MDM policy, true means compliant, false means non-compliant
+            mdmCompliant: this.mdmService?.requiresCloudAuth() ? this.checkMdmCompliance() : undefined,
+            profileThresholds: profileThresholds ?? {},
+            cloudApiUrl: getRooCodeApiUrl(),
+            hasOpenedModeSelector: this.getGlobalState("hasOpenedModeSelector") ?? false,
+            systemNotificationsEnabled: systemNotificationsEnabled ?? false, // kilocode_change
+            dismissedNotificationIds: dismissedNotificationIds ?? [], // kilocode_change
+            morphApiKey, // kilocode_change
+            alwaysAllowFollowupQuestions: alwaysAllowFollowupQuestions ?? false,
+            followupAutoApproveTimeoutMs: followupAutoApproveTimeoutMs ?? 60000,
+            includeDiagnosticMessages: includeDiagnosticMessages ?? true,
+            maxDiagnosticMessages: maxDiagnosticMessages ?? 50,
+            includeTaskHistoryInEnhance: includeTaskHistoryInEnhance ?? true,
+            remoteControlEnabled,
+            openRouterImageApiKey,
+            kiloCodeImageApiKey,
+            openRouterImageGenerationSelectedModel,
+            notificationEmail,
+            notificationSmsNumber,
+            notificationSmsGateway,
+            openRouterUseMiddleOutTransform,
+            endlessSurface: endlessSurfaceViewState,
+            workplaceState: workplaceStateSnapshot ?? { companies: [] },
+            workplaceRootConfigured: this.workplaceFilesystemManager?.isConfigured() ?? false,
+            workplaceRootUri: this.workplaceFilesystemManager?.getRootUri()?.fsPath,
+            outerGateState: this.getOuterGateStateSnapshot(),
         };
     }
-    parseListInsightsOptions(args) {
-        const record = coerceRecord(args, "list_insights arguments must be an object");
-        const search = toOptionalText(record.search ?? record.query ?? record.title ?? record.summary);
-        const stageRaw = record.stage ?? record.status;
-        const stage = stageRaw !== undefined ? normalizeInsightStageInput(stageRaw, "stage") : undefined;
-        const assignedCompanyId = toOptionalText(record.assigned_company_id ?? record.company_id ?? record.assigned_company ?? record.workspace_company);
-        const limit = this.normalizeLookupLimit(record.limit ?? record.count ?? record.max ?? record.page_size, "limit");
-        return {
-            search,
-            stage,
-            assignedCompanyId,
-            limit,
+    /**
+     * Storage
+     * https://dev.to/kompotkot/how-to-use-secretstorage-in-your-vscode-extensions-2hco
+     * https://www.eliostruyf.com/devhack-code-extension-storage-options/
+     */
+    async getState() {
+        const stateValues = this.contextProxy.getValues();
+        const customModes = await this.customModesManager.getCustomModes();
+        const workplaceStateSnapshot = this.getWorkplaceService()?.getState();
+        // Determine apiProvider with the same logic as before.
+        const apiProvider = stateValues.apiProvider ? stateValues.apiProvider : "kilocode"; // kilocode_change: fall back to kilocode
+        // Build the apiConfiguration object combining state values and secrets.
+        const providerSettings = this.contextProxy.getProviderSettings();
+        // Ensure apiProvider is set properly if not already in state
+        if (!providerSettings.apiProvider) {
+            providerSettings.apiProvider = apiProvider;
+        }
+        let organizationAllowList = ORGANIZATION_ALLOW_ALL;
+        try {
+            organizationAllowList = await CloudService.instance.getAllowList();
+        }
+        catch (error) {
+            console.error(`[getState] failed to get organization allow list: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        let cloudUserInfo = null;
+        try {
+            cloudUserInfo = CloudService.instance.getUserInfo();
+        }
+        catch (error) {
+            console.error(`[getState] failed to get cloud user info: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        let cloudIsAuthenticated = false;
+        try {
+            cloudIsAuthenticated = CloudService.instance.isAuthenticated();
+        }
+        catch (error) {
+            console.error(`[getState] failed to get cloud authentication state: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        let sharingEnabled = false;
+        try {
+            sharingEnabled = await CloudService.instance.canShareTask();
+        }
+        catch (error) {
+            console.error(`[getState] failed to get sharing enabled state: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        let organizationSettingsVersion = -1;
+        try {
+            if (CloudService.hasInstance()) {
+                const settings = CloudService.instance.getOrganizationSettings();
+                organizationSettingsVersion = settings?.version ?? -1;
+            }
+        }
+        catch (error) {
+            console.error(`[getState] failed to get organization settings version: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        // Build the same structure as before.
+        const result = {
+            apiConfiguration: providerSettings,
+            kilocodeDefaultModel: await getKilocodeDefaultModel(providerSettings.kilocodeToken, providerSettings.kilocodeOrganizationId), // kilocode_change
+            lastShownAnnouncementId: stateValues.lastShownAnnouncementId,
+            customInstructions: stateValues.customInstructions,
+            apiModelId: stateValues.apiModelId,
+            alwaysAllowReadOnly: stateValues.alwaysAllowReadOnly ?? true,
+            alwaysAllowReadOnlyOutsideWorkspace: stateValues.alwaysAllowReadOnlyOutsideWorkspace ?? true,
+            alwaysAllowWrite: stateValues.alwaysAllowWrite ?? true,
+            alwaysAllowWriteOutsideWorkspace: stateValues.alwaysAllowWriteOutsideWorkspace ?? false,
+            alwaysAllowWriteProtected: stateValues.alwaysAllowWriteProtected ?? false,
+            alwaysAllowExecute: stateValues.alwaysAllowExecute ?? true,
+            alwaysAllowBrowser: stateValues.alwaysAllowBrowser ?? true,
+            alwaysAllowMcp: stateValues.alwaysAllowMcp ?? true,
+            alwaysAllowModeSwitch: stateValues.alwaysAllowModeSwitch ?? true,
+            alwaysAllowSubtasks: stateValues.alwaysAllowSubtasks ?? true,
+            alwaysAllowFollowupQuestions: stateValues.alwaysAllowFollowupQuestions ?? false,
+            alwaysAllowUpdateTodoList: stateValues.alwaysAllowUpdateTodoList ?? true, // kilocode_change
+            followupAutoApproveTimeoutMs: stateValues.followupAutoApproveTimeoutMs ?? 60000,
+            diagnosticsEnabled: stateValues.diagnosticsEnabled ?? true,
+            allowedMaxRequests: stateValues.allowedMaxRequests,
+            allowedMaxCost: stateValues.allowedMaxCost,
+            autoCondenseContext: stateValues.autoCondenseContext ?? true,
+            autoCondenseContextPercent: stateValues.autoCondenseContextPercent ?? 100,
+            taskHistory: stateValues.taskHistory ?? [],
+            allowedCommands: stateValues.allowedCommands,
+            deniedCommands: stateValues.deniedCommands,
+            soundEnabled: stateValues.soundEnabled ?? false,
+            ttsEnabled: stateValues.ttsEnabled ?? false,
+            ttsSpeed: stateValues.ttsSpeed ?? 1.0,
+            diffEnabled: stateValues.diffEnabled ?? true,
+            enableCheckpoints: stateValues.enableCheckpoints ?? true,
+            soundVolume: stateValues.soundVolume,
+            browserViewportSize: stateValues.browserViewportSize ?? "900x600",
+            screenshotQuality: stateValues.screenshotQuality ?? 75,
+            remoteBrowserHost: stateValues.remoteBrowserHost,
+            remoteBrowserEnabled: stateValues.remoteBrowserEnabled ?? true,
+            cachedChromeHostUrl: stateValues.cachedChromeHostUrl,
+            fuzzyMatchThreshold: stateValues.fuzzyMatchThreshold ?? 1.0,
+            writeDelayMs: stateValues.writeDelayMs ?? DEFAULT_WRITE_DELAY_MS,
+            terminalOutputLineLimit: stateValues.terminalOutputLineLimit ?? 500,
+            terminalOutputCharacterLimit: stateValues.terminalOutputCharacterLimit ?? DEFAULT_TERMINAL_OUTPUT_CHARACTER_LIMIT,
+            terminalShellIntegrationTimeout: stateValues.terminalShellIntegrationTimeout ?? Terminal.defaultShellIntegrationTimeout,
+            terminalShellIntegrationDisabled: stateValues.terminalShellIntegrationDisabled ?? true, // kilocode_change: default
+            terminalCommandDelay: stateValues.terminalCommandDelay ?? 0,
+            terminalPowershellCounter: stateValues.terminalPowershellCounter ?? false,
+            terminalZshClearEolMark: stateValues.terminalZshClearEolMark ?? true,
+            terminalZshOhMy: stateValues.terminalZshOhMy ?? false,
+            terminalZshP10k: stateValues.terminalZshP10k ?? false,
+            terminalZdotdir: stateValues.terminalZdotdir ?? false,
+            terminalCompressProgressBar: stateValues.terminalCompressProgressBar ?? true,
+            mode: stateValues.mode ?? defaultModeSlug,
+            language: stateValues.language ?? formatLanguage(vscode.env.language),
+            mcpEnabled: true, // kilocode_change: always true
+            enableMcpServerCreation: stateValues.enableMcpServerCreation ?? true,
+            alwaysApproveResubmit: stateValues.alwaysApproveResubmit ?? false,
+            requestDelaySeconds: Math.max(5, stateValues.requestDelaySeconds ?? 10),
+            currentApiConfigName: stateValues.currentApiConfigName ?? "default",
+            listApiConfigMeta: stateValues.listApiConfigMeta ?? [],
+            pinnedApiConfigs: stateValues.pinnedApiConfigs ?? {},
+            modeApiConfigs: stateValues.modeApiConfigs ?? {},
+            customModePrompts: stateValues.customModePrompts ?? {},
+            customSupportPrompts: stateValues.customSupportPrompts ?? {},
+            enhancementApiConfigId: stateValues.enhancementApiConfigId,
+            commitMessageApiConfigId: stateValues.commitMessageApiConfigId, // kilocode_change
+            terminalCommandApiConfigId: stateValues.terminalCommandApiConfigId, // kilocode_change
+            // kilocode_change start
+            ghostServiceSettings: stateValues.ghostServiceSettings ?? {
+                enableQuickInlineTaskKeybinding: true,
+                enableSmartInlineTaskKeybinding: true,
+            },
+            // kilocode_change end
+            experiments: stateValues.experiments ?? experimentDefault,
+            autoApprovalEnabled: stateValues.autoApprovalEnabled ?? true,
+            customModes,
+            maxOpenTabsContext: stateValues.maxOpenTabsContext ?? 20,
+            maxWorkspaceFiles: stateValues.maxWorkspaceFiles ?? 200,
+            openRouterUseMiddleOutTransform: stateValues.openRouterUseMiddleOutTransform,
+            browserToolEnabled: stateValues.browserToolEnabled ?? true,
+            browserInteractionStrategy: stateValues.browserInteractionStrategy ?? "legacy",
+            telemetrySetting: stateValues.telemetrySetting || "unset",
+            showRooIgnoredFiles: stateValues.showRooIgnoredFiles ?? false,
+            showAutoApproveMenu: stateValues.showAutoApproveMenu ?? false, // kilocode_change
+            showTaskTimeline: stateValues.showTaskTimeline ?? true, // kilocode_change
+            maxReadFileLine: stateValues.maxReadFileLine ?? -1,
+            maxImageFileSize: stateValues.maxImageFileSize ?? 5,
+            maxTotalImageSize: stateValues.maxTotalImageSize ?? 20,
+            maxConcurrentFileReads: stateValues.maxConcurrentFileReads ?? 5,
+            allowVeryLargeReads: stateValues.allowVeryLargeReads ?? false, // kilocode_change
+            systemNotificationsEnabled: stateValues.systemNotificationsEnabled ?? true, // kilocode_change
+            dismissedNotificationIds: stateValues.dismissedNotificationIds ?? [], // kilocode_change
+            morphApiKey: stateValues.morphApiKey, // kilocode_change
+            historyPreviewCollapsed: stateValues.historyPreviewCollapsed ?? false,
+            cloudUserInfo,
+            cloudIsAuthenticated,
+            sharingEnabled,
+            organizationAllowList,
+            organizationSettingsVersion,
+            condensingApiConfigId: stateValues.condensingApiConfigId,
+            customCondensingPrompt: stateValues.customCondensingPrompt,
+            codebaseIndexModels: stateValues.codebaseIndexModels ?? EMBEDDING_MODEL_PROFILES,
+            codebaseIndexConfig: {
+                codebaseIndexEnabled: stateValues.codebaseIndexConfig?.codebaseIndexEnabled ?? true,
+                codebaseIndexQdrantUrl: stateValues.codebaseIndexConfig?.codebaseIndexQdrantUrl ?? "http://localhost:6333",
+                codebaseIndexEmbedderProvider: stateValues.codebaseIndexConfig?.codebaseIndexEmbedderProvider ?? "openai",
+                codebaseIndexEmbedderBaseUrl: stateValues.codebaseIndexConfig?.codebaseIndexEmbedderBaseUrl ?? "",
+                codebaseIndexEmbedderModelId: stateValues.codebaseIndexConfig?.codebaseIndexEmbedderModelId ?? "",
+                codebaseIndexEmbedderModelDimension: stateValues.codebaseIndexConfig?.codebaseIndexEmbedderModelDimension,
+                codebaseIndexOpenAiCompatibleBaseUrl: stateValues.codebaseIndexConfig?.codebaseIndexOpenAiCompatibleBaseUrl,
+                codebaseIndexSearchMaxResults: stateValues.codebaseIndexConfig?.codebaseIndexSearchMaxResults,
+                codebaseIndexSearchMinScore: stateValues.codebaseIndexConfig?.codebaseIndexSearchMinScore,
+            },
+            profileThresholds: stateValues.profileThresholds ?? {},
+            includeDiagnosticMessages: stateValues.includeDiagnosticMessages ?? true,
+            maxDiagnosticMessages: stateValues.maxDiagnosticMessages ?? 50,
+            includeTaskHistoryInEnhance: stateValues.includeTaskHistoryInEnhance ?? true,
+            remoteControlEnabled: (() => {
+                try {
+                    const cloudSettings = CloudService.instance.getUserSettings();
+                    return cloudSettings?.settings?.extensionBridgeEnabled ?? false;
+                }
+                catch (error) {
+                    console.error(`[getState] failed to get remote control setting from cloud: ${error instanceof Error ? error.message : String(error)}`);
+                    return false;
+                }
+            })(),
+            openRouterImageApiKey: stateValues.openRouterImageApiKey,
+            kiloCodeImageApiKey: stateValues.kiloCodeImageApiKey,
+            openRouterImageGenerationSelectedModel: stateValues.openRouterImageGenerationSelectedModel,
+            notificationEmail: stateValues.notificationEmail,
+            notificationSmsNumber: stateValues.notificationSmsNumber,
+            notificationSmsGateway: stateValues.notificationSmsGateway,
+            notificationTelegramChatId: stateValues.notificationTelegramChatId,
+            workplaceState: workplaceStateSnapshot ?? { companies: [] },
+            workplaceRootConfigured: this.workplaceFilesystemManager?.isConfigured() ?? false,
+            workplaceRootUri: this.workplaceFilesystemManager?.getRootUri()?.fsPath,
         };
+        const companyCount = result.workplaceState?.companies?.length ?? 0;
+        const companyNames = result.workplaceState?.companies?.map((company) => company.name) ?? [];
+        verboseProviderLog("[ClineProvider.getState] returning companyCount=%d companyNames=%o", companyCount, companyNames);
+        return result;
     }
-    formatIsoDateForNote(iso) {
-        const normalized = toOptionalText(iso);
-        if (!normalized) {
-            return undefined;
-        }
-        const timestamp = Date.parse(normalized);
-        if (Number.isNaN(timestamp)) {
-            return undefined;
-        }
-        return new Date(timestamp).toISOString().slice(0, 10);
-    }
-    truncateForNote(value, limit = CLOVER_LOOKUP_SUMMARY_LIMIT) {
-        if (value.length <= limit) {
-            return value;
-        }
-        return `${value.slice(0, Math.max(1, limit - 1)).trim()}…`;
-    }
-    normalizeLookupLimit(value, field, defaultValue = CLOVER_LOOKUP_DEFAULT_LIMIT, min = CLOVER_LOOKUP_MIN_LIMIT, max = CLOVER_LOOKUP_MAX_LIMIT) {
-        if (value === undefined || value === null) {
-            return defaultValue;
-        }
-        let numeric;
-        if (typeof value === "number") {
-            numeric = value;
-        }
-        else if (typeof value === "string") {
-            const trimmed = value.trim();
-            if (!trimmed) {
-                return defaultValue;
-            }
-            const parsed = Number(trimmed);
-            if (!Number.isFinite(parsed)) {
-                throw new Error(`${field} must be a number`);
-            }
-            numeric = parsed;
+    async updateTaskHistory(item) {
+        const history = this.getGlobalState("taskHistory") || [];
+        const existingItemIndex = history.findIndex((h) => h.id === item.id);
+        if (existingItemIndex !== -1) {
+            history[existingItemIndex] = item;
         }
         else {
-            throw new Error(`${field} must be a number`);
+            history.push(item);
         }
-        if (!Number.isFinite(numeric)) {
-            throw new Error(`${field} must be a finite number`);
-        }
-        const int = Math.trunc(numeric);
-        if (int < min || int > max) {
-            throw new Error(`${field} must be between ${min} and ${max}`);
-        }
-        return int;
+        await this.updateGlobalState("taskHistory", history);
+        this.recentTasksCache = undefined;
+        return history;
     }
-    break;
-}
-"list_insights";
-{
-    const options = this.parseListInsightsOptions(call.arguments);
-    const manager = await this.getOuterGateManager();
-    const combined = [];
-    const seen = new Set();
-    const pushInsight = (insight) => {
-        if (!insight || !insight.id || seen.has(insight.id)) {
+    // ContextProxy
+    // @deprecated - Use `ContextProxy#setValue` instead.
+    async updateGlobalState(key, value) {
+        await this.contextProxy.setValue(key, value);
+    }
+    // @deprecated - Use `ContextProxy#getValue` instead.
+    getGlobalState(key) {
+        return this.contextProxy.getValue(key);
+    }
+    async setValue(key, value) {
+        await this.contextProxy.setValue(key, value);
+    }
+    getValue(key) {
+        return this.contextProxy.getValue(key);
+    }
+    getValues() {
+        return this.contextProxy.getValues();
+    }
+    async setValues(values) {
+        await this.contextProxy.setValues(values);
+    }
+    // dev
+    async resetState() {
+        const answer = await vscode.window.showInformationMessage(t("common:confirmation.reset_state"), { modal: true }, t("common:answers.yes"));
+        if (answer !== t("common:answers.yes")) {
             return;
         }
-        combined.push({ ...insight });
-        seen.add(insight.id);
-    };
-    if (manager) {
-        for (const stored of manager.listStoredInsights()) {
-            pushInsight(storedInsightToOuterGate(stored));
-        }
-    }
-    for (const recent of this.ensureOuterGateState().recentInsights) {
-        pushInsight(recent);
-    }
-    let insights = combined;
-    if (options.search) {
-        const term = options.search.toLowerCase();
-        insights = insights.filter((insight) => {
-            const idMatch = insight.id.toLowerCase().includes(term);
-            const titleMatch = optionalString(insight.title)?.toLowerCase().includes(term) ?? false;
-            const summaryMatch = optionalString(insight.summary)?.toLowerCase().includes(term) ?? false;
-            const workspaceMatch = optionalString(insight.recommendedWorkspace)?.toLowerCase().includes(term) ?? false;
-            const companyMatch = optionalString(insight.assignedCompanyId)?.toLowerCase().includes(term) ?? false;
-            return idMatch || titleMatch || summaryMatch || workspaceMatch || companyMatch;
-        });
-    }
-    if (options.stage) {
-        insights = insights.filter((insight) => insight.stage === options.stage);
-    }
-    if (options.assignedCompanyId) {
-        insights = insights.filter((insight) => optionalString(insight.assignedCompanyId) === options.assignedCompanyId);
-    }
-    if (!insights.length) {
-        const filters = [];
-        if (options.search) {
-            filters.push(`search "${options.search}"`);
-        }
-        if (options.stage) {
-            filters.push(`stage ${options.stage}`);
-        }
-        if (options.assignedCompanyId) {
-            filters.push(`company ${options.assignedCompanyId}`);
-        }
-        const context = filters.length ? ` for ${filters.join(", ")}` : "";
-        summary = `No insights found${context}.`;
-        break;
-    }
-    const total = insights.length;
-    const limited = insights.slice(0, options.limit);
-    const qualifiers = [];
-    if (options.stage) {
-        qualifiers.push(`stage ${options.stage}`);
-    }
-    if (options.assignedCompanyId) {
-        qualifiers.push(`company ${options.assignedCompanyId}`);
-    }
-    if (options.search) {
-        qualifiers.push(`search "${options.search}"`);
-    }
-    const qualifierSuffix = qualifiers.length ? ` (${qualifiers.join(", ")})` : "";
-    summary =
-        total === 1
-            ? `Found 1 insight${qualifierSuffix}.`
-            : `Found ${total} insights${qualifierSuffix}.`;
-    if (total > options.limit) {
-        summary += ` Showing ${limited.length}.`;
-    }
-    const detailLines = limited.map((insight) => {
-        const title = optionalString(insight.title) ?? "(untitled insight)";
-        const metaParts = [`stage: ${insight.stage}`];
-        const assignedCompany = optionalString(insight.assignedCompanyId);
-        if (assignedCompany) {
-            metaParts.push(`company: ${assignedCompany}`);
-        }
-        const workspace = optionalString(insight.recommendedWorkspace);
-        if (workspace) {
-            metaParts.push(`workspace: ${workspace}`);
-        }
-        const captured = this.formatIsoDateForNote(insight.capturedAtIso);
-        if (captured) {
-            metaParts.push(`captured: ${captured}`);
-        }
-        const summaryText = optionalString(insight.summary);
-        const summarySuffix = summaryText
-            ? ` — ${this.truncateForNote(summaryText, CLOVER_LOOKUP_SUMMARY_LIMIT)}`
-            : "";
-        return `${title} — id: ${insight.id}, ${metaParts.join(", ")}${summarySuffix}`;
-    });
-    if (total > options.limit) {
-        detailLines.push(`…${total - options.limit} more not shown`);
-    }
-    outputLines = detailLines;
-    break;
-}
-"create_company";
-{
-    const payloads = parseCreateCompanyPayloads(call.arguments);
-    if (!payloads.length) {
-        const message = "create_company requires at least one company payload.";
-        errorNotes.push(message);
-        status = "failed";
-        error = message;
-        summary = "Clover didn't receive any company payloads to create.";
-        break;
-    }
-    for (const payload of payloads) {
-        await workplaceService.createCompany(payload);
-    }
-    const names = payloads
-        .map((payload) => optionalString(payload.name))
-        .filter((name) => Boolean(name));
-    if (payloads.length === 1) {
-        summary = names.length
-            ? `Created company ${names[0]}.`
-            : "Created a new company space.";
-    }
-    else {
-        summary = `Created ${payloads.length} companies.`;
-        if (names.length) {
-            summary += ` Examples: ${formatAutomationListPreview(names)}.`;
-        }
-    }
-    outputLines = names.length ? names.slice(0, 4) : undefined;
-    break;
-}
-"update_company";
-{
-    const payloads = parseUpdateCompanyPayloads(call.arguments);
-    if (!payloads.length) {
-        const message = "update_company requires at least one update payload.";
-        errorNotes.push(message);
-        status = "failed";
-        error = message;
-        summary = "No company updates were provided.";
-        break;
-    }
-    const summaries = [];
-    for (const payload of payloads) {
-        await workplaceService.updateCompany(payload);
-        const name = optionalString(payload.name);
-        summaries.push(name ? `${payload.id} → ${name}` : `${payload.id}`);
-    }
-    summary =
-        payloads.length === 1
-            ? `Updated company ${summaries[0]}.`
-            : `Updated ${payloads.length} companies.`;
-    outputLines = summaries;
-    break;
-}
-"create_insight";
-{
-    const payloads = parseCreateInsightPayloads(call.arguments);
-    if (!payloads.length) {
-        errorNotes.push("create_insight requires at least one insight payload.");
-        status = "failed";
-        summary = "No insight payloads were provided.";
-        break;
-    }
-    const manager = await this.getOuterGateManager();
-    const createdInsights = [];
-    for (const payload of payloads) {
-        const nowIso = new Date().toISOString();
-        let insightId = payload.id;
-        if (insightId) {
-            const conflict = manager?.getStoredInsightById(insightId) || this.findInsightSnapshot(insightId);
-            if (conflict) {
-                insightId = `${insightId}-${randomUUID().slice(0, 6)}`;
-            }
-        }
-        if (!insightId) {
-            insightId = `insight-${randomUUID()}`;
-        }
-        const capturedAtIso = payload.capturedAtIso ?? nowIso;
-        const nextInsight = {
-            id: insightId,
-            title: payload.title,
-            summary: payload.summary,
-            recommendedWorkspace: payload.recommendedWorkspace,
-            assignedCompanyId: payload.assignedCompanyId,
-            stage: payload.stage ?? "captured",
-            sourceType: payload.sourceType ?? "conversation",
-            capturedAtIso,
-        };
-        const stored = {
-            ...nextInsight,
-            integrationId: CLOVER_CONVERSATION_INTEGRATION_ID,
-            upsertedAtIso: nowIso,
-        };
-        await manager?.upsertInsights([stored]);
-        await this.applyInsightMutation({
-            nextInsight,
-            event: {
-                type: "created",
-                insight: nextInsight,
-                note: payload.note,
-            },
-            sessionId,
-        });
-        createdInsights.push(nextInsight);
-    }
-    summary =
-        createdInsights.length === 1
-            ? `Captured insight "${optionalString(createdInsights[0].title) ?? createdInsights[0].id}".`
-            : `Captured ${createdInsights.length} insights.`;
-    outputLines = createdInsights.map((insight) => `${optionalString(insight.title) ?? insight.id} — stage: ${insight.stage}`);
-    break;
-}
-"update_insight";
-{
-    const payloads = parseUpdateInsightPayloads(call.arguments);
-    if (!payloads.length) {
-        errorNotes.push("update_insight requires at least one update entry.");
-        status = "failed";
-        summary = "No insight updates were provided.";
-        break;
-    }
-    const manager = await this.getOuterGateManager();
-    const updatedEntries = [];
-    for (const payload of payloads) {
-        const id = payload.id;
-        const storedExisting = manager?.getStoredInsightById(id);
-        const previousInsight = storedExisting
-            ? storedInsightToOuterGate(storedExisting)
-            : this.findInsightSnapshot(id);
-        if (!storedExisting && !previousInsight) {
-            errorNotes.push(`update_insight: insight "${id}" was not found.`);
-            status = "failed";
-            error = `Insight ${id} was not found.`;
-            continue;
-        }
-        const baseInsight = storedExisting
-            ? storedInsightToOuterGate(storedExisting)
-            : previousInsight;
-        const updatedInsight = {
-            ...baseInsight,
-            title: payload.title ?? baseInsight.title,
-            summary: payload.summary ?? baseInsight.summary,
-            recommendedWorkspace: payload.recommendedWorkspace !== undefined
-                ? payload.recommendedWorkspace
-                : baseInsight.recommendedWorkspace,
-            assignedCompanyId: payload.assignedCompanyId !== undefined
-                ? payload.assignedCompanyId
-                : baseInsight.assignedCompanyId,
-            stage: payload.stage ?? baseInsight.stage,
-            sourceType: payload.sourceType ?? baseInsight.sourceType,
-            capturedAtIso: payload.capturedAtIso ?? baseInsight.capturedAtIso,
-        };
-        const changes = diffInsights(baseInsight, updatedInsight);
-        const nowIso = new Date().toISOString();
-        const stored = {
-            ...updatedInsight,
-            integrationId: storedExisting?.integrationId ?? CLOVER_CONVERSATION_INTEGRATION_ID,
-            upsertedAtIso: nowIso,
-        };
-        if (changes.length || optionalString(payload.note)) {
-            await manager?.upsertInsights([stored]);
-            await this.applyInsightMutation({
-                nextInsight: updatedInsight,
-                previousInsight: baseInsight,
-                event: {
-                    type: "updated",
-                    insight: updatedInsight,
-                    note: payload.note,
-                    changes,
-                },
-                sessionId,
+        // Logout from Kilo Code provider before resetting (same approach as ProfileView logout)
+        const { apiConfiguration, currentApiConfigName = "default" } = await this.getState();
+        if (apiConfiguration.kilocodeToken) {
+            await this.upsertProviderProfile(currentApiConfigName, {
+                ...apiConfiguration,
+                kilocodeToken: "",
             });
-            updatedEntries.push(updatedInsight);
+        }
+        await this.contextProxy.resetAllState();
+        await this.providerSettingsManager.resetAllConfigs();
+        await this.customModesManager.resetCustomModes();
+        await this.removeClineFromStack();
+        await this.postStateToWebview();
+        await this.postMessageToWebview({ type: "action", action: "chatButtonClicked" });
+    }
+    // logging
+    log(message) {
+        this.outputChannel.appendLine(message);
+        if (ENABLE_VERBOSE_PROVIDER_LOGS) {
+            console.debug("[ClineProvider]", message);
         }
     }
-    if (updatedEntries.length) {
-        summary =
-            updatedEntries.length === 1
-                ? `Updated insight "${optionalString(updatedEntries[0].title) ?? updatedEntries[0].id}".`
-                : `Updated ${updatedEntries.length} insights.`;
-        outputLines = updatedEntries.map((entry) => `${optionalString(entry.title) ?? entry.id} — stage: ${entry.stage}`);
+    // getters
+    get workspaceTracker() {
+        return this._workspaceTracker;
     }
-    else if (!summary) {
-        summary = "No insight updates were applied.";
+    get viewLaunched() {
+        return this.isViewLaunched;
     }
-    break;
-}
-try { }
-catch (automationError) {
-    const message = automationError instanceof Error
-        ? automationError.message
-        : String(automationError);
-    errorNotes.push(`${call.name}: ${message}`);
-    status = "failed";
-    error = message;
-    if (!summary) {
-        summary = `Couldn't complete ${definition?.title ?? humanizeAutomationCallName(rawName || "automation")}.`;
+    get messages() {
+        return this.getCurrentTask()?.clineMessages || [];
     }
-}
-const logMessage = await this.appendCloverAutomationCallLog({
-    call,
-    definition,
-    status,
-    summary,
-    inputs,
-    outputLines,
-    error,
-    sessionId,
-});
-results.push({
-    name: rawName || definition?.name || "automation",
-    title: definition?.title,
-    status,
-    summary: logMessage.text,
-    error,
-});
-if (errorNotes.length) {
-    const joined = errorNotes.map((entry) => `- ${entry}`).join("\n");
-    void vscode.window.showErrorMessage(`Clover automation issue:\n${joined}`);
-    await this.appendCloverAutomationNote(`I ran into automation issues:\n${joined}`, sessionId);
-}
-return { results, errorNotes };
-formatCloverAutomationFollowup(outcome, CloverAutomationOutcome);
-string | undefined;
-{
-    const summaryLines = outcome.results.map((result) => {
-        const prefix = result.status === "succeeded" ? "[ok]" : "[error]";
-        return `${prefix} ${result.summary}`;
-    });
-    const errorLines = outcome.errorNotes
-        .filter((note) => note && note.trim().length > 0)
-        .map((note) => `[warn] ${note}`);
-    if (summaryLines.length === 0 && errorLines.length === 0) {
-        return undefined;
+    getMcpHub() {
+        return this.mcpHub;
     }
-    const lines = [...summaryLines, ...errorLines];
-    return `Automation update:\n${lines.join("\n")}\n\nClover, please continue working toward the user\'s goal. If more actions are needed, respond with the plan and any <functionCalls> blocks.`;
-}
-async;
-triggerCloverAutomationFollowup(followUp, string, pass, number);
-Promise < void  > {
-    const: trimmed = followUp.trim(),
-    if(, trimmed) {
-        return;
-    },
-    await, this: .handleOuterGateMessage(trimmed, `automation-followup-${pass}-${randomUUID()}`, {
-        automationPass: pass,
-        triggeredByAutomation: true,
-    })
-};
-findInsightSnapshot(id, string);
-OuterGateInsight | undefined;
-{
-    const state = this.ensureOuterGateState();
-    return state.recentInsights.find((entry) => entry.id === id);
-}
-async;
-applyInsightMutation({
-    nextInsight,
-    previousInsight,
-    event,
-    sessionId,
-}, {
-    nextInsight: OuterGateInsight,
-    previousInsight: OuterGateInsight,
-    event: OuterGateInsightEvent,
-    sessionId: string
-});
-Promise < void  > {
-    const: current = this.ensureOuterGateState(),
-    const: normalizedNext, OuterGateInsight = { ...nextInsight },
-    const: normalizedPrevious = previousInsight ? { ...previousInsight } : undefined,
-    const: existingIndex = current.recentInsights.findIndex((entry) => entry.id === normalizedNext.id),
-    const: recent = [...current.recentInsights],
-    if(existingIndex) { }
-} !== -1;
-{
-    recent.splice(existingIndex, 1);
-}
-recent.unshift(normalizedNext);
-const trimmedRecent = recent.slice(0, 8);
-const isNew = !normalizedPrevious;
-const prevStage = normalizedPrevious?.stage;
-const nextStage = normalizedNext.stage;
-let totalCaptured = current.analysisPool.totalCaptured;
-let ready = current.analysisPool.ready;
-let processing = current.analysisPool.processing;
-let assigned = current.analysisPool.assignedThisWeek;
-if (isNew) {
-    totalCaptured += 1;
-    if (nextStage === "ready") {
-        ready += 1;
+    /**
+     * Check if the current state is compliant with MDM policy
+     * @returns true if compliant or no MDM policy exists, false if MDM policy exists and user is non-compliant
+     */
+    checkMdmCompliance() {
+        if (!this.mdmService) {
+            return true; // No MDM service, allow operation
+        }
+        const compliance = this.mdmService.isCompliant();
+        if (!compliance.compliant) {
+            return false;
+        }
+        return true;
     }
-    if (nextStage === "processing") {
-        processing += 1;
-    }
-    if (nextStage === "assigned") {
-        assigned += 1;
-    }
-}
-else if (prevStage !== nextStage) {
-    if (prevStage === "ready") {
-        ready = Math.max(0, ready - 1);
-    }
-    if (nextStage === "ready") {
-        ready += 1;
-    }
-    if (prevStage === "processing") {
-        processing = Math.max(0, processing - 1);
-    }
-    if (nextStage === "processing") {
-        processing += 1;
-    }
-    if (prevStage === "assigned" && nextStage !== "assigned") {
-        assigned = Math.max(0, assigned - 1);
-    }
-    if (nextStage === "assigned" && prevStage !== "assigned") {
-        assigned += 1;
-    }
-}
-const updatedState = {
-    ...current,
-    analysisPool: {
-        ...current.analysisPool,
-        totalCaptured,
-        ready,
-        processing,
-        assignedThisWeek: assigned,
-        lastUpdatedIso: new Date().toISOString(),
-    },
-    recentInsights: trimmedRecent,
-};
-this.updateOuterGateState(updatedState);
-const eventClone = {
-    ...event,
-    note: optionalString(event.note),
-    insight: { ...normalizedNext },
-    changes: event.changes?.map((change) => ({ ...change })),
-};
-await this.appendCloverInsightEvent(eventClone, sessionId);
-async;
-appendCloverInsightEvent(event, OuterGateInsightEvent, sessionId ?  : string);
-Promise < void  > {
-    const: fallbackNote =
-        event.type === "created"
-            ? `Captured insight “${event.insight.title}”.`
-            : `Updated insight “${event.insight.title}”.`,
-    const: text = optionalString(event.note) ?? fallbackNote,
-    const: timestamp = new Date().toISOString(),
-    const: tokens = await this.estimateCloverTokenCount(text),
-    const: message, OuterGateCloverMessage = {
-        id: randomUUID(),
-        speaker: "clover",
-        text,
-        timestamp,
-        tokens,
-        highlight: true,
-        insightEvent: {
-            ...event,
-            note: optionalString(event.note),
-            insight: { ...event.insight },
-            changes: event.changes?.map((change) => ({ ...change })),
-        },
-    },
-    const: current = this.ensureOuterGateState(),
-    this: .updateOuterGateState({
-        ...current,
-        cloverMessages: [...current.cloverMessages, message],
-    }),
-    const: service = this.getCloverSessionService(),
-    if(, service) { }
-} || !sessionId;
-{
-    return;
-}
-try {
-    const session = await service.appendMessages(sessionId, [message]);
-    const summary = service.toSummary(session);
-    const refreshed = this.ensureOuterGateState();
-    this.updateOuterGateState({
-        ...refreshed,
-        cloverSessions: {
-            ...refreshed.cloverSessions,
-            entries: this.mergeCloverSessionEntries(refreshed.cloverSessions.entries, [summary], false),
-            hasMore: refreshed.cloverSessions.hasMore,
-            cursor: refreshed.cloverSessions.cursor,
-            isInitialFetchComplete: true,
-        },
-    });
-}
-catch (error) {
-    console.warn("[ClineProvider] Failed to persist Clover insight event", error);
-}
-async;
-appendCloverAutomationNote(text, string, sessionId ?  : string);
-Promise < void  > {
-    const: note = text.trim(),
-    if(, note) {
-        return;
-    },
-    const: timestamp = new Date().toISOString(),
-    const: tokens = await this.estimateCloverTokenCount(note),
-    const: message, OuterGateCloverMessage = {
-        id: randomUUID(),
-        speaker: "clover",
-        text: note,
-        timestamp,
-        tokens,
-    },
-    const: current = this.ensureOuterGateState(),
-    this: .updateOuterGateState({
-        ...current,
-        cloverMessages: [...current.cloverMessages, message],
-    }),
-    const: service = this.getCloverSessionService(),
-    if(, service) { }
-} || !sessionId;
-{
-    return;
-}
-try {
-    const session = await service.appendMessages(sessionId, [message]);
-    const summary = service.toSummary(session);
-    const refreshed = this.ensureOuterGateState();
-    this.updateOuterGateState({
-        ...refreshed,
-        cloverSessions: {
-            ...refreshed.cloverSessions,
-            entries: this.mergeCloverSessionEntries(refreshed.cloverSessions.entries, [summary], false),
-            hasMore: refreshed.cloverSessions.hasMore,
-            cursor: refreshed.cloverSessions.cursor,
-            isInitialFetchComplete: true,
-        },
-    });
-}
-catch (error) {
-    console.warn("[ClineProvider] Failed to persist Clover automation note", error);
-}
-async;
-executeCloverFunctionCalls(calls, CloverFunctionCall[], parseErrors, string[], sessionId, string | undefined, pass, number);
-Promise < void  > {
-    if(, calls) { }, : .length && !parseErrors.length
-};
-{
-    return;
-}
-if (pass >= CLOVER_MAX_AUTOMATION_PASSES) {
-    await this.appendCloverAutomationNote(`Paused automation after ${CLOVER_MAX_AUTOMATION_PASSES} rounds. Summarize the latest results for the user before continuing manually.`, sessionId);
-    await this.postStateToWebview();
-    await this.broadcastOuterGateStateSnapshot();
-    return;
-}
-const outcome = await this.runCloverAutomationPass(calls, parseErrors, sessionId);
-const followUp = this.formatCloverAutomationFollowup(outcome);
-if (!followUp) {
-    await this.postStateToWebview();
-    await this.broadcastOuterGateStateSnapshot();
-    return;
-}
-await this.postStateToWebview();
-await this.broadcastOuterGateStateSnapshot();
-await this.triggerCloverAutomationFollowup(followUp, pass + 1);
-async;
-runCloverAutomationPass(calls, CloverFunctionCall[], parseErrors, string[], sessionId, string | undefined);
-Promise < CloverAutomationOutcome > {
-    const: results, CloverAutomationCallResult, []:  = [],
-    const: errorNotes = [...parseErrors],
-    const: workplaceService = this.getWorkplaceService(),
-    if(, workplaceService) { }
-} && calls.length;
-{
-    errorNotes.push("Workspace automation is unavailable in this session.");
-}
-if (!workplaceService) {
-    for (const call of calls) {
-        const rawName = typeof call.name === "string" ? call.name.trim() : "";
-        const normalizedName = rawName.toLowerCase();
-        const definition = normalizedName
-            ? CLOVER_AUTOMATION_DEFINITION_BY_NAME.get(normalizedName)
-            : undefined;
-        const message = await this.appendCloverAutomationCallLog({
-            call,
-            definition,
-            status: "failed",
-            summary: "Automation tools are offline, so this request could not run.",
-            inputs: buildAutomationCallInputs(call.arguments),
-            error: "Workspace automation is unavailable in this session.",
-            sessionId,
+    async remoteControlEnabled(enabled) {
+        const userInfo = CloudService.instance.getUserInfo();
+        const config = await CloudService.instance.cloudAPI?.bridgeConfig().catch(() => undefined);
+        if (!config) {
+            this.log("[ClineProvider#remoteControlEnabled] Failed to get bridge config");
+            return;
+        }
+        await BridgeOrchestrator.connectOrDisconnect(userInfo, enabled, {
+            ...config,
+            provider: this,
+            sessionId: vscode.env.sessionId,
         });
-        results.push({
-            name: rawName || "automation",
-            title: definition?.title,
-            status: "failed",
-            summary: message.text,
-            error: "Workspace automation is unavailable in this session.",
-        });
-    }
-}
-else if (workplaceService) {
-    for (const call of calls) {
-        const rawName = typeof call.name === "string" ? call.name.trim() : "";
-        const normalizedName = rawName.toLowerCase();
-        const inputs = buildAutomationCallInputs(call.arguments);
-        if (!normalizedName) {
-            const message = "Received a Clover function call without a name.";
-            errorNotes.push(message);
-            const logMessage = await this.appendCloverAutomationCallLog({
-                call,
-                status: "failed",
-                summary: "Clover attempted to run an unnamed automation call.",
-                inputs,
-                error: message,
-                sessionId,
-            });
-            results.push({
-                name: rawName || "automation",
-                status: "failed",
-                summary: logMessage.text,
-                error: message,
-            });
-            continue;
-        }
-        if (!cloverAutomationFunctionNames.has(normalizedName)) {
-            const message = `Unknown Clover function "${call.name}" requested.`;
-            errorNotes.push(message);
-            const logMessage = await this.appendCloverAutomationCallLog({
-                call,
-                status: "failed",
-                summary: `The automation function "${call.name}" is not available.",
-						inputs,
-						error: "Unknown automation function.",
-						sessionId,
-					})
-					results.push({
-						name: rawName,
-						status: "failed",
-						summary: logMessage.text,
-						error: "Unknown automation function.",
-					})
-					continue
-				}
-				const definition = CLOVER_AUTOMATION_DEFINITION_BY_NAME.get(
-					normalizedName as CloverAutomationFunctionName,
-				)
-				let summary: string | undefined
-				let outputLines: string[] | undefined
-				let status: "succeeded" | "failed" = "succeeded"
-				let error: string | undefined
-
-				try {
-					switch (normalizedName as CloverAutomationFunctionName) {
-						case "list_companies": {
-							const options = this.parseListCompaniesOptions(call.arguments)
-							const stateSnapshot = workplaceService.getState()
-							let companies = [...stateSnapshot.companies]
-							if (options.search) {
-								const term = options.search.toLowerCase()
-								companies = companies.filter((company) => {
-									const idMatch = company.id.toLowerCase().includes(term)
-									const nameMatch = optionalString(company.name)?.toLowerCase().includes(term) ?? false
-									return idMatch || nameMatch
-								})
-							}
-							if (companies.length === 0) {
-								summary = options.search
-									? `, No, companies, matched, search, "${options.search}": . `
-									: "No companies exist yet. Capture or create one before updating."
-								break
-							}
-							const total = companies.length
-							const limited = companies.slice(0, options.limit)
-							const qualifier = options.search ? `, matching, "${options.search}": ` : ""
-							summary =
-								total === 1
-									? `, Found, 1: company$
-            }, { qualifier }. `
-									: `, Found, $, { total }, companies$, { qualifier }. `
-							if (total > options.limit) {
-								summary += `, Showing, $, { limited, : .length }. `
-							}
-							const detailLines = limited.map((company) => {
-								const name = optionalString(company.name) ?? "(unnamed company)"
-								const departmentCount = company.departments.filter((department) => !department.deletedAt).length
-								const teamCount = company.teams.filter((team) => !team.deletedAt).length
-								const activeEmployees = company.employees.filter((employee) => !employee.deletedAt).length
-								return `, $, { name }, id, $, { company, : .id }, departments, $, { departmentCount }, teams, $, { teamCount }, employees, $, { activeEmployees } `
-							})
-							if (total > options.limit) {
-								detailLines.push(`, $, { total } - options.limit);
-        }
-        more;
-        not;
-        shown `)
-							}
-							outputLines = detailLines
-							break
-
-	async postStateToWebview() {
-		try {
-			const state = await this.getStateToPostToWebview()
-			verboseProviderLog("postStateToWebview", {
-				activeCompanyId: state.workplaceState?.activeCompanyId,
-				activeEmployeeId: state.workplaceState?.activeEmployeeId,
-				companyCount: state.workplaceState?.companies?.length ?? 0,
-			})
-			this.postMessageToWebview({ type: "state", state })
-		} catch (error) {
-			console.error("[ClineProvider.postStateToWebview] failed to send state", error)
-		}
-
-		// Check MDM compliance and send user to account tab if not compliant
-		// Only redirect if there's an actual MDM policy requiring authentication
-		if (this.mdmService?.requiresCloudAuth() && !this.checkMdmCompliance()) {
-			await this.postMessageToWebview({ type: "action", action: "cloudButtonClicked" })
-		}
-	}
-
-	// kilocode_change start
-	async postRulesDataToWebview() {
-		const workspacePath = this.cwd
-		if (workspacePath) {
-			this.postMessageToWebview({
-				type: "rulesData",
-				...(await getEnabledRules(workspacePath, this.contextProxy, this.context)),
-			})
-		}
-	}
-	// kilocode_change end
-
-	/**
-	 * Fetches marketplace dataon demand to avoid blocking main state updates
-	 */
-	async fetchMarketplaceData() {
-		try {
-			const [marketplaceResult, marketplaceInstalledMetadata] = await Promise.all([
-				this.marketplaceManager.getMarketplaceItems().catch((error) => {
-					console.error("Failed to fetch marketplace items:", error)
-					return { organizationMcps: [], marketplaceItems: [], errors: [error.message] }
-				}),
-				this.marketplaceManager.getInstallationMetadata().catch((error) => {
-					console.error("Failed to fetch installation metadata:", error)
-					return { project: {}, global: {} } as MarketplaceInstalledMetadata
-				}),
-			])
-
-			// Send marketplace data separately
-			this.postMessageToWebview({
-				type: "marketplaceData",
-				organizationMcps: marketplaceResult.organizationMcps || [],
-				marketplaceItems: marketplaceResult.marketplaceItems || [],
-				marketplaceInstalledMetadata: marketplaceInstalledMetadata || { project: {}, global: {} },
-				errors: marketplaceResult.errors,
-			})
-		} catch (error) {
-			console.error("Failed to fetch marketplace data:", error)
-
-			// Send empty data on error to prevent UI from hanging
-			this.postMessageToWebview({
-				type: "marketplaceData",
-				organizationMcps: [],
-				marketplaceItems: [],
-				marketplaceInstalledMetadata: { project: {}, global: {} },
-				errors: [error instanceof Error ? error.message : String(error)],
-			})
-
-			// Show user-friendly error notification for network issues
-			if (error instanceof Error && error.message.includes("timeout")) {
-				vscode.window.showWarningMessage(
-					"Marketplace data could not be loaded due to network restrictions. Core functionality remains available.",
-				)
-			}
-		}
-	}
-
-	/**
-	 * Checks if there is a file-based system prompt override for the given mode
-	 */
-	async hasFileBasedSystemPromptOverride(mode: Mode): Promise<boolean> {
-		const promptFilePath = getSystemPromptFilePath(this.cwd, mode)
-		return await fileExistsAtPath(promptFilePath)
-	}
-
-	/**
-	 * Merges allowed commands from global state and workspace configuration
-	 * with proper validation and deduplication
-	 */
-	private mergeAllowedCommands(globalStateCommands?: string[]): string[] {
-		return this.mergeCommandLists("allowedCommands", "allowed", globalStateCommands)
-	}
-
-	/**
-	 * Merges denied commands from global state and workspace configuration
-	 * with proper validation and deduplication
-	 */
-	private mergeDeniedCommands(globalStateCommands?: string[]): string[] {
-		return this.mergeCommandLists("deniedCommands", "denied", globalStateCommands)
-	}
-
-	/**
-	 * Common utility for merging command lists from global state and workspace configuration.
-	 * Implements the Command Denylist feature's merging strategy with proper validation.
-	 *
-	 * @param configKey - VSCode workspace configuration key
-	 * @param commandType - Type of commands for error logging
-	 * @param globalStateCommands - Commands from global state
-	 * @returns Merged and deduplicated command list
-	 */
-	private mergeCommandLists(
-		configKey: "allowedCommands" | "deniedCommands",
-		commandType: "allowed" | "denied",
-		globalStateCommands?: string[],
-	): string[] {
-		try {
-			// Validate and sanitize global state commands
-			const validGlobalCommands = Array.isArray(globalStateCommands)
-				? globalStateCommands.filter((cmd) => typeof cmd === "string" && cmd.trim().length > 0)
-				: []
-
-			// Get workspace configuration commands
-			const workspaceCommands = vscode.workspace.getConfiguration(Package.name).get<string[]>(configKey) || []
-
-			// Validate and sanitize workspace commands
-			const validWorkspaceCommands = Array.isArray(workspaceCommands)
-				? workspaceCommands.filter((cmd) => typeof cmd === "string" && cmd.trim().length > 0)
-				: []
-
-			// Combine and deduplicate commands
-			// Global state takes precedence over workspace configuration
-			const mergedCommands = [...new Set([...validGlobalCommands, ...validWorkspaceCommands])]
-
-			return mergedCommands
-		} catch (error) {
-			console.error(`;
-        Error;
-        merging;
-        $;
-        {
-            commandType;
-        }
-        commands: `, error)
-			// Return empty array as fallback to prevent crashes
-			return []
-		}
-	}
-
-	private async getEndlessSurfaceViewState(): Promise<EndlessSurfaceViewState | undefined> {
-		const service = this.getEndlessSurfaceService()
-		if (!service) {
-			return undefined
-		}
-
-		const state = service.getState()
-		const activeSurfaceId = state.activeSurfaceId
-		const activeSurface = activeSurfaceId ? await service.getSurfaceData(activeSurfaceId) : undefined
-
-		return {
-			...state,
-			activeSurface,
-		}
-	}
-
-	async getStateToPostToWebview(): Promise<ExtensionState> {
-		await this.ensureCloverSessionsInitialized()
-		const state = await this.getState()
-		const endlessSurfaceViewState = await this.getEndlessSurfaceViewState()
-		const {
-			apiConfiguration,
-			customInstructions,
-			alwaysAllowReadOnly,
-			alwaysAllowReadOnlyOutsideWorkspace,
-			alwaysAllowWrite,
-			alwaysAllowWriteOutsideWorkspace,
-			alwaysAllowWriteProtected,
-			alwaysAllowExecute,
-			allowedCommands,
-			deniedCommands,
-			alwaysAllowBrowser,
-			alwaysAllowMcp,
-			alwaysAllowModeSwitch,
-			alwaysAllowSubtasks,
-			alwaysAllowUpdateTodoList,
-			allowedMaxRequests,
-			allowedMaxCost,
-			autoCondenseContext,
-			autoCondenseContextPercent,
-			soundEnabled,
-			ttsEnabled,
-			ttsSpeed,
-			diffEnabled,
-			enableCheckpoints,
-			taskHistory,
-			soundVolume,
-			browserViewportSize,
-			screenshotQuality,
-			remoteBrowserHost,
-			remoteBrowserEnabled,
-			cachedChromeHostUrl,
-			writeDelayMs,
-			terminalOutputLineLimit,
-			terminalOutputCharacterLimit,
-			terminalShellIntegrationTimeout,
-			terminalShellIntegrationDisabled,
-			terminalCommandDelay,
-			terminalPowershellCounter,
-			terminalZshClearEolMark,
-			terminalZshOhMy,
-			terminalZshP10k,
-			terminalZdotdir,
-			fuzzyMatchThreshold,
-			// mcpEnabled,  // kilocode_change: always true
-			enableMcpServerCreation,
-			alwaysApproveResubmit,
-			requestDelaySeconds,
-			currentApiConfigName,
-			listApiConfigMeta,
-			pinnedApiConfigs,
-			mode,
-			customModePrompts,
-			customSupportPrompts,
-			enhancementApiConfigId,
-			commitMessageApiConfigId, // kilocode_change
-			terminalCommandApiConfigId, // kilocode_change
-			autoApprovalEnabled,
-			customModes,
-			experiments,
-			maxOpenTabsContext,
-			maxWorkspaceFiles,
-			browserToolEnabled,
-			browserInteractionStrategy,
-			telemetrySetting,
-			showRooIgnoredFiles,
-			language,
-			showAutoApproveMenu, // kilocode_change
-			showTaskTimeline, // kilocode_change
-			maxReadFileLine,
-			maxImageFileSize,
-			maxTotalImageSize,
-			terminalCompressProgressBar,
-			historyPreviewCollapsed,
-			cloudUserInfo,
-			cloudIsAuthenticated,
-			sharingEnabled,
-			organizationAllowList,
-			organizationSettingsVersion,
-			maxConcurrentFileReads,
-			allowVeryLargeReads, // kilocode_change
-			ghostServiceSettings, // kilocode_changes
-			condensingApiConfigId,
-			customCondensingPrompt,
-			codebaseIndexConfig,
-			codebaseIndexModels,
-			profileThresholds,
-			systemNotificationsEnabled, // kilocode_change
-			dismissedNotificationIds, // kilocode_change
-			morphApiKey, // kilocode_change
-			alwaysAllowFollowupQuestions,
-			followupAutoApproveTimeoutMs,
-			includeDiagnosticMessages,
-			maxDiagnosticMessages,
-			includeTaskHistoryInEnhance,
-			remoteControlEnabled,
-			openRouterImageApiKey,
-			kiloCodeImageApiKey,
-			openRouterImageGenerationSelectedModel,
-			notificationEmail,
-			notificationSmsNumber,
-			notificationSmsGateway,
-			notificationTelegramChatId,
-			openRouterUseMiddleOutTransform,
-			hubSnapshot,
-		} = state
-
-		verboseProviderLog("getStateToPostToWebview", {
-			renderContext: this.renderContext,
-			activeCompanyId: state.workplaceState?.activeCompanyId,
-			activeEmployeeId: state.workplaceState?.activeEmployeeId,
-			companyCount: state.workplaceState?.companies?.length ?? 0,
-			companyNames: state.workplaceState?.companies?.map((entry) => entry.name) ?? [],
-		})
-		const telemetryKey = process.env.KILOCODE_POSTHOG_API_KEY
-		const machineId = vscode.env.machineId
-
-		const mergedAllowedCommands = this.mergeAllowedCommands(allowedCommands)
-		const mergedDeniedCommands = this.mergeDeniedCommands(deniedCommands)
-		const cwd = this.cwd
-
-		// Check if there's a system prompt override for the current mode
-		const currentMode = mode ?? defaultModeSlug
-		const hasSystemPromptOverride = await this.hasFileBasedSystemPromptOverride(currentMode)
-
-		// kilocode_change start wrapper information
-		const kiloCodeWrapperProperties = getKiloCodeWrapperProperties()
-		// kilocode_change end
-
-		const workplaceService = this.getWorkplaceService()
-		const workplaceStateSnapshot = workplaceService?.getState()
-		const companyNames = workplaceStateSnapshot?.companies?.map((company) => company.name) ?? []
-		verboseProviderLog("getState", {
-			renderContext: this.renderContext,
-			hasWorkplace: Boolean(workplaceService),
-			companyCount: workplaceStateSnapshot?.companies?.length ?? 0,
-			companyNames,
-		})
-		return {
-			version: this.context.extension?.packageJSON?.version ?? "",
-			apiConfiguration,
-			customInstructions,
-			alwaysAllowReadOnly: alwaysAllowReadOnly ?? true,
-			alwaysAllowReadOnlyOutsideWorkspace: alwaysAllowReadOnlyOutsideWorkspace ?? true,
-			alwaysAllowWrite: alwaysAllowWrite ?? true,
-			alwaysAllowWriteOutsideWorkspace: alwaysAllowWriteOutsideWorkspace ?? false,
-			alwaysAllowWriteProtected: alwaysAllowWriteProtected ?? false,
-			alwaysAllowExecute: alwaysAllowExecute ?? true,
-			alwaysAllowBrowser: alwaysAllowBrowser ?? true,
-			alwaysAllowMcp: alwaysAllowMcp ?? true,
-			alwaysAllowModeSwitch: alwaysAllowModeSwitch ?? true,
-			alwaysAllowSubtasks: alwaysAllowSubtasks ?? true,
-			alwaysAllowUpdateTodoList: alwaysAllowUpdateTodoList ?? true,
-			allowedMaxRequests,
-			allowedMaxCost,
-			autoCondenseContext: autoCondenseContext ?? true,
-			autoCondenseContextPercent: autoCondenseContextPercent ?? 100,
-			uriScheme: vscode.env.uriScheme,
-			uiKind: vscode.UIKind[vscode.env.uiKind], // kilocode_change
-			kiloCodeWrapperProperties, // kilocode_change wrapper information
-			kilocodeDefaultModel: await getKilocodeDefaultModel(
-				apiConfiguration.kilocodeToken,
-				apiConfiguration.kilocodeOrganizationId,
-			),
-			currentTaskItem: this.getCurrentTask()?.taskId
-				? (taskHistory || []).find((item: HistoryItem) => item.id === this.getCurrentTask()?.taskId)
-				: undefined,
-			clineMessages: this.getCurrentTask()?.clineMessages || [],
-			currentTaskTodos: this.getCurrentTask()?.todoList || [],
-			messageQueue: this.getCurrentTask()?.messageQueueService?.messages,
-			taskHistory: (taskHistory || [])
-				.filter((item: HistoryItem) => item.ts && item.task)
-				.sort((a: HistoryItem, b: HistoryItem) => b.ts - a.ts),
-			soundEnabled: soundEnabled ?? false,
-			ttsEnabled: ttsEnabled ?? false,
-			ttsSpeed: ttsSpeed ?? 1.0,
-			diffEnabled: diffEnabled ?? true,
-			enableCheckpoints: enableCheckpoints ?? true,
-			shouldShowAnnouncement: false, // kilocode_change
-			allowedCommands: mergedAllowedCommands,
-			deniedCommands: mergedDeniedCommands,
-			soundVolume: soundVolume ?? 0.5,
-			browserViewportSize: browserViewportSize ?? "900x600",
-			screenshotQuality: screenshotQuality ?? 75,
-			remoteBrowserHost,
-			remoteBrowserEnabled: remoteBrowserEnabled ?? false,
-			cachedChromeHostUrl: cachedChromeHostUrl,
-			writeDelayMs: writeDelayMs ?? DEFAULT_WRITE_DELAY_MS,
-			terminalOutputLineLimit: terminalOutputLineLimit ?? 500,
-			terminalOutputCharacterLimit: terminalOutputCharacterLimit ?? DEFAULT_TERMINAL_OUTPUT_CHARACTER_LIMIT,
-			terminalShellIntegrationTimeout: terminalShellIntegrationTimeout ?? Terminal.defaultShellIntegrationTimeout,
-			terminalShellIntegrationDisabled: terminalShellIntegrationDisabled ?? true, // kilocode_change: default
-			terminalCommandDelay: terminalCommandDelay ?? 0,
-			terminalPowershellCounter: terminalPowershellCounter ?? false,
-			terminalZshClearEolMark: terminalZshClearEolMark ?? true,
-			terminalZshOhMy: terminalZshOhMy ?? false,
-			terminalZshP10k: terminalZshP10k ?? false,
-			terminalZdotdir: terminalZdotdir ?? false,
-			fuzzyMatchThreshold: fuzzyMatchThreshold ?? 1.0,
-			mcpEnabled: true, // kilocode_change: always true
-			enableMcpServerCreation: enableMcpServerCreation ?? true,
-			alwaysApproveResubmit: alwaysApproveResubmit ?? false,
-			requestDelaySeconds: requestDelaySeconds ?? 10,
-			currentApiConfigName: currentApiConfigName ?? "default",
-			listApiConfigMeta: listApiConfigMeta ?? [],
-			pinnedApiConfigs: pinnedApiConfigs ?? {},
-			mode: mode ?? defaultModeSlug,
-			customModePrompts: customModePrompts ?? {},
-			customSupportPrompts: customSupportPrompts ?? {},
-			enhancementApiConfigId,
-			commitMessageApiConfigId, // kilocode_change
-			terminalCommandApiConfigId, // kilocode_change
-			autoApprovalEnabled: autoApprovalEnabled ?? true,
-			customModes,
-			experiments: experiments ?? experimentDefault,
-			mcpServers: this.mcpHub?.getAllServers() ?? [],
-			maxOpenTabsContext: maxOpenTabsContext ?? 20,
-			maxWorkspaceFiles: maxWorkspaceFiles ?? 200,
-			cwd,
-			browserToolEnabled: browserToolEnabled ?? true,
-			browserInteractionStrategy:
-				(browserInteractionStrategy as BrowserInteractionStrategy | undefined) ?? "legacy",
-			telemetrySetting,
-			telemetryKey,
-			machineId,
-			showRooIgnoredFiles: showRooIgnoredFiles ?? false,
-			showAutoApproveMenu: showAutoApproveMenu ?? false, // kilocode_change
-			showTaskTimeline: showTaskTimeline ?? true, // kilocode_change
-			language, // kilocode_change
-			renderContext: this.renderContext,
-			maxReadFileLine: maxReadFileLine ?? -1,
-			maxImageFileSize: maxImageFileSize ?? 5,
-			maxTotalImageSize: maxTotalImageSize ?? 20,
-			maxConcurrentFileReads: maxConcurrentFileReads ?? 5,
-			allowVeryLargeReads: allowVeryLargeReads ?? false, // kilocode_change
-			settingsImportedAt: this.settingsImportedAt,
-			terminalCompressProgressBar: terminalCompressProgressBar ?? true,
-			hasSystemPromptOverride,
-			historyPreviewCollapsed: historyPreviewCollapsed ?? false,
-			cloudUserInfo,
-			cloudIsAuthenticated: cloudIsAuthenticated ?? false,
-			sharingEnabled: sharingEnabled ?? false,
-			organizationAllowList,
-			// kilocode_change start
-			ghostServiceSettings: ghostServiceSettings ?? {
-				enableQuickInlineTaskKeybinding: true,
-				enableSmartInlineTaskKeybinding: true,
-			},
-			// kilocode_change end
-			organizationSettingsVersion,
-			condensingApiConfigId,
-			customCondensingPrompt,
-			codebaseIndexModels: codebaseIndexModels ?? EMBEDDING_MODEL_PROFILES,
-			codebaseIndexConfig: {
-				codebaseIndexEnabled: codebaseIndexConfig?.codebaseIndexEnabled ?? true,
-				codebaseIndexQdrantUrl: codebaseIndexConfig?.codebaseIndexQdrantUrl ?? "http://localhost:6333",
-				codebaseIndexEmbedderProvider: codebaseIndexConfig?.codebaseIndexEmbedderProvider ?? "openai",
-				codebaseIndexEmbedderBaseUrl: codebaseIndexConfig?.codebaseIndexEmbedderBaseUrl ?? "",
-				codebaseIndexEmbedderModelId: codebaseIndexConfig?.codebaseIndexEmbedderModelId ?? "",
-				codebaseIndexEmbedderModelDimension: codebaseIndexConfig?.codebaseIndexEmbedderModelDimension ?? 1536,
-				codebaseIndexOpenAiCompatibleBaseUrl: codebaseIndexConfig?.codebaseIndexOpenAiCompatibleBaseUrl,
-				codebaseIndexSearchMaxResults: codebaseIndexConfig?.codebaseIndexSearchMaxResults,
-				codebaseIndexSearchMinScore: codebaseIndexConfig?.codebaseIndexSearchMinScore,
-			},
-			// Only set mdmCompliant if there's an actual MDM policy
-			// undefined means no MDM policy, true means compliant, false means non-compliant
-			mdmCompliant: this.mdmService?.requiresCloudAuth() ? this.checkMdmCompliance() : undefined,
-			profileThresholds: profileThresholds ?? {},
-			cloudApiUrl: getRooCodeApiUrl(),
-			hasOpenedModeSelector: this.getGlobalState("hasOpenedModeSelector") ?? false,
-			systemNotificationsEnabled: systemNotificationsEnabled ?? false, // kilocode_change
-			dismissedNotificationIds: dismissedNotificationIds ?? [], // kilocode_change
-			morphApiKey, // kilocode_change
-			alwaysAllowFollowupQuestions: alwaysAllowFollowupQuestions ?? false,
-			followupAutoApproveTimeoutMs: followupAutoApproveTimeoutMs ?? 60000,
-			includeDiagnosticMessages: includeDiagnosticMessages ?? true,
-			maxDiagnosticMessages: maxDiagnosticMessages ?? 50,
-			includeTaskHistoryInEnhance: includeTaskHistoryInEnhance ?? true,
-			remoteControlEnabled,
-			openRouterImageApiKey,
-			kiloCodeImageApiKey,
-			openRouterImageGenerationSelectedModel,
-			notificationEmail,
-			notificationSmsNumber,
-			notificationSmsGateway,
-			openRouterUseMiddleOutTransform,
-			endlessSurface: endlessSurfaceViewState,
-			workplaceState: workplaceStateSnapshot ?? { companies: [] },
-			outerGateState: this.getOuterGateStateSnapshot(),
-			hubSnapshot,
-		}
-	}
-
-	/**
-	 * Storage
-	 * https://dev.to/kompotkot/how-to-use-secretstorage-in-your-vscode-extensions-2hco
-	 * https://www.eliostruyf.com/devhack-code-extension-storage-options/
-	 */
-
-	async getState(): Promise<
-		Omit<
-			ExtensionState,
-			| "clineMessages"
-			| "renderContext"
-			| "hasOpenedModeSelector"
-			| "version"
-			| "shouldShowAnnouncement"
-			| "hasSystemPromptOverride"
-		>
-	> {
-		const stateValues = this.contextProxy.getValues()
-		const customModes = await this.customModesManager.getCustomModes()
-		const workplaceStateSnapshot = this.getWorkplaceService()?.getState()
-
-		// Determine apiProvider with the same logic as before.
-		const apiProvider: ProviderName = stateValues.apiProvider ? stateValues.apiProvider : "kilocode" // kilocode_change: fall back to kilocode
-
-		// Build the apiConfiguration object combining state values and secrets.
-		const providerSettings = this.contextProxy.getProviderSettings()
-
-		// Ensure apiProvider is set properly if not already in state
-		if (!providerSettings.apiProvider) {
-			providerSettings.apiProvider = apiProvider
-		}
-
-		let organizationAllowList = ORGANIZATION_ALLOW_ALL
-
-		try {
-			organizationAllowList = await CloudService.instance.getAllowList()
-		} catch (error) {
-			console.error(
-				`[getState];
-        failed;
-        to;
-        get;
-        organization;
-        allow;
-        list: $;
-        {
-            error instanceof Error ? error.message : String(error);
-        }
-        `,
-			)
-		}
-
-		let cloudUserInfo: CloudUserInfo | null = null
-
-		try {
-			cloudUserInfo = CloudService.instance.getUserInfo()
-		} catch (error) {
-			console.error(
-				`[getState];
-        failed;
-        to;
-        get;
-        cloud;
-        user;
-        info: $;
-        {
-            error instanceof Error ? error.message : String(error);
-        }
-        `,
-			)
-		}
-
-		let cloudIsAuthenticated: boolean = false
-
-		try {
-			cloudIsAuthenticated = CloudService.instance.isAuthenticated()
-		} catch (error) {
-			console.error(
-				`[getState];
-        failed;
-        to;
-        get;
-        cloud;
-        authentication;
-        state: $;
-        {
-            error instanceof Error ? error.message : String(error);
-        }
-        `,
-			)
-		}
-
-		let sharingEnabled: boolean = false
-
-		try {
-			sharingEnabled = await CloudService.instance.canShareTask()
-		} catch (error) {
-			console.error(
-				`[getState];
-        failed;
-        to;
-        get;
-        sharing;
-        enabled;
-        state: $;
-        {
-            error instanceof Error ? error.message : String(error);
-        }
-        `,
-			)
-		}
-
-		let organizationSettingsVersion: number = -1
-
-		try {
-			if (CloudService.hasInstance()) {
-				const settings = CloudService.instance.getOrganizationSettings()
-				organizationSettingsVersion = settings?.version ?? -1
-			}
-		} catch (error) {
-			console.error(
-				`[getState];
-        failed;
-        to;
-        get;
-        organization;
-        settings;
-        version: $;
-        {
-            error instanceof Error ? error.message : String(error);
-        }
-        `,
-			)
-		}
-
-		// Build the same structure as before.
-		const result = {
-			apiConfiguration: providerSettings,
-			kilocodeDefaultModel: await getKilocodeDefaultModel(
-				providerSettings.kilocodeToken,
-				providerSettings.kilocodeOrganizationId,
-			), // kilocode_change
-			lastShownAnnouncementId: stateValues.lastShownAnnouncementId,
-			customInstructions: stateValues.customInstructions,
-			apiModelId: stateValues.apiModelId,
-			alwaysAllowReadOnly: stateValues.alwaysAllowReadOnly ?? true,
-			alwaysAllowReadOnlyOutsideWorkspace: stateValues.alwaysAllowReadOnlyOutsideWorkspace ?? true,
-			alwaysAllowWrite: stateValues.alwaysAllowWrite ?? true,
-			alwaysAllowWriteOutsideWorkspace: stateValues.alwaysAllowWriteOutsideWorkspace ?? false,
-			alwaysAllowWriteProtected: stateValues.alwaysAllowWriteProtected ?? false,
-			alwaysAllowExecute: stateValues.alwaysAllowExecute ?? true,
-			alwaysAllowBrowser: stateValues.alwaysAllowBrowser ?? true,
-			alwaysAllowMcp: stateValues.alwaysAllowMcp ?? true,
-			alwaysAllowModeSwitch: stateValues.alwaysAllowModeSwitch ?? true,
-			alwaysAllowSubtasks: stateValues.alwaysAllowSubtasks ?? true,
-			alwaysAllowFollowupQuestions: stateValues.alwaysAllowFollowupQuestions ?? false,
-			alwaysAllowUpdateTodoList: stateValues.alwaysAllowUpdateTodoList ?? true, // kilocode_change
-			followupAutoApproveTimeoutMs: stateValues.followupAutoApproveTimeoutMs ?? 60000,
-			diagnosticsEnabled: stateValues.diagnosticsEnabled ?? true,
-			allowedMaxRequests: stateValues.allowedMaxRequests,
-			allowedMaxCost: stateValues.allowedMaxCost,
-			autoCondenseContext: stateValues.autoCondenseContext ?? true,
-			autoCondenseContextPercent: stateValues.autoCondenseContextPercent ?? 100,
-			taskHistory: stateValues.taskHistory ?? [],
-			allowedCommands: stateValues.allowedCommands,
-			deniedCommands: stateValues.deniedCommands,
-			soundEnabled: stateValues.soundEnabled ?? false,
-			ttsEnabled: stateValues.ttsEnabled ?? false,
-			ttsSpeed: stateValues.ttsSpeed ?? 1.0,
-			diffEnabled: stateValues.diffEnabled ?? true,
-			enableCheckpoints: stateValues.enableCheckpoints ?? true,
-			soundVolume: stateValues.soundVolume,
-			browserViewportSize: stateValues.browserViewportSize ?? "900x600",
-			screenshotQuality: stateValues.screenshotQuality ?? 75,
-			remoteBrowserHost: stateValues.remoteBrowserHost,
-			remoteBrowserEnabled: stateValues.remoteBrowserEnabled ?? true,
-			cachedChromeHostUrl: stateValues.cachedChromeHostUrl as string | undefined,
-			fuzzyMatchThreshold: stateValues.fuzzyMatchThreshold ?? 1.0,
-			writeDelayMs: stateValues.writeDelayMs ?? DEFAULT_WRITE_DELAY_MS,
-			terminalOutputLineLimit: stateValues.terminalOutputLineLimit ?? 500,
-			terminalOutputCharacterLimit:
-				stateValues.terminalOutputCharacterLimit ?? DEFAULT_TERMINAL_OUTPUT_CHARACTER_LIMIT,
-			terminalShellIntegrationTimeout:
-				stateValues.terminalShellIntegrationTimeout ?? Terminal.defaultShellIntegrationTimeout,
-			terminalShellIntegrationDisabled: stateValues.terminalShellIntegrationDisabled ?? true, // kilocode_change: default
-			terminalCommandDelay: stateValues.terminalCommandDelay ?? 0,
-			terminalPowershellCounter: stateValues.terminalPowershellCounter ?? false,
-			terminalZshClearEolMark: stateValues.terminalZshClearEolMark ?? true,
-			terminalZshOhMy: stateValues.terminalZshOhMy ?? false,
-			terminalZshP10k: stateValues.terminalZshP10k ?? false,
-			terminalZdotdir: stateValues.terminalZdotdir ?? false,
-			terminalCompressProgressBar: stateValues.terminalCompressProgressBar ?? true,
-			mode: stateValues.mode ?? defaultModeSlug,
-			language: stateValues.language ?? formatLanguage(vscode.env.language),
-			mcpEnabled: true, // kilocode_change: always true
-			enableMcpServerCreation: stateValues.enableMcpServerCreation ?? true,
-			alwaysApproveResubmit: stateValues.alwaysApproveResubmit ?? false,
-			requestDelaySeconds: Math.max(5, stateValues.requestDelaySeconds ?? 10),
-			currentApiConfigName: stateValues.currentApiConfigName ?? "default",
-			listApiConfigMeta: stateValues.listApiConfigMeta ?? [],
-			pinnedApiConfigs: stateValues.pinnedApiConfigs ?? {},
-			modeApiConfigs: stateValues.modeApiConfigs ?? ({} as Record<Mode, string>),
-			customModePrompts: stateValues.customModePrompts ?? {},
-			customSupportPrompts: stateValues.customSupportPrompts ?? {},
-			enhancementApiConfigId: stateValues.enhancementApiConfigId,
-			commitMessageApiConfigId: stateValues.commitMessageApiConfigId, // kilocode_change
-			terminalCommandApiConfigId: stateValues.terminalCommandApiConfigId, // kilocode_change
-			// kilocode_change start
-			ghostServiceSettings: stateValues.ghostServiceSettings ?? {
-				enableQuickInlineTaskKeybinding: true,
-				enableSmartInlineTaskKeybinding: true,
-			},
-			// kilocode_change end
-			experiments: stateValues.experiments ?? experimentDefault,
-			autoApprovalEnabled: stateValues.autoApprovalEnabled ?? true,
-			customModes,
-			maxOpenTabsContext: stateValues.maxOpenTabsContext ?? 20,
-			maxWorkspaceFiles: stateValues.maxWorkspaceFiles ?? 200,
-			openRouterUseMiddleOutTransform: stateValues.openRouterUseMiddleOutTransform,
-			browserToolEnabled: stateValues.browserToolEnabled ?? true,
-			browserInteractionStrategy:
-				(stateValues.browserInteractionStrategy as BrowserInteractionStrategy | undefined) ?? "legacy",
-			telemetrySetting: stateValues.telemetrySetting || "unset",
-			showRooIgnoredFiles: stateValues.showRooIgnoredFiles ?? false,
-			showAutoApproveMenu: stateValues.showAutoApproveMenu ?? false, // kilocode_change
-			showTaskTimeline: stateValues.showTaskTimeline ?? true, // kilocode_change
-			maxReadFileLine: stateValues.maxReadFileLine ?? -1,
-			maxImageFileSize: stateValues.maxImageFileSize ?? 5,
-			maxTotalImageSize: stateValues.maxTotalImageSize ?? 20,
-			maxConcurrentFileReads: stateValues.maxConcurrentFileReads ?? 5,
-			allowVeryLargeReads: stateValues.allowVeryLargeReads ?? false, // kilocode_change
-			systemNotificationsEnabled: stateValues.systemNotificationsEnabled ?? true, // kilocode_change
-			dismissedNotificationIds: stateValues.dismissedNotificationIds ?? [], // kilocode_change
-			morphApiKey: stateValues.morphApiKey, // kilocode_change
-			historyPreviewCollapsed: stateValues.historyPreviewCollapsed ?? false,
-			cloudUserInfo,
-			cloudIsAuthenticated,
-			sharingEnabled,
-			organizationAllowList,
-			organizationSettingsVersion,
-			condensingApiConfigId: stateValues.condensingApiConfigId,
-			customCondensingPrompt: stateValues.customCondensingPrompt,
-			codebaseIndexModels: stateValues.codebaseIndexModels ?? EMBEDDING_MODEL_PROFILES,
-			codebaseIndexConfig: {
-				codebaseIndexEnabled: stateValues.codebaseIndexConfig?.codebaseIndexEnabled ?? true,
-				codebaseIndexQdrantUrl:
-					stateValues.codebaseIndexConfig?.codebaseIndexQdrantUrl ?? "http://localhost:6333",
-				codebaseIndexEmbedderProvider:
-					stateValues.codebaseIndexConfig?.codebaseIndexEmbedderProvider ?? "openai",
-				codebaseIndexEmbedderBaseUrl: stateValues.codebaseIndexConfig?.codebaseIndexEmbedderBaseUrl ?? "",
-				codebaseIndexEmbedderModelId: stateValues.codebaseIndexConfig?.codebaseIndexEmbedderModelId ?? "",
-				codebaseIndexEmbedderModelDimension:
-					stateValues.codebaseIndexConfig?.codebaseIndexEmbedderModelDimension,
-				codebaseIndexOpenAiCompatibleBaseUrl:
-					stateValues.codebaseIndexConfig?.codebaseIndexOpenAiCompatibleBaseUrl,
-				codebaseIndexSearchMaxResults: stateValues.codebaseIndexConfig?.codebaseIndexSearchMaxResults,
-				codebaseIndexSearchMinScore: stateValues.codebaseIndexConfig?.codebaseIndexSearchMinScore,
-			},
-			profileThresholds: stateValues.profileThresholds ?? {},
-			includeDiagnosticMessages: stateValues.includeDiagnosticMessages ?? true,
-			maxDiagnosticMessages: stateValues.maxDiagnosticMessages ?? 50,
-			includeTaskHistoryInEnhance: stateValues.includeTaskHistoryInEnhance ?? true,
-			remoteControlEnabled: (() => {
-				try {
-					const cloudSettings = CloudService.instance.getUserSettings()
-					return cloudSettings?.settings?.extensionBridgeEnabled ?? false
-				} catch (error) {
-					console.error(
-						`[getState];
-        failed;
-        to;
-        get;
-        remote;
-        control;
-        setting;
-        from;
-        cloud: $;
-        {
-            error instanceof Error ? error.message : String(error);
-        }
-        `,
-					)
-					return false
-				}
-			})(),
-			openRouterImageApiKey: stateValues.openRouterImageApiKey,
-			kiloCodeImageApiKey: stateValues.kiloCodeImageApiKey,
-			openRouterImageGenerationSelectedModel: stateValues.openRouterImageGenerationSelectedModel,
-			notificationEmail: stateValues.notificationEmail,
-			notificationSmsNumber: stateValues.notificationSmsNumber,
-			notificationSmsGateway: stateValues.notificationSmsGateway,
-			notificationTelegramChatId: stateValues.notificationTelegramChatId,
-			workplaceState: workplaceStateSnapshot ?? { companies: [] },
-			hubSnapshot: this.conversationHub.getSnapshot(),
-		}
-		const companyCount = result.workplaceState?.companies?.length ?? 0
-		const companyNames = result.workplaceState?.companies?.map((company: WorkplaceCompany) => company.name) ?? []
-		console.log("[ClineProvider.getState] returning companyCount=%d companyNames=%o", companyCount, companyNames)
-		return result
-	}
-
-	async updateTaskHistory(item: HistoryItem): Promise<HistoryItem[]> {
-		const history = (this.getGlobalState("taskHistory") as HistoryItem[] | undefined) || []
-		const existingItemIndex = history.findIndex((h) => h.id === item.id)
-
-		if (existingItemIndex !== -1) {
-			history[existingItemIndex] = item
-		} else {
-			history.push(item)
-		}
-
-		await this.updateGlobalState("taskHistory", history)
-		this.recentTasksCache = undefined
-
-		return history
-	}
-
-	// ContextProxy
-
-	// @deprecated - Use `;
-        ContextProxy;
-        #setValue ` instead.
-	private async updateGlobalState<K extends keyof GlobalState>(key: K, value: GlobalState[K]) {
-		await this.contextProxy.setValue(key, value)
-	}
-
-	// @deprecated - Use `;
-        ContextProxy;
-        #getValue ` instead.
-	private getGlobalState<K extends keyof GlobalState>(key: K) {
-		return this.contextProxy.getValue(key)
-	}
-
-	public async setValue<K extends keyof RooCodeSettings>(key: K, value: RooCodeSettings[K]) {
-		await this.contextProxy.setValue(key, value)
-	}
-
-	public getValue<K extends keyof RooCodeSettings>(key: K) {
-		return this.contextProxy.getValue(key)
-	}
-
-	public getValues() {
-		return this.contextProxy.getValues()
-	}
-
-	public async setValues(values: RooCodeSettings) {
-		await this.contextProxy.setValues(values)
-	}
-
-	// dev
-
-	async resetState() {
-		const answer = await vscode.window.showInformationMessage(
-			t("common:confirmation.reset_state"),
-			{ modal: true },
-			t("common:answers.yes"),
-		)
-
-		if (answer !== t("common:answers.yes")) {
-			return
-		}
-
-		// Logout from Kilo Code provider before resetting (same approach as ProfileView logout)
-		const { apiConfiguration, currentApiConfigName = "default" } = await this.getState()
-		if (apiConfiguration.kilocodeToken) {
-			await this.upsertProviderProfile(currentApiConfigName, {
-				...apiConfiguration,
-				kilocodeToken: "",
-			})
-		}
-
-		await this.contextProxy.resetAllState()
-		await this.providerSettingsManager.resetAllConfigs()
-		await this.customModesManager.resetCustomModes()
-
-		await this.removeClineFromStack()
-		await this.postStateToWebview()
-		await this.postMessageToWebview({ type: "action", action: "chatButtonClicked" })
-	}
-
-	// logging
-
-	public log(message: string) {
-		this.outputChannel.appendLine(message)
-		if (ENABLE_VERBOSE_PROVIDER_LOGS) {
-			console.debug("[ClineProvider]", message)
-		}
-	}
-
-	// getters
-
-	public get workspaceTracker(): WorkspaceTracker | undefined {
-		return this._workspaceTracker
-	}
-
-	get viewLaunched() {
-		return this.isViewLaunched
-	}
-
-	get messages() {
-		return this.getCurrentTask()?.clineMessages || []
-	}
-
-	public getMcpHub(): McpHub | undefined {
-		return this.mcpHub
-	}
-
-	/**
-	 * Check if the current state is compliant with MDM policy
-	 * @returns true if compliant or no MDM policy exists, false if MDM policy exists and user is non-compliant
-	 */
-	public checkMdmCompliance(): boolean {
-		if (!this.mdmService) {
-			return true // No MDM service, allow operation
-		}
-
-		const compliance = this.mdmService.isCompliant()
-
-		if (!compliance.compliant) {
-			return false
-		}
-
-		return true
-	}
-
-	public async remoteControlEnabled(enabled: boolean) {
-		const userInfo = CloudService.instance.getUserInfo()
-		const config = await CloudService.instance.cloudAPI?.bridgeConfig().catch(() => undefined)
-
-		if (!config) {
-			this.log("[ClineProvider#remoteControlEnabled] Failed to get bridge config")
-			return
-		}
-
-		await BridgeOrchestrator.connectOrDisconnect(userInfo, enabled, {
-			...config,
-			provider: this,
-			sessionId: vscode.env.sessionId,
-		})
-
-		const bridge = BridgeOrchestrator.getInstance()
-
-		if (bridge) {
-			const currentTask = this.getCurrentTask()
-
-			if (currentTask && !currentTask.enableBridge) {
-				try {
-					currentTask.enableBridge = true
-					await BridgeOrchestrator.subscribeToTask(currentTask)
-				} catch (error) {
-					const message = `[ClineProvider];
-        #remoteControlEnabled;
-        BridgeOrchestrator.subscribeToTask();
-        failed: $;
-        {
-            error instanceof Error ? error.message : String(error);
-        }
-        `
-					this.log(message)
-					console.error(message)
-				}
-			}
-		} else {
-			for (const task of this.clineStack) {
-				if (task.enableBridge) {
-					try {
-						await BridgeOrchestrator.getInstance()?.unsubscribeFromTask(task.taskId)
-					} catch (error) {
-						const message = `[ClineProvider];
-        #remoteControlEnabled;
-        BridgeOrchestrator;
-        #unsubscribeFromTask();
-        failed: $;
-        {
-            error instanceof Error ? error.message : String(error);
-        }
-        `
-						this.log(message)
-						console.error(message)
-					}
-				}
-			}
-		}
-	}
-
-	/**
-	 * Gets the CodeIndexManager for the current active workspace
-	 * @returns CodeIndexManager instance for the current workspace or the default one
-	 */
-	public getCurrentWorkspaceCodeIndexManager(): CodeIndexManager | undefined {
-		return CodeIndexManager.getInstance(this.context)
-	}
-
-	/**
-	 * Updates the code index status subscription to listen to the current workspace manager
-	 */
-	private updateCodeIndexStatusSubscription(): void {
-		// Get the current workspace manager
-		const currentManager = this.getCurrentWorkspaceCodeIndexManager()
-
-		// If the manager hasn't changed, no need to update subscription
-		if (currentManager === this.codeIndexManager) {
-			return
-		}
-
-		// Dispose the old subscription if it exists
-		if (this.codeIndexStatusSubscription) {
-			this.codeIndexStatusSubscription.dispose()
-			this.codeIndexStatusSubscription = undefined
-		}
-
-		// Update the current workspace manager reference
-		this.codeIndexManager = currentManager
-
-		// Subscribe to the new manager's progress updates if it exists
-		if (currentManager) {
-			this.codeIndexStatusSubscription = currentManager.onProgressUpdate((update: IndexProgressUpdate) => {
-				// Only send updates if this manager is still the current one
-				if (currentManager === this.getCurrentWorkspaceCodeIndexManager()) {
-					// Get the full status from the manager to ensure we have all fields correctly formatted
-					const fullStatus = currentManager.getCurrentStatus()
-					this.postMessageToWebview({
-						type: "indexingStatusUpdate",
-						values: fullStatus,
-					})
-				}
-			})
-
-			if (this.view) {
-				this.webviewDisposables.push(this.codeIndexStatusSubscription)
-			}
-
-			// Send initial status for the current workspace
-			this.postMessageToWebview({
-				type: "indexingStatusUpdate",
-				values: currentManager.getCurrentStatus(),
-			})
-		}
-	}
-
-	/**
-	 * TaskProviderLike, TelemetryPropertiesProvider
-	 */
-
-	public getCurrentTask(): Task | undefined {
-		if (this.clineStack.length === 0) {
-			return undefined
-		}
-
-		return this.clineStack[this.clineStack.length - 1]
-	}
-
-	public getRecentTasks(): string[] {
-		if (this.recentTasksCache) {
-			return this.recentTasksCache
-		}
-
-		const history = this.getGlobalState("taskHistory") ?? []
-		const workspaceTasks: HistoryItem[] = []
-
-		for (const item of history) {
-			if (!item.ts || !item.task || item.workspace !== this.cwd) {
-				continue
-			}
-
-			workspaceTasks.push(item)
-		}
-
-		if (workspaceTasks.length === 0) {
-			this.recentTasksCache = []
-			return this.recentTasksCache
-		}
-
-		workspaceTasks.sort((a, b) => b.ts - a.ts)
-		let recentTaskIds: string[] = []
-
-		if (workspaceTasks.length >= 100) {
-			// If we have at least 100 tasks, return tasks from the last 7 days.
-			const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000
-
-			for (const item of workspaceTasks) {
-				// Stop when we hit tasks older than 7 days.
-				if (item.ts < sevenDaysAgo) {
-					break
-				}
-
-				recentTaskIds.push(item.id)
-			}
-		} else {
-			// Otherwise, return the most recent 100 tasks (or all if less than 100).
-			recentTaskIds = workspaceTasks.slice(0, Math.min(100, workspaceTasks.length)).map((item) => item.id)
-		}
-
-		this.recentTasksCache = recentTaskIds
-		return this.recentTasksCache
-	}
-
-	// When initializing a new task, (not from history but from a tool command
-	// new_task) there is no need to remove the previous task since the new
-	// task is a subtask of the previous one, and when it finishes it is removed
-	// from the stack and the caller is resumed in this way we can have a chain
-	// of tasks, each one being a sub task of the previous one until the main
-	// task is finished.
-	public async createTask(
-		text?: string,
-		images?: string[],
-		parentTask?: Task,
-		options: CreateTaskOptions = {},
-		configuration: RooCodeSettings = {},
-	): Promise<Task> {
-		if (configuration) {
-			await this.setValues(configuration)
-
-			if (configuration.allowedCommands) {
-				await vscode.workspace
-					.getConfiguration(Package.name)
-					.update("allowedCommands", configuration.allowedCommands, vscode.ConfigurationTarget.Global)
-			}
-
-			if (configuration.deniedCommands) {
-				await vscode.workspace
-					.getConfiguration(Package.name)
-					.update("deniedCommands", configuration.deniedCommands, vscode.ConfigurationTarget.Global)
-			}
-
-			if (configuration.commandExecutionTimeout !== undefined) {
-				await vscode.workspace
-					.getConfiguration(Package.name)
-					.update(
-						"commandExecutionTimeout",
-						configuration.commandExecutionTimeout,
-						vscode.ConfigurationTarget.Global,
-					)
-			}
-
-			if (configuration.currentApiConfigName) {
-				await this.setProviderProfile(configuration.currentApiConfigName)
-			}
-		}
-
-		const {
-			apiConfiguration,
-			organizationAllowList,
-			diffEnabled: enableDiff,
-			enableCheckpoints,
-			fuzzyMatchThreshold,
-			experiments,
-			cloudUserInfo,
-			remoteControlEnabled,
-		} = await this.getState()
-
-		if (!ProfileValidator.isProfileAllowed(apiConfiguration, organizationAllowList)) {
-			throw new OrganizationAllowListViolationError(t("common:errors.violated_organization_allowlist"))
-		}
-
-		const task = new Task({
-			provider: this,
-			context: this.context, // kilocode_change
-			apiConfiguration,
-			enableDiff,
-			enableCheckpoints,
-			fuzzyMatchThreshold,
-			consecutiveMistakeLimit: apiConfiguration.consecutiveMistakeLimit,
-			task: text,
-			images,
-			experiments,
-			rootTask: this.clineStack.length > 0 ? this.clineStack[0] : undefined,
-			parentTask,
-			taskNumber: this.clineStack.length + 1,
-			onCreated: this.taskCreationCallback,
-			enableBridge: BridgeOrchestrator.isEnabled(cloudUserInfo, remoteControlEnabled),
-			initialTodos: options.initialTodos,
-			...options,
-		})
-
-		await this.addClineToStack(task)
-
-		this.log(
-			`[createTask];
-        $;
-        {
-            task.parentTask ? "child" : "parent";
-        }
-        task;
-        $;
-        {
-            task.taskId;
-        }
-        $;
-        {
-            task.instanceId;
-        }
-        instantiated `,
-		)
-
-		return task
-	}
-
-	public async cancelTask(): Promise<void> {
-		const task = this.getCurrentTask()
-
-		if (!task) {
-			return
-		}
-
-		console.log(`[cancelTask];
-        cancelling;
-        task;
-        $;
-        {
-            task.taskId;
-        }
-        $;
-        {
-            task.instanceId;
-        }
-        `)
-
-		const { historyItem } = await this.getTaskWithId(task.taskId)
-
-		// Preserve parent and root task information for history item.
-		const rootTask = task.rootTask
-		const parentTask = task.parentTask
-
-		task.abortTask()
-
-		await pWaitFor(
-			() =>
-				this.getCurrentTask()! === undefined ||
-				this.getCurrentTask()!.isStreaming === false ||
-				this.getCurrentTask()!.didFinishAbortingStream ||
-				// If only the first chunk is processed, then there's no
-				// need to wait for graceful abort (closes edits, browser,
-				// etc).
-				this.getCurrentTask()!.isWaitingForFirstChunk,
-			{
-				timeout: 3_000,
-			},
-		).catch(() => {
-			console.error("Failed to abort task")
-		})
-
-		if (this.getCurrentTask()) {
-			// 'abandoned' will prevent this Cline instance from affecting
-			// future Cline instances. This may happen if its hanging on a
-			// streaming request.
-			this.getCurrentTask()!.abandoned = true
-		}
-
-		// Clears task again, so we need to abortTask manually above.
-		await this.createTaskWithHistoryItem({ ...historyItem, rootTask, parentTask })
-	}
-
-	// Clear the current task without treating it as a subtask.
-	// This is used when the user cancels a task that is not a subtask.
-	public async clearTask(): Promise<void> {
-		if (this.clineStack.length > 0) {
-			const task = this.clineStack[this.clineStack.length - 1]
-			console.log(`[clearTask];
-        clearing;
-        task;
-        $;
-        {
-            task.taskId;
-        }
-        $;
-        {
-            task.instanceId;
-        }
-        `)
-			await this.removeClineFromStack()
-		}
-	}
-
-	public resumeTask(taskId: string): void {
-		// Use the existing showTaskWithId method which handles both current and
-		// historical tasks.
-		this.showTaskWithId(taskId).catch((error) => {
-			this.log(`;
-        Failed;
-        to;
-        resume;
-        task;
-        $;
-        {
-            taskId;
-        }
-        $;
-        {
-            error.message;
-        }
-        `)
-		})
-	}
-
-	private async appendCloverAutomationCallLog(options: CloverAutomationLogOptions): Promise<OuterGateCloverMessage> {
-		const {
-			call,
-			definition,
-			status,
-			summary,
-			inputs,
-			outputLines,
-			error,
-			sessionId,
-		} = options
-		const rawCallName = typeof call.name === "string" ? call.name.trim() : ""
-		const friendlyTitle = definition?.title ?? humanizeAutomationCallName(rawCallName || "automation call")
-		const defaultText = status === "succeeded" ? `;
-        Completed;
-        $;
-        {
-            friendlyTitle;
-        }
-        ` : `;
-        Failed;
-        $;
-        {
-            friendlyTitle;
-        }
-        `
-		const text = summary ?? defaultText
-		const timestamp = new Date().toISOString()
-		const tokens = await this.estimateCloverTokenCount(text)
-		const message: OuterGateCloverMessage = {
-			id: randomUUID(),
-			speaker: "clover",
-			text,
-			timestamp,
-			tokens,
-			automationCall: this.buildAutomationCallPayload({
-				name: rawCallName || friendlyTitle,
-				title: definition?.title ?? (rawCallName ? humanizeAutomationCallName(rawCallName) : undefined),
-				status,
-				summary,
-				inputs,
-				outputLines,
-				error,
-			}),
-		}
-
-		const current = this.ensureOuterGateState()
-		this.updateOuterGateState({
-			...current,
-			cloverMessages: [...current.cloverMessages, message],
-		})
-
-		const service = this.getCloverSessionService()
-		if (!service || !sessionId) {
-			return message
-		}
-		try {
-			const session = await service.appendMessages(sessionId, [message])
-			const summaryState = service.toSummary(session)
-			const refreshed = this.ensureOuterGateState()
-			this.updateOuterGateState({
-				...refreshed,
-				cloverSessions: {
-					...refreshed.cloverSessions,
-					entries: this.mergeCloverSessionEntries(
-						refreshed.cloverSessions.entries,
-						[summaryState],
-						false,
-					),
-					hasMore: refreshed.cloverSessions.hasMore,
-					cursor: refreshed.cloverSessions.cursor,
-					isInitialFetchComplete: true,
-				},
-			})
-		} catch (persistError) {
-			console.warn("[ClineProvider] Failed to persist Clover automation call log", persistError)
-		}
-
-		return message
-	}
-
-	private buildAutomationCallPayload(details: {
-		name: string
-		title?: string
-		status: "succeeded" | "failed"
-		summary?: string
-		inputs?: OuterGateAutomationCallInput[]
-		outputLines?: string[]
-		error?: string
-	}): OuterGateAutomationCall {
-		const cleanedInputs = details.inputs?.length
-			? details.inputs.map((entry) => ({ ...entry }))
-			: undefined
-		const cleanedOutputs = details.outputLines?.length ? [...details.outputLines] : undefined
-		return {
-			name: details.name,
-			title: details.title,
-			status: details.status,
-			summary: details.summary,
-			inputs: cleanedInputs,
-			outputLines: cleanedOutputs,
-			error: details.error,
-		}
-	}
-
-	// Modes
-
-	public async getModes(): Promise<{ slug: string; name: string }[]> {
-		try {
-			const customModes = await this.customModesManager.getCustomModes()
-			return [...DEFAULT_MODES, ...customModes].map(({ slug, name }) => ({ slug, name }))
-		} catch (error) {
-			return DEFAULT_MODES.map(({ slug, name }) => ({ slug, name }))
-		}
-	}
-
-	public async getMode(): Promise<string> {
-		const { mode } = await this.getState()
-		return mode
-	}
-
-	public async setMode(mode: string): Promise<void> {
-		await this.setValues({ mode })
-	}
-
-	// Provider Profiles
-
-	public async getProviderProfiles(): Promise<{ name: string; provider?: string }[]> {
-		const { listApiConfigMeta = [] } = await this.getState()
-		return listApiConfigMeta.map((profile) => ({ name: profile.name, provider: profile.apiProvider }))
-	}
-
-	public async getProviderProfile(): Promise<string> {
-		const { currentApiConfigName = "default" } = await this.getState()
-		return currentApiConfigName
-	}
-
-	public async setProviderProfile(name: string): Promise<void> {
-		await this.activateProviderProfile({ name })
-	}
-
-	// Telemetry
-
-	private _appProperties?: StaticAppProperties
-	private _gitProperties?: GitProperties
-
-	private getAppProperties(): StaticAppProperties {
-		if (!this._appProperties) {
-			const packageJSON = this.context.extension?.packageJSON
-			// kilocode_change start
-			const {
-				kiloCodeWrapped,
-				kiloCodeWrapper,
-				kiloCodeWrapperCode,
-				kiloCodeWrapperVersion,
-				kiloCodeWrapperTitle,
-			} = getKiloCodeWrapperProperties()
-			// kilocode_change end
-
-			this._appProperties = {
-				appName: packageJSON?.name ?? Package.name,
-				appVersion: packageJSON?.version ?? Package.version,
-				vscodeVersion: vscode.version,
-				platform: isWsl ? "wsl" /* kilocode_change */ : process.platform,
-				editorName: kiloCodeWrapperTitle ? kiloCodeWrapperTitle : vscode.env.appName, // kilocode_change
-				wrapped: kiloCodeWrapped, // kilocode_change
-				wrapper: kiloCodeWrapper, // kilocode_change
-				wrapperCode: kiloCodeWrapperCode, // kilocode_change
-				wrapperVersion: kiloCodeWrapperVersion, // kilocode_change
-				wrapperTitle: kiloCodeWrapperTitle, // kilocode_change
-			}
-		}
-
-		return this._appProperties
-	}
-
-	public get appProperties(): StaticAppProperties {
-		return this._appProperties ?? this.getAppProperties()
-	}
-
-	private getCloudProperties(): CloudAppProperties {
-		let cloudIsAuthenticated: boolean | undefined
-
-		try {
-			if (CloudService.hasInstance()) {
-				cloudIsAuthenticated = CloudService.instance.isAuthenticated()
-			}
-		} catch (error) {
-			// Silently handle errors to avoid breaking telemetry collection.
-			this.log(`[getTelemetryProperties];
-        Failed;
-        to;
-        get;
-        cloud;
-        auth;
-        state: $;
-        {
-            error;
-        }
-        `)
-		}
-
-		return {
-			cloudIsAuthenticated,
-		}
-	}
-
-	private async getTaskProperties(): Promise<DynamicAppProperties & TaskProperties> {
-		const { language = "en", mode, apiConfiguration } = await this.getState()
-
-		const task = this.getCurrentTask()
-		const todoList = task?.todoList
-		let todos: { total: number; completed: number; inProgress: number; pending: number } | undefined
-
-		if (todoList && todoList.length > 0) {
-			todos = {
-				total: todoList.length,
-				completed: todoList.filter((todo) => todo.status === "completed").length,
-				inProgress: todoList.filter((todo) => todo.status === "in_progress").length,
-				pending: todoList.filter((todo) => todo.status === "pending").length,
-			}
-		}
-
-		return {
-			language,
-			mode,
-			taskId: task?.taskId,
-			apiProvider: apiConfiguration?.apiProvider,
-			diffStrategy: task?.diffStrategy?.getName(),
-			isSubtask: task ? !!task.parentTask : undefined,
-			...(todos && { todos }),
-		}
-	}
-
-	private async getGitProperties(): Promise<GitProperties> {
-		if (!this._gitProperties) {
-			this._gitProperties = await getWorkspaceGitInfo()
-		}
-
-		return this._gitProperties
-	}
-
-	public get gitProperties(): GitProperties | undefined {
-		return this._gitProperties
-	}
-
-	public async getTelemetryProperties(): Promise<TelemetryProperties> {
-		// kilocode_change start
-		const {
-			mode,
-			apiConfiguration,
-			language,
-			experiments, // kilocode_change
-		} = await this.getState()
-		const task = this.getCurrentTask()
-
-		const packageJSON = this.context.extension?.packageJSON
-
-		async function getModelId() {
-			try {
-				if (task?.api instanceof OpenRouterHandler) {
-					return { modelId: (await task.api.fetchModel()).id }
-				} else {
-					return { modelId: task?.api?.getModel().id }
-				}
-			} catch (error) {
-				return {
-					modelException: stringifyError(error),
-				}
-			}
-		}
-
-		function getOpenRouter() {
-			if (
-				apiConfiguration &&
-				(apiConfiguration.apiProvider === "openrouter" || apiConfiguration.apiProvider === "kilocode")
-			) {
-				return {
-					openRouter: {
-						sort: apiConfiguration.openRouterProviderSort,
-						dataCollection: apiConfiguration.openRouterProviderDataCollection,
-						specificProvider: apiConfiguration.openRouterSpecificProvider,
-					},
-				}
-			}
-			return {}
-		}
-
-		function getMemory() {
-			try {
-				return { memory: { ...process.memoryUsage() } }
-			} catch (error) {
-				return {
-					memoryException: stringifyError(error),
-				}
-			}
-		}
-
-		const getFastApply = () => {
-			try {
-				return {
-					fastApply: {
-						morphFastApply: Boolean(experiments.morphFastApply),
-						morphApiKey: Boolean(this.contextProxy.getValue("morphApiKey")),
-					},
-				}
-			} catch (error) {
-				return {
-					fastApplyException: stringifyError(error),
-				}
-			}
-		}
-		// kilocode_change end
-
-		return {
-			...this.getAppProperties(),
-			// ...this.getCloudProperties(), kilocode_change: disable
-			// kilocode_change start
-			...(await getModelId()),
-			...getMemory(),
-			...getFastApply(),
-			...getOpenRouter(),
-			// kilocode_change end
-			...(await this.getTaskProperties()),
-			...(await this.getGitProperties()),
-		}
-	}
-
-	// kilocode_change:
-	// Tool Library (MCP marketplace + additional sources)
-	private async fetchMcpMarketplaceFromApi(silent: boolean = false): Promise<McpMarketplaceCatalog | undefined> {
-		try {
-			const response = await axios.get("https://api.cline.bot/v1/mcp/marketplace", {
-				headers: {
-					"Content-Type": "application/json",
-				},
-			})
-
-			if (!response.data) {
-				throw new Error("Invalid response from MCP marketplace API")
-			}
-
-			const remoteItems: McpMarketplaceItem[] = (response.data || []).map((item: any) => ({
-				...item,
-				githubStars: item.githubStars ?? 0,
-				downloadCount: item.downloadCount ?? 0,
-				tags: item.tags ?? [],
-				integrationType: (item.integrationType ?? "mcp") as McpMarketplaceItem["integrationType"],
-				source: "remote",
-			}))
-
-			const mergedById = new Map<string, McpMarketplaceItem>()
-			for (const item of remoteItems) {
-				mergedById.set(item.mcpId, item)
-			}
-			for (const localItem of additionalToolLibraryItems) {
-				mergedById.set(localItem.mcpId, {
-					...localItem,
-					integrationType: localItem.integrationType ?? "computer-use",
-				})
-			}
-
-			const catalog: McpMarketplaceCatalog = {
-				items: Array.from(mergedById.values()),
-			}
-
-			await this.updateGlobalState("mcpMarketplaceCatalog", catalog)
-			return catalog
-		} catch (error) {
-			console.error("Failed to fetch MCP marketplace:", error)
-			if (!silent) {
-				const errorMessage = error instanceof Error ? error.message : "Failed to fetch MCP marketplace"
-				await this.postMessageToWebview({
-					type: "mcpMarketplaceCatalog",
-					error: errorMessage,
-				})
-				vscode.window.showErrorMessage(errorMessage)
-			}
-			return undefined
-		}
-	}
-
-	async silentlyRefreshMcpMarketplace() {
-		try {
-			const catalog = await this.fetchMcpMarketplaceFromApi(true)
-			if (catalog) {
-				await this.postMessageToWebview({
-					type: "mcpMarketplaceCatalog",
-					mcpMarketplaceCatalog: catalog,
-				})
-			}
-		} catch (error) {
-			console.error("Failed to silently refresh MCP marketplace:", error)
-		}
-	}
-
-	async fetchMcpMarketplace(forceRefresh: boolean = false) {
-		try {
-			// Check if we have cached data
-			const cachedCatalog = (await this.getGlobalState("mcpMarketplaceCatalog")) as
-				| McpMarketplaceCatalog
-				| undefined
-			if (!forceRefresh && cachedCatalog?.items) {
-				await this.postMessageToWebview({
-					type: "mcpMarketplaceCatalog",
-					mcpMarketplaceCatalog: cachedCatalog,
-				})
-				return
-			}
-
-			const catalog = await this.fetchMcpMarketplaceFromApi(false)
-			if (catalog) {
-				await this.postMessageToWebview({
-					type: "mcpMarketplaceCatalog",
-					mcpMarketplaceCatalog: catalog,
-				})
-			}
-		} catch (error) {
-			console.error("Failed to handle cached MCP marketplace:", error)
-			const errorMessage = error instanceof Error ? error.message : "Failed to handle cached MCP marketplace"
-			await this.postMessageToWebview({
-				type: "mcpMarketplaceCatalog",
-				error: errorMessage,
-			})
-			vscode.window.showErrorMessage(errorMessage)
-		}
-	}
-
-	async downloadMcp(mcpId: string) {
-		try {
-			// First check if we already have this MCP server installed
-			const servers = this.mcpHub?.getServers() || []
-			const isInstalled = servers.some((server: McpServer) => server.name === mcpId)
-
-			if (isInstalled) {
-				throw new Error("This MCP server is already installed")
-			}
-
-			// Fetch server details from marketplace
-			const response = await axios.post<McpDownloadResponse>(
-				"https://api.cline.bot/v1/mcp/download",
-				{ mcpId },
-				{
-					headers: { "Content-Type": "application/json" },
-					timeout: 10000,
-				},
-			)
-
-			if (!response.data) {
-				throw new Error("Invalid response from MCP marketplace API")
-			}
-
-			console.log("[downloadMcp] Response from download API", { response })
-
-			const mcpDetails = response.data
-
-			// Validate required fields
-			if (!mcpDetails.githubUrl) {
-				throw new Error("Missing GitHub URL in MCP download response")
-			}
-			if (!mcpDetails.readmeContent) {
-				throw new Error("Missing README content in MCP download response")
-			}
-
-			// Send details to webview
-			await this.postMessageToWebview({
-				type: "mcpDownloadDetails",
-				mcpDownloadDetails: mcpDetails,
-			})
-
-			// Create task with context from README and added guidelines for MCP server installation
-			const task = `;
-        Set;
-        up;
-        the;
-        MCP;
-        server;
-        from;
-        $;
-        {
-            mcpDetails.githubUrl;
-        }
-        while (adhering)
-            to;
-        these;
-        MCP;
-        server;
-        installation;
-        rules: -Use;
-        "${mcpDetails.mcpId}";
-        server;
-        name in $;
-        {
-            GlobalFileNames.mcpSettings;
-        }
-        -Create;
-        the;
-        directory;
-        for (the; new MCP; server)
-            before;
-        starting;
-        installation.
-            - Use;
-        commands;
-        aligned;
-        with (the)
-            user;
-        's shell and operating system best practices.
-            - The;
-        following;
-        README;
-        may;
-        contain;
-        instructions;
-        that;
-        conflict;
-        with (the)
-            user;
-        's OS, in which case proceed thoughtfully.
-            - Once;
-        installed, demonstrate;
-        the;
-        server;
-        's capabilities by using one of its tools.;
-        Here;
-        is;
-        the;
-        project;
-        's README to help you get started:\n\n${mcpDetails.readmeContent}\n${mcpDetails.llmsInstallationContent}`;
-        // Initialize task and show chat view
-        await this.createTask(task);
-        await this.postMessageToWebview({
-            type: "action",
-            action: "chatButtonClicked",
-        });
-    }
-    try { }
-    catch (error) {
-        console.error("Failed to download MCP:", error);
-        let errorMessage = "Failed to download MCP";
-        if (axios.isAxiosError(error)) {
-            if (error.code === "ECONNABORTED") {
-                errorMessage = "Request timed out. Please try again.";
+        const bridge = BridgeOrchestrator.getInstance();
+        if (bridge) {
+            const currentTask = this.getCurrentTask();
+            if (currentTask && !currentTask.enableBridge) {
+                try {
+                    currentTask.enableBridge = true;
+                    await BridgeOrchestrator.subscribeToTask(currentTask);
+                }
+                catch (error) {
+                    const message = `[ClineProvider#remoteControlEnabled] BridgeOrchestrator.subscribeToTask() failed: ${error instanceof Error ? error.message : String(error)}`;
+                    this.log(message);
+                    console.error(message);
+                }
             }
-            else if (error.response?.status === 404) {
-                errorMessage = "MCP server not found in marketplace.";
-            }
-            else if (error.response?.status === 500) {
-                errorMessage = "Internal server error. Please try again later.";
-            }
-            else if (!error.response && error.request) {
-                errorMessage = "Network error. Please check your internet connection.";
-            }
-        }
-        else if (error instanceof Error) {
-            errorMessage = error.message;
-        }
-        // Show error in both notification and marketplace UI
-        vscode.window.showErrorMessage(errorMessage);
-        await this.postMessageToWebview({
-            type: "mcpDownloadDetails",
-            error: errorMessage,
-        });
-    }
-}
-// end kilocode_change
-// kilocode_change start
-// Add new methods for favorite functionality
-async;
-toggleTaskFavorite(id, string);
-{
-    const history = this.getGlobalState("taskHistory") ?? [];
-    const updatedHistory = history.map((item) => {
-        if (item.id === id) {
-            return { ...item, isFavorited: !item.isFavorited };
-        }
-        return item;
-    });
-    await this.updateGlobalState("taskHistory", updatedHistory);
-    await this.postStateToWebview();
-}
-async;
-getFavoriteTasks();
-Promise < HistoryItem[] > {
-    const: history = this.getGlobalState("taskHistory") ?? [],
-    return: history.filter((item) => item.isFavorited)
-};
-// Modify batch delete to respect favorites
-async;
-deleteMultipleTasks(taskIds, string[]);
-{
-    const history = this.getGlobalState("taskHistory") ?? [];
-    const favoritedTaskIds = taskIds.filter((id) => history.find((item) => item.id === id)?.isFavorited);
-    if (favoritedTaskIds.length > 0) {
-        throw new Error("Cannot delete favorited tasks. Please unfavorite them first.");
-    }
-    for (const id of taskIds) {
-        await this.deleteTaskWithId(id);
-    }
-}
-async;
-setTaskFileNotFound(id, string);
-{
-    const history = this.getGlobalState("taskHistory") ?? [];
-    const updatedHistory = history.map((item) => {
-        if (item.id === id) {
-            return { ...item, fileNotfound: true };
-        }
-        return item;
-    });
-    await this.updateGlobalState("taskHistory", updatedHistory);
-    await this.postStateToWebview();
-}
-get;
-cwd();
-{
-    return this.currentWorkspacePath || getWorkspacePath();
-}
-convertToWebviewUri(filePath, string);
-string;
-{
-    try {
-        const fileUri = vscode.Uri.file(filePath);
-        // Check if we have a webview available
-        if (this.view?.webview) {
-            const webviewUri = this.view.webview.asWebviewUri(fileUri);
-            return webviewUri.toString();
-        }
-        // Specific error for no webview available
-        const error = new Error("No webview available for URI conversion");
-        console.error(error.message);
-        // Fallback to file URI if no webview available
-        return fileUri.toString();
-    }
-    catch (error) {
-        // More specific error handling
-        if (error instanceof TypeError) {
-            console.error("Invalid file path provided for URI conversion:", error);
         }
         else {
-            console.error("Failed to convert to webview URI:", error);
+            for (const task of this.clineStack) {
+                if (task.enableBridge) {
+                    try {
+                        await BridgeOrchestrator.getInstance()?.unsubscribeFromTask(task.taskId);
+                    }
+                    catch (error) {
+                        const message = `[ClineProvider#remoteControlEnabled] BridgeOrchestrator#unsubscribeFromTask() failed: ${error instanceof Error ? error.message : String(error)}`;
+                        this.log(message);
+                        console.error(message);
+                    }
+                }
+            }
         }
-        // Return file URI as fallback
-        return vscode.Uri.file(filePath).toString();
+    }
+    /**
+     * Gets the CodeIndexManager for the current active workspace
+     * @returns CodeIndexManager instance for the current workspace or the default one
+     */
+    getCurrentWorkspaceCodeIndexManager() {
+        return CodeIndexManager.getInstance(this.context);
+    }
+    /**
+     * Updates the code index status subscription to listen to the current workspace manager
+     */
+    updateCodeIndexStatusSubscription() {
+        // Get the current workspace manager
+        const currentManager = this.getCurrentWorkspaceCodeIndexManager();
+        // If the manager hasn't changed, no need to update subscription
+        if (currentManager === this.codeIndexManager) {
+            return;
+        }
+        // Dispose the old subscription if it exists
+        if (this.codeIndexStatusSubscription) {
+            this.codeIndexStatusSubscription.dispose();
+            this.codeIndexStatusSubscription = undefined;
+        }
+        // Update the current workspace manager reference
+        this.codeIndexManager = currentManager;
+        // Subscribe to the new manager's progress updates if it exists
+        if (currentManager) {
+            this.codeIndexStatusSubscription = currentManager.onProgressUpdate((update) => {
+                // Only send updates if this manager is still the current one
+                if (currentManager === this.getCurrentWorkspaceCodeIndexManager()) {
+                    // Get the full status from the manager to ensure we have all fields correctly formatted
+                    const fullStatus = currentManager.getCurrentStatus();
+                    this.postMessageToWebview({
+                        type: "indexingStatusUpdate",
+                        values: fullStatus,
+                    });
+                }
+            });
+            if (this.view) {
+                this.webviewDisposables.push(this.codeIndexStatusSubscription);
+            }
+            // Send initial status for the current workspace
+            this.postMessageToWebview({
+                type: "indexingStatusUpdate",
+                values: currentManager.getCurrentStatus(),
+            });
+        }
+    }
+    /**
+     * TaskProviderLike, TelemetryPropertiesProvider
+     */
+    getCurrentTask() {
+        if (this.clineStack.length === 0) {
+            return undefined;
+        }
+        return this.clineStack[this.clineStack.length - 1];
+    }
+    getRecentTasks() {
+        if (this.recentTasksCache) {
+            return this.recentTasksCache;
+        }
+        const history = this.getGlobalState("taskHistory") ?? [];
+        const workspaceTasks = [];
+        for (const item of history) {
+            if (!item.ts || !item.task || item.workspace !== this.cwd) {
+                continue;
+            }
+            workspaceTasks.push(item);
+        }
+        if (workspaceTasks.length === 0) {
+            this.recentTasksCache = [];
+            return this.recentTasksCache;
+        }
+        workspaceTasks.sort((a, b) => b.ts - a.ts);
+        let recentTaskIds = [];
+        if (workspaceTasks.length >= 100) {
+            // If we have at least 100 tasks, return tasks from the last 7 days.
+            const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+            for (const item of workspaceTasks) {
+                // Stop when we hit tasks older than 7 days.
+                if (item.ts < sevenDaysAgo) {
+                    break;
+                }
+                recentTaskIds.push(item.id);
+            }
+        }
+        else {
+            // Otherwise, return the most recent 100 tasks (or all if less than 100).
+            recentTaskIds = workspaceTasks.slice(0, Math.min(100, workspaceTasks.length)).map((item) => item.id);
+        }
+        this.recentTasksCache = recentTaskIds;
+        return this.recentTasksCache;
+    }
+    // When initializing a new task, (not from history but from a tool command
+    // new_task) there is no need to remove the previous task since the new
+    // task is a subtask of the previous one, and when it finishes it is removed
+    // from the stack and the caller is resumed in this way we can have a chain
+    // of tasks, each one being a sub task of the previous one until the main
+    // task is finished.
+    async createTask(text, images, parentTask, options = {}, configuration = {}) {
+        if (configuration) {
+            await this.setValues(configuration);
+            if (configuration.allowedCommands) {
+                await vscode.workspace
+                    .getConfiguration(Package.name)
+                    .update("allowedCommands", configuration.allowedCommands, vscode.ConfigurationTarget.Global);
+            }
+            if (configuration.deniedCommands) {
+                await vscode.workspace
+                    .getConfiguration(Package.name)
+                    .update("deniedCommands", configuration.deniedCommands, vscode.ConfigurationTarget.Global);
+            }
+            if (configuration.commandExecutionTimeout !== undefined) {
+                await vscode.workspace
+                    .getConfiguration(Package.name)
+                    .update("commandExecutionTimeout", configuration.commandExecutionTimeout, vscode.ConfigurationTarget.Global);
+            }
+            if (configuration.currentApiConfigName) {
+                await this.setProviderProfile(configuration.currentApiConfigName);
+            }
+        }
+        const { apiConfiguration, organizationAllowList, diffEnabled: enableDiff, enableCheckpoints, fuzzyMatchThreshold, experiments, cloudUserInfo, remoteControlEnabled, } = await this.getState();
+        if (!ProfileValidator.isProfileAllowed(apiConfiguration, organizationAllowList)) {
+            throw new OrganizationAllowListViolationError(t("common:errors.violated_organization_allowlist"));
+        }
+        const task = new Task({
+            provider: this,
+            context: this.context, // kilocode_change
+            apiConfiguration,
+            enableDiff,
+            enableCheckpoints,
+            fuzzyMatchThreshold,
+            consecutiveMistakeLimit: apiConfiguration.consecutiveMistakeLimit,
+            task: text,
+            images,
+            experiments,
+            rootTask: this.clineStack.length > 0 ? this.clineStack[0] : undefined,
+            parentTask,
+            taskNumber: this.clineStack.length + 1,
+            onCreated: this.taskCreationCallback,
+            enableBridge: BridgeOrchestrator.isEnabled(cloudUserInfo, remoteControlEnabled),
+            initialTodos: options.initialTodos,
+            ...options,
+        });
+        await this.addClineToStack(task);
+        this.log(`[createTask] ${task.parentTask ? "child" : "parent"} task ${task.taskId}.${task.instanceId} instantiated`);
+        return task;
+    }
+    async cancelTask() {
+        const task = this.getCurrentTask();
+        if (!task) {
+            return;
+        }
+        console.log(`[cancelTask] cancelling task ${task.taskId}.${task.instanceId}`);
+        const { historyItem } = await this.getTaskWithId(task.taskId);
+        // Preserve parent and root task information for history item.
+        const rootTask = task.rootTask;
+        const parentTask = task.parentTask;
+        task.abortTask();
+        await pWaitFor(() => this.getCurrentTask() === undefined ||
+            this.getCurrentTask().isStreaming === false ||
+            this.getCurrentTask().didFinishAbortingStream ||
+            // If only the first chunk is processed, then there's no
+            // need to wait for graceful abort (closes edits, browser,
+            // etc).
+            this.getCurrentTask().isWaitingForFirstChunk, {
+            timeout: 3_000,
+        }).catch(() => {
+            console.error("Failed to abort task");
+        });
+        if (this.getCurrentTask()) {
+            // 'abandoned' will prevent this Cline instance from affecting
+            // future Cline instances. This may happen if its hanging on a
+            // streaming request.
+            this.getCurrentTask().abandoned = true;
+        }
+        // Clears task again, so we need to abortTask manually above.
+        await this.createTaskWithHistoryItem({ ...historyItem, rootTask, parentTask });
+    }
+    // Clear the current task without treating it as a subtask.
+    // This is used when the user cancels a task that is not a subtask.
+    async clearTask() {
+        if (this.clineStack.length > 0) {
+            const task = this.clineStack[this.clineStack.length - 1];
+            console.log(`[clearTask] clearing task ${task.taskId}.${task.instanceId}`);
+            await this.removeClineFromStack();
+        }
+    }
+    resumeTask(taskId) {
+        // Use the existing showTaskWithId method which handles both current and
+        // historical tasks.
+        this.showTaskWithId(taskId).catch((error) => {
+            this.log(`Failed to resume task ${taskId}: ${error.message}`);
+        });
+    }
+    // Modes
+    async getModes() {
+        try {
+            const customModes = await this.customModesManager.getCustomModes();
+            return [...DEFAULT_MODES, ...customModes].map(({ slug, name }) => ({ slug, name }));
+        }
+        catch (error) {
+            return DEFAULT_MODES.map(({ slug, name }) => ({ slug, name }));
+        }
+    }
+    async getMode() {
+        const { mode } = await this.getState();
+        return mode;
+    }
+    async setMode(mode) {
+        await this.setValues({ mode });
+    }
+    // Provider Profiles
+    async getProviderProfiles() {
+        const { listApiConfigMeta = [] } = await this.getState();
+        return listApiConfigMeta.map((profile) => ({ name: profile.name, provider: profile.apiProvider }));
+    }
+    async getProviderProfile() {
+        const { currentApiConfigName = "default" } = await this.getState();
+        return currentApiConfigName;
+    }
+    async setProviderProfile(name) {
+        await this.activateProviderProfile({ name });
+    }
+    // Telemetry
+    _appProperties;
+    _gitProperties;
+    getAppProperties() {
+        if (!this._appProperties) {
+            const packageJSON = this.context.extension?.packageJSON;
+            // kilocode_change start
+            const { kiloCodeWrapped, kiloCodeWrapper, kiloCodeWrapperCode, kiloCodeWrapperVersion, kiloCodeWrapperTitle, } = getKiloCodeWrapperProperties();
+            // kilocode_change end
+            this._appProperties = {
+                appName: packageJSON?.name ?? Package.name,
+                appVersion: packageJSON?.version ?? Package.version,
+                vscodeVersion: vscode.version,
+                platform: isWsl ? "wsl" /* kilocode_change */ : process.platform,
+                editorName: kiloCodeWrapperTitle ? kiloCodeWrapperTitle : vscode.env.appName, // kilocode_change
+                wrapped: kiloCodeWrapped, // kilocode_change
+                wrapper: kiloCodeWrapper, // kilocode_change
+                wrapperCode: kiloCodeWrapperCode, // kilocode_change
+                wrapperVersion: kiloCodeWrapperVersion, // kilocode_change
+                wrapperTitle: kiloCodeWrapperTitle, // kilocode_change
+            };
+        }
+        return this._appProperties;
+    }
+    get appProperties() {
+        return this._appProperties ?? this.getAppProperties();
+    }
+    getCloudProperties() {
+        let cloudIsAuthenticated;
+        try {
+            if (CloudService.hasInstance()) {
+                cloudIsAuthenticated = CloudService.instance.isAuthenticated();
+            }
+        }
+        catch (error) {
+            // Silently handle errors to avoid breaking telemetry collection.
+            this.log(`[getTelemetryProperties] Failed to get cloud auth state: ${error}`);
+        }
+        return {
+            cloudIsAuthenticated,
+        };
+    }
+    async getTaskProperties() {
+        const { language = "en", mode, apiConfiguration } = await this.getState();
+        const task = this.getCurrentTask();
+        const todoList = task?.todoList;
+        let todos;
+        if (todoList && todoList.length > 0) {
+            todos = {
+                total: todoList.length,
+                completed: todoList.filter((todo) => todo.status === "completed").length,
+                inProgress: todoList.filter((todo) => todo.status === "in_progress").length,
+                pending: todoList.filter((todo) => todo.status === "pending").length,
+            };
+        }
+        return {
+            language,
+            mode,
+            taskId: task?.taskId,
+            apiProvider: apiConfiguration?.apiProvider,
+            diffStrategy: task?.diffStrategy?.getName(),
+            isSubtask: task ? !!task.parentTask : undefined,
+            ...(todos && { todos }),
+        };
+    }
+    async getGitProperties() {
+        if (!this._gitProperties) {
+            this._gitProperties = await getWorkspaceGitInfo();
+        }
+        return this._gitProperties;
+    }
+    get gitProperties() {
+        return this._gitProperties;
+    }
+    async getTelemetryProperties() {
+        // kilocode_change start
+        const { mode, apiConfiguration, language, experiments, // kilocode_change
+         } = await this.getState();
+        const task = this.getCurrentTask();
+        const packageJSON = this.context.extension?.packageJSON;
+        async function getModelId() {
+            try {
+                if (task?.api instanceof OpenRouterHandler) {
+                    return { modelId: (await task.api.fetchModel()).id };
+                }
+                else {
+                    return { modelId: task?.api?.getModel().id };
+                }
+            }
+            catch (error) {
+                return {
+                    modelException: stringifyError(error),
+                };
+            }
+        }
+        function getOpenRouter() {
+            if (apiConfiguration &&
+                (apiConfiguration.apiProvider === "openrouter" || apiConfiguration.apiProvider === "kilocode")) {
+                return {
+                    openRouter: {
+                        sort: apiConfiguration.openRouterProviderSort,
+                        dataCollection: apiConfiguration.openRouterProviderDataCollection,
+                        specificProvider: apiConfiguration.openRouterSpecificProvider,
+                    },
+                };
+            }
+            return {};
+        }
+        function getMemory() {
+            try {
+                return { memory: { ...process.memoryUsage() } };
+            }
+            catch (error) {
+                return {
+                    memoryException: stringifyError(error),
+                };
+            }
+        }
+        const getFastApply = () => {
+            try {
+                return {
+                    fastApply: {
+                        morphFastApply: Boolean(experiments.morphFastApply),
+                        morphApiKey: Boolean(this.contextProxy.getValue("morphApiKey")),
+                    },
+                };
+            }
+            catch (error) {
+                return {
+                    fastApplyException: stringifyError(error),
+                };
+            }
+        };
+        // kilocode_change end
+        return {
+            ...this.getAppProperties(),
+            // ...this.getCloudProperties(), kilocode_change: disable
+            // kilocode_change start
+            ...(await getModelId()),
+            ...getMemory(),
+            ...getFastApply(),
+            ...getOpenRouter(),
+            // kilocode_change end
+            ...(await this.getTaskProperties()),
+            ...(await this.getGitProperties()),
+        };
+    }
+    // kilocode_change:
+    // Tool Library (MCP marketplace + additional sources)
+    async fetchMcpMarketplaceFromApi(silent = false) {
+        try {
+            const response = await axios.get("https://api.cline.bot/v1/mcp/marketplace", {
+                headers: {
+                    "Content-Type": "application/json",
+                },
+            });
+            if (!response.data) {
+                throw new Error("Invalid response from MCP marketplace API");
+            }
+            const remoteItems = (response.data || []).map((item) => ({
+                ...item,
+                githubStars: item.githubStars ?? 0,
+                downloadCount: item.downloadCount ?? 0,
+                tags: item.tags ?? [],
+                integrationType: (item.integrationType ?? "mcp"),
+                source: "remote",
+            }));
+            const mergedById = new Map();
+            for (const item of remoteItems) {
+                mergedById.set(item.mcpId, item);
+            }
+            for (const localItem of additionalToolLibraryItems) {
+                mergedById.set(localItem.mcpId, {
+                    ...localItem,
+                    integrationType: localItem.integrationType ?? "computer-use",
+                });
+            }
+            const catalog = {
+                items: Array.from(mergedById.values()),
+            };
+            await this.updateGlobalState("mcpMarketplaceCatalog", catalog);
+            return catalog;
+        }
+        catch (error) {
+            console.error("Failed to fetch MCP marketplace:", error);
+            if (!silent) {
+                const errorMessage = error instanceof Error ? error.message : "Failed to fetch MCP marketplace";
+                await this.postMessageToWebview({
+                    type: "mcpMarketplaceCatalog",
+                    error: errorMessage,
+                });
+                vscode.window.showErrorMessage(errorMessage);
+            }
+            return undefined;
+        }
+    }
+    async silentlyRefreshMcpMarketplace() {
+        try {
+            const catalog = await this.fetchMcpMarketplaceFromApi(true);
+            if (catalog) {
+                await this.postMessageToWebview({
+                    type: "mcpMarketplaceCatalog",
+                    mcpMarketplaceCatalog: catalog,
+                });
+            }
+        }
+        catch (error) {
+            console.error("Failed to silently refresh MCP marketplace:", error);
+        }
+    }
+    async fetchMcpMarketplace(forceRefresh = false) {
+        try {
+            // Check if we have cached data
+            const cachedCatalog = (await this.getGlobalState("mcpMarketplaceCatalog"));
+            if (!forceRefresh && cachedCatalog?.items) {
+                await this.postMessageToWebview({
+                    type: "mcpMarketplaceCatalog",
+                    mcpMarketplaceCatalog: cachedCatalog,
+                });
+                return;
+            }
+            const catalog = await this.fetchMcpMarketplaceFromApi(false);
+            if (catalog) {
+                await this.postMessageToWebview({
+                    type: "mcpMarketplaceCatalog",
+                    mcpMarketplaceCatalog: catalog,
+                });
+            }
+        }
+        catch (error) {
+            console.error("Failed to handle cached MCP marketplace:", error);
+            const errorMessage = error instanceof Error ? error.message : "Failed to handle cached MCP marketplace";
+            await this.postMessageToWebview({
+                type: "mcpMarketplaceCatalog",
+                error: errorMessage,
+            });
+            vscode.window.showErrorMessage(errorMessage);
+        }
+    }
+    async downloadMcp(mcpId) {
+        try {
+            // First check if we already have this MCP server installed
+            const servers = this.mcpHub?.getServers() || [];
+            const isInstalled = servers.some((server) => server.name === mcpId);
+            if (isInstalled) {
+                throw new Error("This MCP server is already installed");
+            }
+            // Fetch server details from marketplace
+            const response = await axios.post("https://api.cline.bot/v1/mcp/download", { mcpId }, {
+                headers: { "Content-Type": "application/json" },
+                timeout: 10000,
+            });
+            if (!response.data) {
+                throw new Error("Invalid response from MCP marketplace API");
+            }
+            console.log("[downloadMcp] Response from download API", { response });
+            const mcpDetails = response.data;
+            // Validate required fields
+            if (!mcpDetails.githubUrl) {
+                throw new Error("Missing GitHub URL in MCP download response");
+            }
+            if (!mcpDetails.readmeContent) {
+                throw new Error("Missing README content in MCP download response");
+            }
+            // Send details to webview
+            await this.postMessageToWebview({
+                type: "mcpDownloadDetails",
+                mcpDownloadDetails: mcpDetails,
+            });
+            // Create task with context from README and added guidelines for MCP server installation
+            const task = `Set up the MCP server from ${mcpDetails.githubUrl} while adhering to these MCP server installation rules:
+- Use "${mcpDetails.mcpId}" as the server name in ${GlobalFileNames.mcpSettings}.
+- Create the directory for the new MCP server before starting installation.
+- Use commands aligned with the user's shell and operating system best practices.
+- The following README may contain instructions that conflict with the user's OS, in which case proceed thoughtfully.
+- Once installed, demonstrate the server's capabilities by using one of its tools.
+Here is the project's README to help you get started:\n\n${mcpDetails.readmeContent}\n${mcpDetails.llmsInstallationContent}`;
+            // Initialize task and show chat view
+            await this.createTask(task);
+            await this.postMessageToWebview({
+                type: "action",
+                action: "chatButtonClicked",
+            });
+        }
+        catch (error) {
+            console.error("Failed to download MCP:", error);
+            let errorMessage = "Failed to download MCP";
+            if (axios.isAxiosError(error)) {
+                if (error.code === "ECONNABORTED") {
+                    errorMessage = "Request timed out. Please try again.";
+                }
+                else if (error.response?.status === 404) {
+                    errorMessage = "MCP server not found in marketplace.";
+                }
+                else if (error.response?.status === 500) {
+                    errorMessage = "Internal server error. Please try again later.";
+                }
+                else if (!error.response && error.request) {
+                    errorMessage = "Network error. Please check your internet connection.";
+                }
+            }
+            else if (error instanceof Error) {
+                errorMessage = error.message;
+            }
+            // Show error in both notification and marketplace UI
+            vscode.window.showErrorMessage(errorMessage);
+            await this.postMessageToWebview({
+                type: "mcpDownloadDetails",
+                error: errorMessage,
+            });
+        }
+    }
+    // end kilocode_change
+    // kilocode_change start
+    // Add new methods for favorite functionality
+    async toggleTaskFavorite(id) {
+        const history = this.getGlobalState("taskHistory") ?? [];
+        const updatedHistory = history.map((item) => {
+            if (item.id === id) {
+                return { ...item, isFavorited: !item.isFavorited };
+            }
+            return item;
+        });
+        await this.updateGlobalState("taskHistory", updatedHistory);
+        await this.postStateToWebview();
+    }
+    async getFavoriteTasks() {
+        const history = this.getGlobalState("taskHistory") ?? [];
+        return history.filter((item) => item.isFavorited);
+    }
+    // Modify batch delete to respect favorites
+    async deleteMultipleTasks(taskIds) {
+        const history = this.getGlobalState("taskHistory") ?? [];
+        const favoritedTaskIds = taskIds.filter((id) => history.find((item) => item.id === id)?.isFavorited);
+        if (favoritedTaskIds.length > 0) {
+            throw new Error("Cannot delete favorited tasks. Please unfavorite them first.");
+        }
+        for (const id of taskIds) {
+            await this.deleteTaskWithId(id);
+        }
+    }
+    async setTaskFileNotFound(id) {
+        const history = this.getGlobalState("taskHistory") ?? [];
+        const updatedHistory = history.map((item) => {
+            if (item.id === id) {
+                return { ...item, fileNotfound: true };
+            }
+            return item;
+        });
+        await this.updateGlobalState("taskHistory", updatedHistory);
+        await this.postStateToWebview();
+    }
+    // kilocode_change end
+    get cwd() {
+        return this.currentWorkspacePath || getWorkspacePath();
+    }
+    /**
+     * Convert a file path to a webview-accessible URI
+     * This method safely converts file paths to URIs that can be loaded in the webview
+     *
+     * @param filePath - The absolute file path to convert
+     * @returns The webview URI string, or the original file URI if conversion fails
+     * @throws {Error} When webview is not available
+     * @throws {TypeError} When file path is invalid
+     */
+    convertToWebviewUri(filePath) {
+        try {
+            const fileUri = vscode.Uri.file(filePath);
+            // Check if we have a webview available
+            if (this.view?.webview) {
+                const webviewUri = this.view.webview.asWebviewUri(fileUri);
+                return webviewUri.toString();
+            }
+            // Specific error for no webview available
+            const error = new Error("No webview available for URI conversion");
+            console.error(error.message);
+            // Fallback to file URI if no webview available
+            return fileUri.toString();
+        }
+        catch (error) {
+            // More specific error handling
+            if (error instanceof TypeError) {
+                console.error("Invalid file path provided for URI conversion:", error);
+            }
+            else {
+                console.error("Failed to convert to webview URI:", error);
+            }
+            // Return file URI as fallback
+            return vscode.Uri.file(filePath).toString();
+        }
     }
 }
 function createCloverWelcomeMessage(timestampIso = new Date().toISOString()) {
@@ -5043,29 +3554,7 @@ function cloneOuterGateState(state) {
         suggestions: [...state.suggestions],
         quickActions: state.quickActions.map((action) => ({ ...action })),
         integrations: state.integrations.map((integration) => ({ ...integration })),
-        cloverMessages: state.cloverMessages.map((message) => ({
-            ...message,
-            references: message.references ? [...message.references] : undefined,
-            insightEvent: message.insightEvent
-                ? {
-                    ...message.insightEvent,
-                    note: optionalString(message.insightEvent.note),
-                    insight: { ...message.insightEvent.insight },
-                    changes: message.insightEvent.changes?.map((change) => ({ ...change })),
-                }
-                : undefined,
-            automationCall: message.automationCall
-                ? {
-                    ...message.automationCall,
-                    inputs: message.automationCall.inputs
-                        ? message.automationCall.inputs.map((entry) => ({ ...entry }))
-                        : undefined,
-                    outputLines: message.automationCall.outputLines
-                        ? [...message.automationCall.outputLines]
-                        : undefined,
-                }
-                : undefined,
-        })),
+        cloverMessages: state.cloverMessages.map((message) => ({ ...message })),
         isCloverProcessing: state.isCloverProcessing ?? false,
         cloverSessions: {
             entries: state.cloverSessions.entries.map((session) => ({ ...session })),
@@ -5080,7 +3569,12 @@ function cloneOuterGateState(state) {
             points: state.passionMap.points.map((point) => ({
                 ...point,
                 coordinates: { ...point.coordinates },
-                metadata: point.metadata ? { ...point.metadata } : undefined,
+                metadata: point.metadata
+                    ? {
+                        ...point.metadata,
+                        references: point.metadata.references ? [...point.metadata.references] : undefined,
+                    }
+                    : undefined,
             })),
             clusters: state.passionMap.clusters.map((cluster) => ({
                 ...cluster,
@@ -5097,947 +3591,179 @@ function cloneOuterGateState(state) {
 function createInitialOuterGateState(_workplaceState) {
     const base = cloneOuterGateState(defaultOuterGateState);
     const nowIso = new Date().toISOString();
-    base.analysisPool = {
-        ...base.analysisPool,
-        lastUpdatedIso: nowIso,
-    };
+    // Ensure timestamps reflect the current session instead of module evaluation time.
+    base.analysisPool = { ...base.analysisPool, lastUpdatedIso: nowIso };
+    // Seed with the standard welcome message but leave the dataset empty for real data to populate.
     base.cloverMessages = [createCloverWelcomeMessage(nowIso)];
     base.isCloverProcessing = false;
     return base;
 }
-function buildPassionMapFromAnalysis(items) {
-    const sanitized = items
-        .filter((item) => Array.isArray(item.embedding) && item.embedding.length >= 2 && item.text && item.text.trim().length > 0)
-        .slice(0, 500);
-    if (!sanitized.length) {
+const PASSION_KEYWORD_STOPWORDS = new Set([
+    "the",
+    "and",
+    "with",
+    "from",
+    "this",
+    "that",
+    "into",
+    "your",
+    "have",
+    "about",
+    "when",
+    "where",
+    "they",
+    "them",
+    "their",
+    "will",
+    "just",
+    "been",
+    "make",
+    "over",
+    "under",
+    "more",
+    "less",
+    "into",
+    "through",
+    "while",
+    "after",
+    "before",
+    "those",
+    "these",
+    "then",
+    "than",
+]);
+function buildSimplePassionMap(items) {
+    if (!items.length) {
         return { points: [], clusters: [], summary: undefined };
     }
-    const embeddings = sanitized.map((item) => item.embedding);
-    const coordinates = runTsneEmbedding(embeddings);
+    const coordinates = deriveNormalizedCoordinates(items);
     const nowMs = Date.now();
-    const clusterEntries = sanitized.map((item, index) => ({
-        item,
-        coord: coordinates[index],
-        heat: computeRecencyHeat(item.createdAt, nowMs),
-    }));
-    const clusterCount = estimateClusterCount(clusterEntries.length);
-    const { assignments, centroids } = kMeans(clusterEntries.map((entry) => entry.coord), clusterCount);
-    const clusterIdCache = new Map();
+    const points = items.map((item, index) => {
+        const snippet = createPassionSnippet(item.text);
+        return {
+            id: item.id,
+            label: createPassionLabel(snippet),
+            kind: item.kind,
+            status: item.status,
+            clusterId: item.status,
+            coordinates: coordinates[index],
+            heat: computeRecencyHeat(item.createdAt, nowMs),
+            createdAtIso: item.createdAt,
+            snippet,
+            sessionId: item.sessionId,
+            tokens: item.tokens,
+            metadata: buildPassionMetadata(item),
+        };
+    });
     const clusterBuckets = new Map();
-    const points = clusterEntries.map((entry, index) => {
-        const clusterIndex = assignments[index] ?? 0;
-        const clusterId = getClusterId(clusterIndex, clusterIdCache);
-        const bucket = clusterBuckets.get(clusterId);
+    for (const point of points) {
+        const bucket = clusterBuckets.get(point.clusterId);
         if (bucket) {
-            bucket.push(entry);
+            bucket.points.push(point);
+            bucket.heatTotal += point.heat;
         }
         else {
-            clusterBuckets.set(clusterId, [entry]);
+            clusterBuckets.set(point.clusterId, { points: [point], heatTotal: point.heat });
         }
-        const snippet = createSnippet(entry.item.text);
-        const metadata = buildPassionPointMetadata(entry.item);
-        return {
-            id: entry.item.id,
-            label: createLabelFromSnippet(snippet),
-            kind: entry.item.kind,
-            status: entry.item.status,
-            clusterId,
-            coordinates: {
-                x: roundCoordinate(entry.coord[0]),
-                y: roundCoordinate(entry.coord[1]),
-            },
-            heat: Number(entry.heat.toFixed(3)),
-            createdAtIso: entry.item.createdAt,
-            snippet,
-            sessionId: entry.item.sessionId,
-            tokens: entry.item.tokens,
-            metadata,
-        };
-    });
-    const centroidMap = new Map();
-    centroids.forEach((centroid, index) => {
-        const clusterId = getClusterId(index, clusterIdCache);
-        centroidMap.set(clusterId, {
-            x: roundCoordinate(centroid[0]),
-            y: roundCoordinate(centroid[1]),
-        });
-    });
+    }
     const totalPoints = points.length || 1;
-    const clusterDetails = Array.from(clusterBuckets.entries()).map(([clusterId, bucket]) => {
-        const texts = bucket.map((entry) => entry.item.text);
-        const rawKeywords = extractTopKeywords(texts, 5);
-        const topKeywords = rawKeywords.map(toTitleCase);
-        const avgHeat = bucket.reduce((sum, entry) => sum + entry.heat, 0) / bucket.length;
-        const centroid = centroidMap.get(clusterId) ?? { x: 0, y: 0 };
+    const clusters = Array.from(clusterBuckets.entries()).map(([clusterId, bucket], index) => {
+        const centroid = averageCoordinates(bucket.points);
+        const passionScore = Number(((bucket.heatTotal / bucket.points.length) * 0.7 + (bucket.points.length / totalPoints) * 0.3).toFixed(2));
+        const topKeywords = computeTopKeywords(bucket.points, 5);
         return {
             id: clusterId,
-            size: bucket.length,
-            centroid,
-            topKeywords,
-            avgHeat,
-        };
-    });
-    const sortedClusters = clusterDetails
-        .sort((a, b) => b.size - a.size)
-        .map((detail, index) => {
-        const label = detail.topKeywords.length
-            ? detail.topKeywords.slice(0, 2).join(" • ")
-            : `Cluster ${index + 1}`;
-        const passionScore = Number(((detail.avgHeat * 0.65) + (detail.size / totalPoints) * 0.35).toFixed(2));
-        return {
-            id: detail.id,
-            label,
+            label: toTitleCase(clusterId.replace(/_/g, " ")) || `Cluster ${index + 1}`,
             color: PASSION_COLOR_PALETTE[index % PASSION_COLOR_PALETTE.length],
-            size: detail.size,
-            topKeywords: detail.topKeywords,
+            size: bucket.points.length,
+            topKeywords,
             passionScore,
-            centroid: detail.centroid,
+            centroid,
         };
     });
-    const summary = sortedClusters.length
-        ? `Top passions: ${sortedClusters
-            .slice(0, 4)
-            .map((cluster) => `${cluster.label} (${cluster.size})`)
-            .join(", ")}`
+    const summary = clusters.length
+        ? `Top clusters: ${clusters.map((cluster) => `${cluster.label} (${cluster.size})`).join(", ")}`
         : undefined;
-    return { points, clusters: sortedClusters, summary };
+    return { points, clusters, summary };
 }
-function runTsneEmbedding(embeddings) {
-    if (embeddings.length === 0) {
+function countAnalysisStatuses(items) {
+    const counts = {
+        captured: 0,
+        processing: 0,
+        ready: 0,
+        archived: 0,
+    };
+    for (const item of items) {
+        counts[item.status] += 1;
+    }
+    return counts;
+}
+function deriveNormalizedCoordinates(items) {
+    if (!items.length) {
         return [];
     }
-    if (embeddings.length === 1) {
-        return [[0, 0]];
-    }
-    if (embeddings.length === 2) {
-        return normalizeCoordinatePairs([
-            [-1, 0],
-            [1, 0],
-        ]);
-    }
-    const basePerplexity = Math.min(30, Math.max(5, Math.floor(Math.sqrt(embeddings.length))));
-    const perplexity = Math.min(basePerplexity, Math.max(2, embeddings.length - 1));
-    const iterations = Math.min(600, Math.max(300, embeddings.length * 12));
-    try {
-        const model = new TSNE({
-            dim: 2,
-            perplexity,
-            earlyExaggeration: 4.0,
-            learningRate: 200,
-            nIter: iterations,
-            metric: "euclidean",
-            barneshut: embeddings.length > 150,
-        });
-        model.init({ data: embeddings, type: "dense" });
-        model.run();
-        const output = model.getOutputScaled();
-        return normalizeCoordinatePairs(output);
-    }
-    catch (error) {
-        console.warn("[ClineProvider] t-SNE computation failed, using fallback layout", error);
-        return normalizeCoordinatePairs(fallbackLayout(embeddings.length));
-    }
-}
-function normalizeCoordinatePairs(pairs) {
-    if (!pairs.length) {
-        return [];
-    }
+    const raw = items.map((item, index) => {
+        const embedding = Array.isArray(item.embedding) ? item.embedding : [];
+        const primary = Number.isFinite(embedding[0]) ? Number(embedding[0]) : index;
+        const secondary = Number.isFinite(embedding[1]) ? Number(embedding[1]) : 0;
+        return { x: primary, y: secondary };
+    });
     let minX = Number.POSITIVE_INFINITY;
     let maxX = Number.NEGATIVE_INFINITY;
     let minY = Number.POSITIVE_INFINITY;
     let maxY = Number.NEGATIVE_INFINITY;
-    for (const [x, y] of pairs) {
-        if (x < minX)
-            minX = x;
-        if (x > maxX)
-            maxX = x;
-        if (y < minY)
-            minY = y;
-        if (y > maxY)
-            maxY = y;
+    for (const entry of raw) {
+        if (entry.x < minX)
+            minX = entry.x;
+        if (entry.x > maxX)
+            maxX = entry.x;
+        if (entry.y < minY)
+            minY = entry.y;
+        if (entry.y > maxY)
+            maxY = entry.y;
     }
-    const centerX = (maxX + minX) / 2;
-    const centerY = (maxY + minY) / 2;
-    const rangeX = Math.max(maxX - minX, 1e-9);
-    const rangeY = Math.max(maxY - minY, 1e-9);
-    return pairs.map(([x, y]) => [
-        (x - centerX) / (rangeX / 2),
-        (y - centerY) / (rangeY / 2),
-    ]);
+    const rangeX = maxX - minX || 1;
+    const rangeY = maxY - minY || 1;
+    return raw.map((entry, index) => ({
+        x: Number(normalizeToRange(entry.x, minX, rangeX).toFixed(3)),
+        y: Number(normalizeToRange(entry.y, minY, rangeY).toFixed(3)),
+    }));
 }
-function parseCloverFunctionCallBlock(block) {
-    const normalized = stripCodeFence(block);
-    if (!normalized) {
-        return [];
-    }
-    let parsed;
-    try {
-        parsed = JSON.parse(normalized);
-    }
-    catch (error) {
-        throw new Error(`functionCalls block must be valid JSON: ${error instanceof Error ? error.message : String(error)}`);
-    }
-    if (Array.isArray(parsed)) {
-        return parsed.map((entry, index) => normalizeFunctionCall(entry, index));
-    }
-    if (isPlainObject(parsed)) {
-        const record = parsed;
-        if (Array.isArray(record.function_calls)) {
-            return record.function_calls.map((entry, index) => normalizeFunctionCall(entry, index));
-        }
-        return [normalizeFunctionCall(parsed, 0)];
-    }
-    throw new Error("functionCalls block must be a JSON object or array");
+function normalizeToRange(value, min, range) {
+    return (value - min) / range * 2 - 1;
 }
-function humanizeAutomationCallName(name) {
-    if (!name) {
-        return "Automation Call";
+function averageCoordinates(points) {
+    if (!points.length) {
+        return { x: 0, y: 0 };
     }
-    return name
-        .split(/[_\s-]+/)
-        .filter(Boolean)
-        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-        .join(" ");
+    const sum = points.reduce((acc, point) => {
+        acc.x += point.coordinates.x;
+        acc.y += point.coordinates.y;
+        return acc;
+    }, { x: 0, y: 0 });
+    return {
+        x: Number((sum.x / points.length).toFixed(3)),
+        y: Number((sum.y / points.length).toFixed(3)),
+    };
 }
-function buildAutomationCallInputs(value, maxFields = 6) {
-    if (value === null || value === undefined) {
-        return [];
-    }
-    if (Array.isArray(value)) {
-        if (!value.length) {
-            return [];
-        }
-        if (value.every(isAutomationPrimitive)) {
-            const preview = value
-                .slice(0, 3)
-                .map((entry) => summarizeAutomationScalar(entry))
-                .join(", ");
-            return [
-                {
-                    label: "items",
-                    value: value.length > 3 ? `${preview}, …${value.length - 3} more` : preview,
-                },
-            ];
-        }
-        return [
-            {
-                label: "items",
-                value: `${value.length} item${value.length === 1 ? "" : "s"}`,
-            },
-        ];
-    }
-    if (typeof value !== "object") {
-        return [
-            {
-                label: "value",
-                value: summarizeAutomationScalar(value),
-            },
-        ];
-    }
-    const entries = Object.entries(value);
-    if (!entries.length) {
-        return [];
-    }
-    const result = [];
-    for (let index = 0; index < entries.length; index += 1) {
-        const [key, val] = entries[index];
-        if (index >= maxFields) {
-            const remaining = entries.length - index;
-            result.push({
-                label: "…",
-                value: `${remaining} more field${remaining === 1 ? "" : "s"}`,
-            });
-            break;
-        }
-        result.push({
-            label: formatAutomationLabel(key),
-            value: summarizeAutomationValue(val),
-        });
-    }
-    return result;
-}
-function formatAutomationLabel(key) {
-    if (!key) {
-        return "value";
-    }
-    const humanized = humanizeAutomationCallName(key);
-    return humanized.replace(/\bId\b/gi, "ID");
-}
-function summarizeAutomationValue(value) {
-    if (value === null || value === undefined) {
-        return "—";
-    }
-    if (typeof value === "string") {
-        return truncateAutomationText(value);
-    }
-    if (typeof value === "number" || typeof value === "boolean") {
-        return String(value);
-    }
-    if (Array.isArray(value)) {
-        if (!value.length) {
-            return "(empty list)";
-        }
-        if (value.every(isAutomationPrimitive)) {
-            const preview = value
-                .slice(0, 3)
-                .map((entry) => summarizeAutomationScalar(entry))
-                .join(", ");
-            return value.length > 3 ? `${preview}, …${value.length - 3} more` : preview;
-        }
-        return `${value.length} item${value.length === 1 ? "" : "s"}`;
-    }
-    if (typeof value === "object") {
-        const entries = Object.entries(value);
-        if (!entries.length) {
-            return "(empty object)";
-        }
-        const preview = entries
-            .slice(0, 3)
-            .map(([key, val]) => `${formatAutomationLabel(key)}: ${summarizeAutomationScalar(val)}`)
-            .join(", ");
-        return entries.length > 3 ? `${preview}, …${entries.length - 3} more` : preview;
-    }
-    return String(value);
-}
-function summarizeAutomationScalar(value) {
-    if (value === null || value === undefined) {
-        return "—";
-    }
-    if (typeof value === "string") {
-        return truncateAutomationText(value);
-    }
-    if (typeof value === "number" || typeof value === "boolean") {
-        return String(value);
-    }
-    if (Array.isArray(value)) {
-        return `${value.length} item${value.length === 1 ? "" : "s"}`;
-    }
-    if (typeof value === "object") {
-        return "object";
-    }
-    return String(value);
-}
-function truncateAutomationText(value, limit = 120) {
-    const trimmed = value.trim();
-    if (trimmed.length <= limit) {
-        return trimmed;
-    }
-    return `${trimmed.slice(0, Math.max(1, limit - 1)).trim()}…`;
-}
-function isAutomationPrimitive(value) {
-    return (value === null ||
-        value === undefined ||
-        typeof value === "string" ||
-        typeof value === "number" ||
-        typeof value === "boolean");
-}
-function formatAutomationListPreview(items, max = 3) {
-    if (!items.length) {
+function createPassionSnippet(text) {
+    if (!text) {
         return "";
     }
-    if (items.length <= max) {
-        return items.join(", ");
+    const normalized = text.replace(/\s+/g, " ").trim();
+    if (normalized.length <= 180) {
+        return normalized;
     }
-    const visible = items.slice(0, max);
-    return `${visible.join(", ")}, …${items.length - max} more`;
+    return `${normalized.slice(0, 177).trim()}...`;
 }
-function stripCodeFence(value) {
-    let trimmed = value.trim();
-    const fence = /^```[a-zA-Z0-9_-]*\s*([\s\S]*?)\s*```$/;
-    let match = trimmed.match(fence);
-    if (match) {
-        trimmed = match[1]?.trim() ?? "";
-    }
-    return trimmed;
-}
-function normalizeFunctionCall(raw, index) {
-    if (!isPlainObject(raw)) {
-        throw new Error(`function_calls[${index}] must be an object`);
-    }
-    const record = raw;
-    const nameRaw = record.name;
-    if (typeof nameRaw !== "string" || !nameRaw.trim()) {
-        throw new Error(`function_calls[${index}] is missing a valid name`);
-    }
-    let args = record.arguments;
-    if (typeof args === "string") {
-        const trimmed = args.trim();
-        if (trimmed) {
-            try {
-                args = JSON.parse(trimmed);
-            }
-            catch (error) {
-                throw new Error(`function_calls[${index}].arguments must be JSON parseable: ${error instanceof Error ? error.message : String(error)}`);
-            }
-        }
-        else {
-            args = undefined;
-        }
-    }
-    if (args !== undefined && !isPlainObject(args)) {
-        throw new Error(`function_calls[${index}].arguments must be an object`);
-    }
-    return {
-        name: nameRaw.trim(),
-        arguments: args,
-    };
-}
-function isPlainObject(value) {
-    return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-function parseCreateCompanyPayloads(args) {
-    const record = coerceRecord(args, "create_company arguments must be an object");
-    const defaults = {
-        name: toOptionalText(record.name ?? record.company_name),
-        emoji: toOptionalText(record.emoji ?? record.company_emoji),
-        description: toOptionalText(record.description ?? record.company_description),
-        vision: toOptionalText(record.vision),
-        mission: toOptionalText(record.mission),
-        ownerProfile: normalizeOwnerProfileInput(record.owner_profile ?? record.ownerProfile),
-        updateDefaultOwnerProfile: normalizeBooleanInput(record.update_default_owner_profile ?? record.updateDefaultOwnerProfile, "update_default_owner_profile"),
-    };
-    const entries = record.companies !== undefined
-        ? coerceRecordArray(record.companies, "companies")
-        : [pickCompanyEntryFields(record)];
-    if (entries.length === 0) {
-        throw new Error("create_company must include at least one entry");
-    }
-    return entries.map((entry, index) => buildCreateCompanyPayload(entry, defaults, index, entries.length > 1));
-}
-function buildCreateCompanyPayload(entry, defaults, index, isBulk) {
-    const name = toOptionalText(entry.name ?? entry.company_name) ??
-        defaults.name;
-    if (!name) {
-        const suffix = isBulk ? ` (entry ${index + 1})` : "";
-        throw new Error(`Company name is required${suffix}`);
-    }
-    const emoji = toOptionalText(entry.emoji ?? entry.company_emoji) ?? defaults.emoji;
-    const description = toOptionalText(entry.description ?? entry.company_description) ?? defaults.description;
-    const vision = toOptionalText(entry.vision) ?? defaults.vision;
-    const mission = toOptionalText(entry.mission) ?? defaults.mission;
-    let ownerProfile = defaults.ownerProfile;
-    if (entry.owner_profile !== undefined || entry.ownerProfile !== undefined) {
-        ownerProfile = normalizeOwnerProfileInput(entry.owner_profile ?? entry.ownerProfile, "owner_profile");
-    }
-    let updateDefaultOwnerProfile = defaults.updateDefaultOwnerProfile;
-    if (entry.update_default_owner_profile !== undefined || entry.updateDefaultOwnerProfile !== undefined) {
-        updateDefaultOwnerProfile = normalizeBooleanInput(entry.update_default_owner_profile ?? entry.updateDefaultOwnerProfile, "update_default_owner_profile");
-    }
-    return {
-        name,
-        emoji,
-        description,
-        vision,
-        mission,
-        ownerProfile,
-        updateDefaultOwnerProfile,
-    };
-}
-function parseUpdateCompanyPayloads(args) {
-    const record = coerceRecord(args, "update_company arguments must be an object");
-    const defaults = {
-        companyId: toOptionalText(record.company_id ?? record.companyId),
-        name: toOptionalText(record.name ?? record.company_name),
-        emoji: toOptionalText(record.emoji ?? record.company_emoji),
-        description: toOptionalText(record.description ?? record.company_description),
-        vision: toOptionalText(record.vision),
-        mission: toOptionalText(record.mission),
-        ownerProfile: normalizeOwnerProfileInput(record.owner_profile ?? record.ownerProfile),
-        updateDefaultOwnerProfile: normalizeBooleanInput(record.update_default_owner_profile ?? record.updateDefaultOwnerProfile, "update_default_owner_profile"),
-    };
-    const entries = record.company_updates !== undefined
-        ? coerceRecordArray(record.company_updates, "company_updates")
-        : [pickCompanyEntryFields(record)];
-    if (entries.length === 0) {
-        throw new Error("update_company must include at least one update entry");
-    }
-    return entries.map((entry, index) => buildUpdateCompanyPayload(entry, defaults, index, entries.length > 1));
-}
-function buildUpdateCompanyPayload(entry, defaults, index, isBulk) {
-    const companyId = toOptionalText(entry.company_id ?? entry.companyId) ?? defaults.companyId;
-    if (!companyId) {
-        const suffix = isBulk ? ` (entry ${index + 1})` : "";
-        throw new Error(`company_id is required${suffix}`);
-    }
-    const name = toOptionalText(entry.name ?? entry.company_name) ?? defaults.name;
-    const emoji = toOptionalText(entry.emoji ?? entry.company_emoji) ?? defaults.emoji;
-    const description = toOptionalText(entry.description ?? entry.company_description) ?? defaults.description;
-    const vision = toOptionalText(entry.vision) ?? defaults.vision;
-    const mission = toOptionalText(entry.mission) ?? defaults.mission;
-    let ownerProfile = defaults.ownerProfile;
-    if (entry.owner_profile !== undefined || entry.ownerProfile !== undefined) {
-        ownerProfile = normalizeOwnerProfileInput(entry.owner_profile ?? entry.ownerProfile, "owner_profile");
-    }
-    let updateDefaultOwnerProfile = defaults.updateDefaultOwnerProfile;
-    if (entry.update_default_owner_profile !== undefined || entry.updateDefaultOwnerProfile !== undefined) {
-        updateDefaultOwnerProfile = normalizeBooleanInput(entry.update_default_owner_profile ?? entry.updateDefaultOwnerProfile, "update_default_owner_profile");
-    }
-    return {
-        companyId,
-        name,
-        emoji,
-        description,
-        vision,
-        mission,
-        ownerProfile,
-        updateDefaultOwnerProfile,
-    };
-}
-function parseCreateInsightPayloads(args) {
-    const record = coerceRecord(args, "create_insight arguments must be an object");
-    const defaults = {
-        id: normalizeInsightId(record.id ?? record.insight_id),
-        title: toOptionalText(record.title ?? record.name ?? record.headline),
-        summary: toOptionalText(record.summary ?? record.description ?? record.insight_summary),
-        recommendedWorkspace: toOptionalText(record.recommended_workspace ?? record.workspace ?? record.destination),
-        assignedCompanyId: toOptionalText(record.assigned_company_id ?? record.company_id ?? record.assigned_company),
-        stage: normalizeInsightStageInput(record.stage ?? record.status, "stage"),
-        sourceType: normalizeInsightSourceTypeInput(record.source_type ?? record?.sourceType, "source_type"),
-        capturedAtIso: normalizeOptionalIsoInput(record.captured_at_iso ?? record?.capturedAtIso, "captured_at_iso"),
-        note: normalizeInsightNote(record.note ?? record.insight_note),
-    };
-    const entries = record.insights !== undefined
-        ? coerceRecordArray(record.insights, "insights")
-        : [pickInsightEntryFields(record)];
-    return entries.map((entry, index) => buildCreateInsightPayload(entry, defaults, index, entries.length > 1));
-}
-function buildCreateInsightPayload(entry, defaults, index, isBulk) {
-    const id = normalizeInsightId(entry.id ?? entry.insight_id) ?? defaults.id;
-    const title = toOptionalText(entry.title ?? entry.name ?? entry.headline) ??
-        defaults.title;
-    if (!title) {
-        const suffix = isBulk ? ` (insights[${index}])` : "";
-        throw new Error(`Insight title is required${suffix}`);
-    }
-    const summary = toOptionalText(entry.summary ?? entry.description ?? entry.insight_summary) ?? defaults.summary;
-    const recommendedWorkspace = toOptionalText(entry.recommended_workspace ?? entry.workspace ?? entry.destination) ??
-        defaults.recommendedWorkspace;
-    const assignedCompanyId = toOptionalText(entry.assigned_company_id ?? entry.company_id ?? entry.assigned_company) ??
-        defaults.assignedCompanyId;
-    const stage = normalizeInsightStageInput(entry.stage ?? entry.status, isBulk ? `insights[${index}].stage` : "stage") ?? defaults.stage ?? "captured";
-    const sourceType = normalizeInsightSourceTypeInput(entry.source_type ?? entry?.sourceType, isBulk ? `insights[${index}].source_type` : "source_type") ?? defaults.sourceType ?? "conversation";
-    const capturedAtIso = normalizeOptionalIsoInput(entry.captured_at_iso ?? entry?.capturedAtIso, isBulk ? `insights[${index}].captured_at_iso` : "captured_at_iso") ?? defaults.capturedAtIso;
-    const note = normalizeInsightNote(entry.note ?? entry.insight_note) ?? defaults.note;
-    return {
-        id,
-        title,
-        summary,
-        recommendedWorkspace,
-        assignedCompanyId,
-        stage,
-        sourceType,
-        capturedAtIso,
-        note,
-    };
-}
-function parseUpdateInsightPayloads(args) {
-    const record = coerceRecord(args, "update_insight arguments must be an object");
-    const defaults = {
-        id: normalizeInsightId(record.id ?? record.insight_id),
-        title: toOptionalText(record.title ?? record.name ?? record.headline),
-        summary: toOptionalText(record.summary ?? record.description ?? record.insight_summary),
-        recommendedWorkspace: toOptionalText(record.recommended_workspace ?? record.workspace ?? record.destination),
-        assignedCompanyId: toOptionalText(record.assigned_company_id ?? record.company_id ?? record.assigned_company),
-        stage: normalizeInsightStageInput(record.stage ?? record.status, "stage"),
-        sourceType: normalizeInsightSourceTypeInput(record.source_type ?? record?.sourceType, "source_type"),
-        capturedAtIso: normalizeOptionalIsoInput(record.captured_at_iso ?? record?.capturedAtIso, "captured_at_iso"),
-        note: normalizeInsightNote(record.note ?? record.insight_note),
-    };
-    const entries = record.insight_updates !== undefined
-        ? coerceRecordArray(record.insight_updates, "insight_updates")
-        : [pickInsightEntryFields(record)];
-    return entries.map((entry, index) => buildUpdateInsightPayload(entry, defaults, index, entries.length > 1));
-}
-function buildUpdateInsightPayload(entry, defaults, index, isBulk) {
-    const id = normalizeInsightId(entry.id ?? entry.insight_id) ?? defaults.id;
-    if (!id) {
-        const suffix = isBulk ? ` (insight_updates[${index}])` : "";
-        throw new Error(`update_insight is missing id${suffix}`);
-    }
-    const title = toOptionalText(entry.title ?? entry.name ?? entry.headline) ?? defaults.title;
-    const summary = toOptionalText(entry.summary ?? entry.description ?? entry.insight_summary) ?? defaults.summary;
-    const recommendedWorkspace = toOptionalText(entry.recommended_workspace ?? entry.workspace ?? entry.destination) ??
-        defaults.recommendedWorkspace;
-    const assignedCompanyId = toOptionalText(entry.assigned_company_id ?? entry.company_id ?? entry.assigned_company) ??
-        defaults.assignedCompanyId;
-    const stage = normalizeInsightStageInput(entry.stage ?? entry.status, isBulk ? `insight_updates[${index}].stage` : "stage") ?? defaults.stage;
-    const sourceType = normalizeInsightSourceTypeInput(entry.source_type ?? entry?.sourceType, isBulk ? `insight_updates[${index}].source_type` : "source_type") ?? defaults.sourceType;
-    const capturedAtIso = normalizeOptionalIsoInput(entry.captured_at_iso ?? entry?.capturedAtIso, isBulk ? `insight_updates[${index}].captured_at_iso` : "captured_at_iso") ?? defaults.capturedAtIso;
-    const note = normalizeInsightNote(entry.note ?? entry.insight_note) ?? defaults.note;
-    return {
-        id,
-        title,
-        summary,
-        recommendedWorkspace,
-        assignedCompanyId,
-        stage,
-        sourceType,
-        capturedAtIso,
-        note,
-    };
-}
-function storedInsightToOuterGate(stored) {
-    const { integrationId: _integrationId, upsertedAtIso: _upsertedAtIso, ...insight } = stored;
-    return { ...insight };
-}
-function diffInsights(previous, next) {
-    const changes = [];
-    if (optionalString(previous.title) !== optionalString(next.title)) {
-        changes.push({ field: "title", from: optionalString(previous.title), to: optionalString(next.title) });
-    }
-    if (optionalString(previous.summary) !== optionalString(next.summary)) {
-        changes.push({ field: "summary", from: optionalString(previous.summary), to: optionalString(next.summary) });
-    }
-    if (previous.stage !== next.stage) {
-        changes.push({ field: "stage", from: previous.stage, to: next.stage });
-    }
-    if (optionalString(previous.recommendedWorkspace) !== optionalString(next.recommendedWorkspace)) {
-        changes.push({
-            field: "recommendedWorkspace",
-            from: optionalString(previous.recommendedWorkspace),
-            to: optionalString(next.recommendedWorkspace),
-        });
-    }
-    if (optionalString(previous.assignedCompanyId) !== optionalString(next.assignedCompanyId)) {
-        changes.push({
-            field: "assignedCompanyId",
-            from: optionalString(previous.assignedCompanyId),
-            to: optionalString(next.assignedCompanyId),
-        });
-    }
-    if (optionalString(previous.capturedAtIso) !== optionalString(next.capturedAtIso)) {
-        changes.push({
-            field: "capturedAtIso",
-            from: optionalString(previous.capturedAtIso),
-            to: optionalString(next.capturedAtIso),
-        });
-    }
-    if (previous.sourceType !== next.sourceType) {
-        changes.push({ field: "sourceType", from: previous.sourceType, to: next.sourceType });
-    }
-    return changes;
-}
-function coerceRecord(value, message) {
-    if (value === undefined || value === null) {
-        return {};
-    }
-    if (isPlainObject(value)) {
-        return value;
-    }
-    throw new Error(message);
-}
-function coerceRecordArray(value, field) {
-    if (value === undefined || value === null) {
-        return [];
-    }
-    if (typeof value === "string") {
-        const trimmed = value.trim();
-        if (!trimmed) {
-            return [];
-        }
-        try {
-            const parsed = JSON.parse(trimmed);
-            return coerceRecordArray(parsed, field);
-        }
-        catch (error) {
-            throw new Error(`${field} must be JSON describing an object or array`);
-        }
-    }
-    if (Array.isArray(value)) {
-        if (!value.length) {
-            throw new Error(`${field} must include at least one entry`);
-        }
-        return value.map((entry, index) => {
-            if (!isPlainObject(entry)) {
-                throw new Error(`${field}[${index}] must be an object`);
-            }
-            return entry;
-        });
-    }
-    if (isPlainObject(value)) {
-        return [value];
-    }
-    throw new Error(`${field} must be an object or array`);
-}
-function toOptionalText(value) {
-    if (value === undefined || value === null) {
-        return undefined;
-    }
-    if (typeof value === "string") {
-        return optionalString(value);
-    }
-    if (typeof value === "number" || typeof value === "boolean") {
-        return optionalString(String(value));
-    }
-    return undefined;
-}
-function pickCompanyEntryFields(record) {
-    const keys = [
-        "name",
-        "company_name",
-        "emoji",
-        "company_emoji",
-        "description",
-        "company_description",
-        "vision",
-        "mission",
-        "owner_profile",
-        "ownerProfile",
-        "update_default_owner_profile",
-        "updateDefaultOwnerProfile",
-        "company_id",
-        "companyId",
-    ];
-    const result = {};
-    for (const key of keys) {
-        if (record[key] !== undefined) {
-            result[key] = record[key];
-        }
-    }
-    return result;
-}
-function pickInsightEntryFields(record) {
-    const keys = [
-        "id",
-        "insight_id",
-        "title",
-        "name",
-        "headline",
-        "summary",
-        "description",
-        "insight_summary",
-        "recommended_workspace",
-        "workspace",
-        "destination",
-        "assigned_company_id",
-        "assigned_company",
-        "company_id",
-        "stage",
-        "status",
-        "source_type",
-        "sourceType",
-        "captured_at_iso",
-        "capturedAtIso",
-        "note",
-        "insight_note",
-    ];
-    const result = {};
-    for (const key of keys) {
-        if (record[key] !== undefined) {
-            result[key] = record[key];
-        }
-    }
-    return result;
-}
-function normalizeInsightId(value) {
-    const text = toOptionalText(value);
-    return text && text.trim() ? text.trim() : undefined;
-}
-function normalizeInsightStageInput(value, field) {
-    if (value === undefined || value === null) {
-        return undefined;
-    }
-    if (typeof value !== "string") {
-        throw new Error(`${field} must be a string`);
-    }
-    const normalized = value.trim().toLowerCase();
-    switch (normalized) {
-        case "captured":
-        case "capture":
-        case "new":
-            return "captured";
-        case "processing":
-        case "in_progress":
-        case "pending":
-            return "processing";
-        case "ready":
-        case "prepared":
-            return "ready";
-        case "assigned":
-        case "active":
-            return "assigned";
-        default:
-            throw new Error(`${field} must be one of captured, processing, ready, or assigned`);
-    }
-}
-function normalizeInsightSourceTypeInput(value, field) {
-    if (value === undefined || value === null) {
-        return undefined;
-    }
-    if (typeof value !== "string") {
-        throw new Error(`${field} must be a string`);
-    }
-    const normalized = value.trim().toLowerCase();
-    switch (normalized) {
-        case "conversation":
-        case "chat":
-            return "conversation";
-        case "document":
-        case "doc":
-            return "document";
-        case "voice":
-        case "audio":
-            return "voice";
-        case "integration":
-        case "import":
-            return "integration";
-        default:
-            throw new Error(`${field} must be one of conversation, document, voice, or integration`);
-    }
-}
-function normalizeOptionalIsoInput(value, field) {
-    const text = toOptionalText(value);
-    if (!text) {
-        return undefined;
-    }
-    const timestamp = Date.parse(text);
-    if (Number.isNaN(timestamp)) {
-        throw new Error(`${field} must be an ISO8601 timestamp`);
-    }
-    return new Date(timestamp).toISOString();
-}
-function normalizeInsightNote(value) {
-    const text = toOptionalText(value);
-    return text && text.trim() ? text.trim() : undefined;
-}
-function fallbackLayout(count) {
-    if (count <= 1) {
-        return [[0, 0]];
-    }
-    const radius = 0.8;
-    return Array.from({ length: count }, (_value, index) => {
-        const angle = (index / count) * Math.PI * 2;
-        return [Math.cos(angle) * radius, Math.sin(angle) * radius];
-    });
-}
-function estimateClusterCount(count) {
-    if (count <= 2) {
-        return Math.max(1, count);
-    }
-    if (count <= 8) {
-        return 2;
-    }
-    if (count <= 20) {
-        return 3;
-    }
-    if (count <= 40) {
-        return 4;
-    }
-    if (count <= 80) {
-        return 5;
-    }
-    return Math.min(6, Math.floor(Math.sqrt(count)));
-}
-function kMeans(points, clusterCount, maxIterations = 50) {
-    const count = points.length;
-    if (count === 0) {
-        return { assignments: [], centroids: [] };
-    }
-    const dimension = points[0]?.length ?? 2;
-    const k = Math.max(1, Math.min(clusterCount, count));
-    const centroids = Array.from({ length: k }, (_value, index) => {
-        const pointIndex = Math.floor((index * count) / k);
-        return [...points[pointIndex]];
-    });
-    const assignments = new Array(count).fill(0);
-    for (let iteration = 0; iteration < maxIterations; iteration += 1) {
-        let changed = false;
-        for (let i = 0; i < count; i += 1) {
-            let bestIndex = assignments[i];
-            let bestDistance = Number.POSITIVE_INFINITY;
-            for (let j = 0; j < k; j += 1) {
-                const distance = euclideanDistance(points[i], centroids[j]);
-                if (distance < bestDistance) {
-                    bestDistance = distance;
-                    bestIndex = j;
-                }
-            }
-            if (assignments[i] !== bestIndex) {
-                assignments[i] = bestIndex;
-                changed = true;
-            }
-        }
-        const sums = Array.from({ length: k }, () => new Array(dimension).fill(0));
-        const counts = new Array(k).fill(0);
-        for (let i = 0; i < count; i += 1) {
-            const clusterIndex = assignments[i];
-            counts[clusterIndex] += 1;
-            const point = points[i];
-            for (let d = 0; d < dimension; d += 1) {
-                sums[clusterIndex][d] += point[d];
-            }
-        }
-        for (let j = 0; j < k; j += 1) {
-            if (counts[j] === 0) {
-                const farthestIndex = findFarthestPoint(points, centroids, assignments);
-                centroids[j] = [...points[farthestIndex]];
-                assignments[farthestIndex] = j;
-                changed = true;
-                continue;
-            }
-            for (let d = 0; d < dimension; d += 1) {
-                centroids[j][d] = sums[j][d] / counts[j];
-            }
-        }
-        if (!changed) {
-            break;
-        }
-    }
-    return { assignments, centroids };
-}
-function findFarthestPoint(points, centroids, assignments) {
-    let farthestIndex = 0;
-    let bestDistance = Number.NEGATIVE_INFINITY;
-    for (let i = 0; i < points.length; i += 1) {
-        const centroid = centroids[assignments[i]];
-        const distance = euclideanDistance(points[i], centroid);
-        if (distance > bestDistance) {
-            bestDistance = distance;
-            farthestIndex = i;
-        }
-    }
-    return farthestIndex;
-}
-function euclideanDistance(a, b) {
-    let sum = 0;
-    for (let i = 0; i < a.length; i += 1) {
-        const diff = a[i] - b[i];
-        sum += diff * diff;
-    }
-    return Math.sqrt(sum);
-}
-function extractTopKeywords(texts, limit) {
-    const counts = new Map();
-    for (const text of texts) {
-        const tokens = text
-            .toLowerCase()
-            .replace(/[^a-z0-9\s]/g, " ")
-            .split(/\s+/)
-            .filter((token) => token.length > 2 && !PASSION_STOP_WORDS.has(token));
-        const uniqueTokens = new Set(tokens);
-        for (const token of uniqueTokens) {
-            counts.set(token, (counts.get(token) ?? 0) + 1);
-        }
-    }
-    return [...counts.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, limit)
-        .map(([token]) => token);
-}
-function createSnippet(text, maxLength = 160) {
-    const condensed = text.replace(/\s+/g, " ").trim();
-    if (condensed.length <= maxLength) {
-        return condensed;
-    }
-    return `${condensed.slice(0, maxLength - 1).trimEnd()}…`;
-}
-function createLabelFromSnippet(snippet) {
+function createPassionLabel(snippet) {
     if (!snippet) {
-        return "Captured item";
+        return "Untitled";
     }
-    return snippet.length > 60 ? `${snippet.slice(0, 57).trimEnd()}…` : snippet;
+    const words = snippet.split(/\s+/).slice(0, 6).join(" ");
+    return words.length < snippet.length ? `${words}...` : words;
 }
-function buildPassionPointMetadata(item) {
+function buildPassionMetadata(item) {
     const metadata = {};
     if (item.filename) {
         metadata.filename = item.filename;
@@ -6052,35 +3778,47 @@ function buildPassionPointMetadata(item) {
         metadata.source = item.source;
     }
     if (Array.isArray(item.references) && item.references.length > 0) {
-        metadata.references = item.references;
+        metadata.references = [...item.references];
     }
-    return Object.keys(metadata).length ? metadata : undefined;
+    return Object.keys(metadata).length > 0 ? metadata : undefined;
 }
-function computeRecencyHeat(createdAtIso, nowMs) {
-    const createdAt = Date.parse(createdAtIso);
-    if (Number.isNaN(createdAt)) {
-        return 0.4;
+function computeRecencyHeat(createdAt, nowMs) {
+    if (!createdAt) {
+        return 0.25;
     }
-    const ageDays = Math.max(0, (nowMs - createdAt) / (1000 * 60 * 60 * 24));
-    const heat = 1 - ageDays / 60;
-    return Math.max(0.05, Math.min(1, heat));
-}
-function getClusterId(index, cache) {
-    let id = cache.get(index);
-    if (!id) {
-        id = `cluster-${index}`;
-        cache.set(index, id);
+    const timestamp = Date.parse(createdAt);
+    if (Number.isNaN(timestamp)) {
+        return 0.25;
     }
-    return id;
+    const ageDays = Math.max(0, (nowMs - timestamp) / (1000 * 60 * 60 * 24));
+    const heat = Math.exp(-ageDays / 7);
+    return Number(Math.min(1, Math.max(0, heat)).toFixed(3));
 }
-function toTitleCase(text) {
-    if (!text) {
-        return text;
+function computeTopKeywords(points, limit) {
+    const counts = new Map();
+    for (const point of points) {
+        const words = point.snippet
+            .toLowerCase()
+            .split(/[^a-z0-9]+/)
+            .filter((word) => word.length >= 4 && !PASSION_KEYWORD_STOPWORDS.has(word));
+        const unique = new Set(words);
+        for (const word of unique) {
+            counts.set(word, (counts.get(word) ?? 0) + 1);
+        }
     }
-    return text.charAt(0).toUpperCase() + text.slice(1);
+    return Array.from(counts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, limit)
+        .map(([word]) => toTitleCase(word));
 }
-function roundCoordinate(value) {
-    const factor = 10 ** PASSION_POINT_DECIMAL_PLACES;
-    return Math.round(value * factor) / factor;
+function toTitleCase(value) {
+    if (!value) {
+        return value;
+    }
+    return value
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(" ");
 }
 //# sourceMappingURL=ClineProvider.js.map

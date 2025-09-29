@@ -153,7 +153,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		}, [listApiConfigMeta, currentApiConfigName])
 
 		const sendMessageLabel = (t("chat:sendMessage") ?? "Send Message") as string
-		const stopMessageLabel = t("common:hub.stop", { defaultValue: "Stop" }) as string
+		const stopMessageLabel = t("common:stop", { defaultValue: "Stop" }) as string
 		const isStopState = sendButtonState === "stop"
 		const sendButtonLabel = isStopState ? stopMessageLabel : sendMessageLabel
 		const sendButtonDisabled = isStopState ? false : sendingDisabled

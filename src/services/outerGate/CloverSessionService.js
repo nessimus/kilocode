@@ -565,6 +565,9 @@ export class CloverSessionService {
         }
         const record = raw;
         const field = record.field;
+        if (typeof field !== "string") {
+            return undefined;
+        }
         if (field !== "title" &&
             field !== "summary" &&
             field !== "stage" &&

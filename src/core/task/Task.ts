@@ -35,6 +35,10 @@ import {
 	isInteractiveAsk,
 	isResumableAsk,
 	QueuedMessage,
+	ConversationHoldState,
+	OrchestratorAnalysis,
+	ConversationAgent,
+	OrchestratorMessageMetadata,
 } from "@roo-code/types"
 import { TelemetryService } from "@roo-code/telemetry"
 import { CloudService, BridgeOrchestrator } from "@roo-code/cloud"
@@ -49,7 +53,7 @@ import { findLastIndex } from "../../shared/array"
 import { combineApiRequests } from "../../shared/combineApiRequests"
 import { combineCommandSequences } from "../../shared/combineCommandSequences"
 import { t } from "../../i18n"
-import { ClineApiReqCancelReason, ClineApiReqInfo } from "../../shared/ExtensionMessage"
+import { ClineApiReqCancelReason, ClineApiReqInfo, ExtensionState } from "../../shared/ExtensionMessage"
 import { getApiMetrics, hasTokenUsageChanged } from "../../shared/getApiMetrics"
 import { ClineAskResponse } from "../../shared/WebviewMessage"
 import { defaultModeSlug } from "../../shared/modes"
@@ -77,6 +81,11 @@ import { getWorkspacePath } from "../../utils/path"
 // prompts
 import { formatResponse } from "../prompts/responses"
 import { SYSTEM_PROMPT } from "../prompts/system"
+import {
+	ConversationOrchestrator,
+	createIngestHoldState,
+	createManualHoldState,
+} from "./ConversationOrchestrator"
 
 // core modules
 import { ToolRepetitionDetector } from "../tools/ToolRepetitionDetector"
@@ -227,6 +236,11 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	resumableAsk?: ClineMessage
 	interactiveAsk?: ClineMessage
 
+	private conversationOrchestrator: ConversationOrchestrator
+	private conversationHoldState?: ConversationHoldState
+	private lastOrchestratorAnalysis?: OrchestratorAnalysis
+	private conversationAgents: ConversationAgent[] = []
+
 	didFinishAbortingStream = false
 	abandoned = false
 	isInitialized = false
@@ -372,6 +386,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		this.apiConfiguration = apiConfiguration
 		this.api = buildApiHandler(apiConfiguration)
 		this.autoApprovalHandler = new AutoApprovalHandler()
+		this.conversationOrchestrator = new ConversationOrchestrator()
 
 		this.urlContentFetcher = new UrlContentFetcher(provider.context)
 		this.browserSession = new BrowserSession(provider.context)
@@ -504,11 +519,140 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			this._taskMode = state?.mode || defaultModeSlug
 		} catch (error) {
 			// If there's an error getting state, use the default mode
-			this._taskMode = defaultModeSlug
-			// Use the provider's log method for better error visibility
-			const errorMessage = `Failed to initialize task mode: ${error instanceof Error ? error.message : String(error)}`
-			provider.log(errorMessage)
+		this._taskMode = defaultModeSlug
+		// Use the provider's log method for better error visibility
+		const errorMessage = `Failed to initialize task mode: ${error instanceof Error ? error.message : String(error)}`
+		provider.log(errorMessage)
+	}
+}
+
+	private async pushConversationHoldState(state?: ConversationHoldState): Promise<void> {
+		this.conversationHoldState = state
+		const provider = this.providerRef.deref()
+		if (!provider) {
+			return
 		}
+			try {
+				await provider.postMessageToWebview({
+					type: "conversationHoldState",
+					conversationHoldState: state,
+					payload: {
+						taskId: this.taskId,
+						state,
+					},
+				})
+		} catch (error) {
+			console.error("[Task#pushConversationHoldState] Failed to post hold state", error)
+		}
+	}
+
+	private async pushOrchestratorAnalysis(
+		analysis: OrchestratorAnalysis,
+		agents: ConversationAgent[],
+	addToTimeline: boolean = true,
+	): Promise<void> {
+		this.lastOrchestratorAnalysis = analysis
+		this.conversationAgents = agents
+		const provider = this.providerRef.deref()
+		if (!provider) {
+			return
+		}
+			try {
+				await provider.postMessageToWebview({
+					type: "orchestratorAnalysis",
+					conversationAgents: agents,
+					lastOrchestratorAnalysis: analysis,
+					payload: {
+						taskId: this.taskId,
+						analysis,
+						agents,
+					appendTimeline: addToTimeline,
+				},
+			})
+		} catch (error) {
+			console.error("[Task#pushOrchestratorAnalysis] Failed to post orchestrator analysis", error)
+		}
+	}
+
+	private deriveConversationAgentsFromState(state?: ExtensionState): ConversationAgent[] {
+		const companies = state?.workplaceState?.companies ?? []
+		if (!companies.length) {
+			return []
+		}
+		const activeCompanyId = state?.workplaceState?.activeCompanyId
+		const company =
+			companies.find((entry) => entry.id === activeCompanyId) ??
+			companies[0]
+		if (!company) {
+			return []
+		}
+		const activeEmployeeId = company.activeEmployeeId ?? state?.workplaceState?.activeEmployeeId
+		return company.employees.map<ConversationAgent>((employee) => ({
+			id: employee.id,
+			name: employee.name,
+			role: employee.role,
+			isActive: employee.id === activeEmployeeId,
+		}))
+	}
+
+	private buildOrchestratorMessageMetadata(): OrchestratorMessageMetadata | undefined {
+		const analysis = this.lastOrchestratorAnalysis
+		const holdMode = this.conversationHoldState?.mode
+		const respondedViaOrchestrator = Boolean(analysis)
+		const queueState =
+			holdMode === "manual_hold" || holdMode === "ingest_hold"
+				? "queued"
+				: holdMode === "responding"
+					? "released"
+					: undefined
+
+		if (!respondedViaOrchestrator && !queueState && !holdMode) {
+			return undefined
+		}
+
+		return {
+			respondedViaOrchestrator: respondedViaOrchestrator || undefined,
+			queueState,
+			holdMode,
+			rationale: analysis?.rationale,
+			primarySpeakers: analysis?.primarySpeakers,
+			secondarySpeakers: analysis?.secondaryCandidates,
+			suppressedAgents: analysis?.suppressedAgents,
+		}
+	}
+
+	private async ensureRespondingHold(): Promise<void> {
+		if (!this.conversationHoldState) {
+			return
+		}
+		if (this.conversationHoldState.mode === "manual_hold") {
+			return
+		}
+		if (this.conversationHoldState.mode === "ingest_hold") {
+			await this.pushConversationHoldState({
+				...this.conversationHoldState,
+				mode: "responding",
+				initiatedBy: "system",
+				activatedAt: Date.now(),
+			})
+		}
+	}
+
+	private async maybeReleaseAutomaticHold(): Promise<void> {
+		if (!this.conversationHoldState) {
+			return
+		}
+		if (this.conversationHoldState.mode === "manual_hold") {
+			return
+		}
+		if (this.conversationHoldState.mode === "idle") {
+			return
+		}
+		await this.pushConversationHoldState({
+			mode: "idle",
+			initiatedBy: "system",
+			activatedAt: Date.now(),
+		})
 	}
 
 	/**
@@ -998,6 +1142,32 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			const provider = this.providerRef.deref()
 
 			if (provider) {
+				let providerState: ExtensionState | undefined
+				try {
+					providerState = (await provider.getState?.()) as ExtensionState | undefined
+				} catch (stateError) {
+					console.warn("[Task#submitUserMessage] Unable to read provider state for orchestrator analysis", stateError)
+				}
+
+				const agents = this.deriveConversationAgentsFromState(providerState)
+				const isManualHoldActive = this.conversationHoldState?.mode === "manual_hold"
+				let activeHoldState = this.conversationHoldState
+				if (!isManualHoldActive) {
+					activeHoldState = createIngestHoldState()
+					await this.pushConversationHoldState(activeHoldState)
+				}
+
+				if (agents.length) {
+					const activeAgentId =
+						agents.find((agent) => agent.isActive)?.id ?? providerState?.workplaceState?.activeEmployeeId
+					const analysis = this.conversationOrchestrator.analyze({
+						text,
+						agents,
+						activeAgentId,
+						holdState: activeHoldState,
+					})
+					await this.pushOrchestratorAnalysis(analysis, agents, true)
+				}
 				if (mode) {
 					await provider.setMode(mode)
 				}
@@ -1015,6 +1185,43 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		} catch (error) {
 			console.error("[Task#submitUserMessage] Failed to submit user message:", error)
 		}
+	}
+
+	public async applyConversationHold(state?: ConversationHoldState): Promise<void> {
+		if (!state) {
+			await this.pushConversationHoldState(undefined)
+			return
+		}
+		if (state.mode === "manual_hold") {
+			await this.pushConversationHoldState(
+				createManualHoldState(state.initiatedBy ?? "user"),
+			)
+			return
+		}
+		if (state.mode === "ingest_hold") {
+			await this.pushConversationHoldState(createIngestHoldState())
+			return
+		}
+		await this.pushConversationHoldState({
+			...state,
+			activatedAt: Date.now(),
+		})
+	}
+
+	public async releaseQueuedResponses(agentIds?: string[]): Promise<void> {
+		const releasedAgentIds =
+			agentIds && agentIds.length
+				? agentIds
+				: this.lastOrchestratorAnalysis?.primarySpeakers?.map((agent) => agent.id) ?? []
+		if (releasedAgentIds.length) {
+			this.conversationOrchestrator.registerResponse(releasedAgentIds)
+		}
+		await this.pushConversationHoldState({
+			mode: "responding",
+			initiatedBy: "user",
+			activatedAt: Date.now(),
+		})
+		await this.maybeReleaseAutomaticHold()
 	}
 
 	async handleTerminalOperation(terminalOperation: "continue" | "abort") {
@@ -1125,6 +1332,15 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			throw new Error(`[Kilo Code#say] task ${this.taskId}.${this.instanceId} aborted`)
 		}
 
+		const orchestratorMetadata = !options.isNonInteractive ? this.buildOrchestratorMessageMetadata() : undefined
+		const mergedMetadata = orchestratorMetadata
+			? { ...(options.metadata ?? {}), orchestrator: orchestratorMetadata }
+			: options.metadata
+
+		if (!options.isNonInteractive) {
+			await this.ensureRespondingHold()
+		}
+
 		if (partial !== undefined) {
 			const lastMessage = this.clineMessages.at(-1)
 
@@ -1138,6 +1354,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					lastMessage.images = images
 					lastMessage.partial = partial
 					lastMessage.progressStatus = progressStatus
+					if (mergedMetadata) {
+						const messageWithMetadata = lastMessage as ClineMessage & ClineMessageWithMetadata
+						if (!messageWithMetadata.metadata) {
+							messageWithMetadata.metadata = {}
+						}
+						Object.assign(messageWithMetadata.metadata, mergedMetadata)
+					}
 					this.updateClineMessage(lastMessage)
 				} else {
 					// This is a new partial message, so add it with partial state.
@@ -1155,7 +1378,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						images,
 						partial,
 						contextCondense,
-						metadata: options.metadata,
+						metadata: mergedMetadata,
 					})
 				}
 			} else {
@@ -1171,13 +1394,12 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					lastMessage.images = images
 					lastMessage.partial = false
 					lastMessage.progressStatus = progressStatus
-					if (options.metadata) {
-						// Add metadata to the message
+					if (mergedMetadata) {
 						const messageWithMetadata = lastMessage as ClineMessage & ClineMessageWithMetadata
 						if (!messageWithMetadata.metadata) {
 							messageWithMetadata.metadata = {}
 						}
-						Object.assign(messageWithMetadata.metadata, options.metadata)
+						Object.assign(messageWithMetadata.metadata, mergedMetadata)
 					}
 
 					// Instead of streaming partialMessage events, we do a save
@@ -1186,6 +1408,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 					// More performant than an entire `postStateToWebview`.
 					this.updateClineMessage(lastMessage)
+					if (!options.isNonInteractive) {
+						await this.maybeReleaseAutomaticHold()
+					}
 				} else {
 					// This is a new and complete message, so add it like normal.
 					const sayTs = Date.now()
@@ -1201,8 +1426,11 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						text,
 						images,
 						contextCondense,
-						metadata: options.metadata,
+						metadata: mergedMetadata,
 					})
+					if (!options.isNonInteractive) {
+						await this.maybeReleaseAutomaticHold()
+					}
 				}
 			}
 		} else {
@@ -1225,7 +1453,12 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				images,
 				checkpoint,
 				contextCondense,
+				metadata: mergedMetadata,
 			})
+
+			if (!options.isNonInteractive) {
+				await this.maybeReleaseAutomaticHold()
+			}
 		}
 	}
 
@@ -3104,6 +3337,18 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 	public get queuedMessages(): QueuedMessage[] {
 		return this.messageQueueService.messages
+	}
+
+	public get currentConversationHoldState(): ConversationHoldState | undefined {
+		return this.conversationHoldState
+	}
+
+	public get currentOrchestratorAnalysis(): OrchestratorAnalysis | undefined {
+		return this.lastOrchestratorAnalysis
+	}
+
+	public get currentConversationAgents(): ConversationAgent[] {
+		return this.conversationAgents
 	}
 
 	public get tokenUsage(): TokenUsage | undefined {

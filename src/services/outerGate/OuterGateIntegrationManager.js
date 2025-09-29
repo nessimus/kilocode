@@ -144,6 +144,22 @@ export class OuterGateIntegrationManager {
     async upsertInsights(insights) {
         await this.storage.upsertInsights(insights);
     }
+    async updateStoredInsight(id, updates) {
+        const existing = this.storage.getInsight(id);
+        if (!existing) {
+            return undefined;
+        }
+        const merged = {
+            ...existing,
+            ...updates,
+            upsertedAtIso: updates.upsertedAtIso ?? new Date().toISOString(),
+        };
+        await this.storage.upsertInsights([merged]);
+        return merged;
+    }
+    async deleteStoredInsight(id) {
+        return await this.storage.removeInsight(id);
+    }
     async importNotion(options) {
         const existingMeta = this.storage.getIntegrationMeta("notion");
         const secretToken = options.token?.trim() || this.contextProxy.getSecret("outerGateNotionToken");

@@ -878,6 +878,134 @@ export const webviewMessageHandler = async (provider, message, marketplaceManage
             }
             break;
         }
+        case "startWorkday": {
+            const payload = message.workplaceWorkdayStart;
+            if (!payload) {
+                console.warn("[webviewMessageHandler] Missing workday start payload");
+                break;
+            }
+            const service = provider.getWorkplaceService();
+            if (!service) {
+                await vscode.window.showErrorMessage("Workplace service is unavailable in this session.");
+                break;
+            }
+            try {
+                const nextState = await service.startWorkday(payload);
+                await provider.handleWorkdayStatusChange(payload.companyId, nextState);
+                await provider.postStateToWebview();
+            }
+            catch (error) {
+                const messageText = error instanceof Error ? error.message : String(error);
+                await vscode.window.showErrorMessage(`Unable to start workday: ${messageText}`);
+            }
+            break;
+        }
+        case "haltWorkday": {
+            const payload = message.workplaceWorkdayHalt;
+            if (!payload) {
+                console.warn("[webviewMessageHandler] Missing workday halt payload");
+                break;
+            }
+            const service = provider.getWorkplaceService();
+            if (!service) {
+                await vscode.window.showErrorMessage("Workplace service is unavailable in this session.");
+                break;
+            }
+            try {
+                const nextState = await service.haltWorkday(payload);
+                await provider.handleWorkdayStatusChange(payload.companyId, nextState);
+                await provider.postStateToWebview();
+            }
+            catch (error) {
+                const messageText = error instanceof Error ? error.message : String(error);
+                await vscode.window.showErrorMessage(`Unable to halt workday: ${messageText}`);
+            }
+            break;
+        }
+        case "updateEmployeeSchedule": {
+            const payload = message.workplaceEmployeeScheduleUpdate;
+            if (!payload) {
+                console.warn("[webviewMessageHandler] Missing employee schedule payload");
+                break;
+            }
+            const service = provider.getWorkplaceService();
+            if (!service) {
+                await vscode.window.showErrorMessage("Workplace service is unavailable in this session.");
+                break;
+            }
+            try {
+                await service.updateEmployeeSchedule(payload);
+                await provider.postStateToWebview();
+            }
+            catch (error) {
+                const messageText = error instanceof Error ? error.message : String(error);
+                await vscode.window.showErrorMessage(`Unable to update employee schedule: ${messageText}`);
+            }
+            break;
+        }
+        case "createShift": {
+            const payload = message.workplaceShiftCreate;
+            if (!payload) {
+                console.warn("[webviewMessageHandler] Missing shift create payload");
+                break;
+            }
+            const service = provider.getWorkplaceService();
+            if (!service) {
+                await vscode.window.showErrorMessage("Workplace service is unavailable in this session.");
+                break;
+            }
+            try {
+                await service.createShift(payload);
+                await provider.postStateToWebview();
+            }
+            catch (error) {
+                const messageText = error instanceof Error ? error.message : String(error);
+                await vscode.window.showErrorMessage(`Unable to create shift: ${messageText}`);
+            }
+            break;
+        }
+        case "updateShift": {
+            const payload = message.workplaceShiftUpdate;
+            if (!payload) {
+                console.warn("[webviewMessageHandler] Missing shift update payload");
+                break;
+            }
+            const service = provider.getWorkplaceService();
+            if (!service) {
+                await vscode.window.showErrorMessage("Workplace service is unavailable in this session.");
+                break;
+            }
+            try {
+                await service.updateShift(payload);
+                await provider.postStateToWebview();
+            }
+            catch (error) {
+                const messageText = error instanceof Error ? error.message : String(error);
+                await vscode.window.showErrorMessage(`Unable to update shift: ${messageText}`);
+            }
+            break;
+        }
+        case "deleteShift": {
+            const payload = message.workplaceShiftDelete;
+            if (!payload) {
+                console.warn("[webviewMessageHandler] Missing shift delete payload");
+                break;
+            }
+            const service = provider.getWorkplaceService();
+            if (!service) {
+                await vscode.window.showErrorMessage("Workplace service is unavailable in this session.");
+                break;
+            }
+            try {
+                await service.deleteShift(payload);
+                await provider.postStateToWebview();
+            }
+            catch (error) {
+                const messageText = error instanceof Error ? error.message : String(error);
+                await vscode.window.showErrorMessage(`Unable to delete shift: ${messageText}`);
+            }
+            break;
+        }
         case "createActionStatus": {
             const payload = message.workplaceActionStatusPayload;
             if (!payload) {
@@ -2396,6 +2524,18 @@ export const webviewMessageHandler = async (provider, message, marketplaceManage
         }
         case "outerGateGeneratePassionMap": {
             await provider.generateOuterGatePassionMap();
+            break;
+        }
+        case "outerGateUpdateInsight": {
+            if (message.outerGateInsightId) {
+                await provider.updateOuterGateInsight(message.outerGateInsightId, message.outerGateInsightUpdates ?? {});
+            }
+            break;
+        }
+        case "outerGateDeleteInsight": {
+            if (message.outerGateInsightId) {
+                await provider.deleteOuterGateInsight(message.outerGateInsightId);
+            }
             break;
         }
         // kilocode_change start - ghostServiceSettings
@@ -3918,64 +4058,6 @@ export const webviewMessageHandler = async (provider, message, marketplaceManage
             vscode.window.showWarningMessage(t("common:mdm.info.organization_requires_auth"));
             break;
         }
-        case "hubCreateRoom": {
-            const options = {
-                title: message.text,
-                autonomous: message.hubAutonomous,
-                participants: message.hubParticipants,
-            };
-            provider.getConversationHub().createRoom(options);
-            break;
-        }
-        case "hubAddAgent": {
-            const roomId = message.hubRoomId;
-            const blueprint = message.hubAgent;
-            if (roomId && blueprint) {
-                void provider.getConversationHub().addAgent(roomId, blueprint);
-            }
-            break;
-        }
-        case "hubSendMessage": {
-            const roomId = message.hubRoomId;
-            if (roomId && typeof message.text === "string") {
-                provider.getConversationHub().sendUserMessage(roomId, message.text);
-            }
-            break;
-        }
-        case "hubSetActiveRoom": {
-            if (message.hubRoomId) {
-                provider.getConversationHub().setActiveRoom(message.hubRoomId);
-            }
-            break;
-        }
-        case "hubRemoveParticipant": {
-            const roomId = message.hubRoomId;
-            const participantId = message.participantId;
-            if (roomId && participantId) {
-                provider.getConversationHub().removeParticipant(roomId, participantId);
-            }
-            break;
-        }
-        case "hubUpdateSettings": {
-            const roomId = message.hubRoomId;
-            const settings = message.hubSettings;
-            if (roomId && settings) {
-                provider.getConversationHub().updateSettings(roomId, settings);
-            }
-            break;
-        }
-        case "hubStop": {
-            if (message.hubRoomId) {
-                provider.getConversationHub().stopRoom(message.hubRoomId);
-            }
-            break;
-        }
-        case "hubTriggerAgent": {
-            if (message.hubRoomId && message.agentId) {
-                provider.getConversationHub().triggerAgent(message.hubRoomId, message.agentId);
-            }
-            break;
-        }
         /**
          * Chat Message Queue
          */
@@ -3991,6 +4073,24 @@ export const webviewMessageHandler = async (provider, message, marketplaceManage
             if (message.payload) {
                 const { id, text, images } = message.payload;
                 provider.getCurrentTask()?.messageQueueService.updateMessage(id, text, images);
+            }
+            break;
+        }
+        case "conversationHold": {
+            try {
+                await provider.getCurrentTask()?.applyConversationHold(message.conversationHoldState);
+            }
+            catch (error) {
+                provider.log(`Failed to apply conversation hold: ${String(error)}`);
+            }
+            break;
+        }
+        case "conversationQueueRelease": {
+            try {
+                await provider.getCurrentTask()?.releaseQueuedResponses(message.queueReleaseRequest?.agentIds);
+            }
+            catch (error) {
+                provider.log(`Failed to release queued responses: ${String(error)}`);
             }
             break;
         }

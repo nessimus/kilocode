@@ -132,9 +132,12 @@ function normalizeToolResponse(content) {
             textSegments.push(block.text ?? "");
         }
         else if (block.type === "image") {
-            const data = block.source?.data;
-            if (typeof data === "string" && data.length > 0) {
-                images.push(data);
+            const source = block.source;
+            if (source?.type === "base64") {
+                const data = source.data;
+                if (typeof data === "string" && data.length > 0) {
+                    images.push(data);
+                }
             }
         }
     }

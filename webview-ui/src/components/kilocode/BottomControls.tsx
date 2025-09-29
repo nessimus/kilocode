@@ -24,13 +24,6 @@ const BottomControls: React.FC<BottomControlsProps> = ({ showApiConfig = false }
 		}
 	}
 
-	const openHub = () => {
-		vscode.postMessage({ type: "action", action: "switchTab", tab: "hub" })
-		if (typeof window !== "undefined") {
-			window.postMessage({ type: "action", action: "switchTab", tab: "hub" }, "*")
-		}
-	}
-
 	const openChatsHub = () => {
 		vscode.postMessage({ type: "action", action: "switchTab", tab: "chatsHub" })
 		if (typeof window !== "undefined") {
@@ -45,6 +38,20 @@ const BottomControls: React.FC<BottomControlsProps> = ({ showApiConfig = false }
 		}
 	}
 
+	const openFileCabinet = () => {
+		vscode.postMessage({ type: "action", action: "switchTab", tab: "fileCabinet" })
+		if (typeof window !== "undefined") {
+			window.postMessage({ type: "action", action: "switchTab", tab: "fileCabinet" }, "*")
+		}
+	}
+
+	const openWorkforceHub = () => {
+		vscode.postMessage({ type: "action", action: "switchTab", tab: "workforceHub" })
+		if (typeof window !== "undefined") {
+			window.postMessage({ type: "action", action: "switchTab", tab: "workforceHub" }, "*")
+		}
+	}
+
 	const openActionHub = () => {
 		vscode.postMessage({ type: "action", action: "switchTab", tab: "workspace" })
 		if (typeof window !== "undefined") {
@@ -53,9 +60,10 @@ const BottomControls: React.FC<BottomControlsProps> = ({ showApiConfig = false }
 	}
 
 	const outerGateLabel = t("common:outerGate.title", { defaultValue: "Outer Gates" }) as string
-	const agentHubLabel = t("common:hub.title", { defaultValue: "Agent Hub" }) as string
 	const chatsHubLabel = t("common:chatsHub.title", { defaultValue: "Chats Hub" }) as string
 	const brainstormHubLabel = t("common:brainstorm.title", { defaultValue: "Brainstorm Hub" }) as string
+	const fileCabinetLabel = t("common:fileCabinet.title", { defaultValue: "File Cabinet" }) as string
+	const workforceHubLabel = t("common:workforceHub.title", { defaultValue: "Workforce Hub" }) as string
 	const actionHubLabel = t("common:actionHub.title", { defaultValue: "Action Items Hub" }) as string
 
 	return (
@@ -69,12 +77,6 @@ const BottomControls: React.FC<BottomControlsProps> = ({ showApiConfig = false }
 					onClick={openOuterGate}
 				/>
 				<BottomButton
-					iconClass="codicon-organization"
-					title={agentHubLabel}
-					ariaLabel={agentHubLabel}
-					onClick={openHub}
-				/>
-				<BottomButton
 					iconClass="codicon-comment-discussion"
 					title={chatsHubLabel}
 					ariaLabel={chatsHubLabel}
@@ -85,6 +87,18 @@ const BottomControls: React.FC<BottomControlsProps> = ({ showApiConfig = false }
 					title={brainstormHubLabel}
 					ariaLabel={brainstormHubLabel}
 					onClick={openBrainstorm}
+				/>
+				<BottomButton
+					iconClass="codicon-folder"
+					title={fileCabinetLabel}
+					ariaLabel={fileCabinetLabel}
+					onClick={openFileCabinet}
+				/>
+				<BottomButton
+					iconClass="codicon-organization"
+					title={workforceHubLabel}
+					ariaLabel={workforceHubLabel}
+					onClick={openWorkforceHub}
 				/>
 				<BottomButton
 					iconClass="codicon-checklist"

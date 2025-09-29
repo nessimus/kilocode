@@ -14,10 +14,12 @@ import {
 	type EndlessSurfaceEdge,
 	type EndlessSurfaceNode,
 	type EndlessSurfaceRecord,
+	ConversationHoldState,
+	QueueReleaseRequest,
 } from "@roo-code/types"
 
 import { Mode } from "./modes"
-import type { HubAgentBlueprint, HubSettingsUpdate } from "./hub"
+import type { FileCabinetWriteRequest } from "./fileCabinet"
 import type { OuterGateInsightUpdate } from "./golden/outerGate"
 import type {
 	ArchiveDepartmentPayload,
@@ -179,6 +181,7 @@ export interface WebviewMessage {
 		| "archiveDepartment"
 		| "selectCompany"
 		| "setActiveEmployee"
+		| "conversationParticipantControl"
 		| "createActionItem"
 		| "updateActionItem"
 		| "deleteActionItem"
@@ -366,15 +369,12 @@ export interface WebviewMessage {
 		| "queueMessage"
 		| "removeQueuedMessage"
 		| "editQueuedMessage"
+		| "conversationHold"
+		| "conversationQueueRelease"
 		| "action"
-		| "hubCreateRoom"
-		| "hubAddAgent"
-		| "hubSendMessage"
-		| "hubSetActiveRoom"
-		| "hubRemoveParticipant"
-		| "hubUpdateSettings"
-		| "hubStop"
-		| "hubTriggerAgent"
+		| "fileCabinetLoad"
+		| "fileCabinetPreview"
+		| "fileCabinetWriteFile"
 		| "endlessSurfaceCreate"
 		| "endlessSurfaceDelete"
 		| "endlessSurfaceUpdateMeta"
@@ -410,9 +410,10 @@ export interface WebviewMessage {
 		| "account"
 		| "workspace"
 		| "workforce"
-		| "hub"
 		| "brainstorm"
 		| "outerGate"
+		| "fileCabinet"
+		| "workforceHub"
 	disabled?: boolean
 	context?: string
 	dataUri?: string
@@ -477,7 +478,6 @@ export interface WebviewMessage {
 		| "focusInput"
 		| "switchTab"
 		| "focusChatInput"
-		| "hubButtonClicked"
 	source?: "global" | "project"
 	requestId?: string
 	ids?: string[]
@@ -491,13 +491,10 @@ export interface WebviewMessage {
 	url?: string // For openExternal
 	mpItem?: MarketplaceItem
 	mpInstallOptions?: InstallMarketplaceItemOptions
-	hubRoomId?: string
-	hubAgent?: HubAgentBlueprint
-	hubParticipants?: HubAgentBlueprint[]
-	hubSettings?: HubSettingsUpdate
-	hubAutonomous?: boolean
 	participantId?: string
 	agentId?: string
+	conversationHoldState?: ConversationHoldState
+	queueReleaseRequest?: QueueReleaseRequest
 	workplaceCompanyPayload?: CreateCompanyPayload
 	workplaceCompanyUpdate?: UpdateCompanyPayload
 	workplaceCompanyFavorite?: SetCompanyFavoritePayload
@@ -517,6 +514,10 @@ export interface WebviewMessage {
 	workplaceDepartmentArchive?: ArchiveDepartmentPayload
 	workplaceCompanyId?: string
 	workplaceEmployeeId?: string
+	fileCabinetCompanyId?: string
+	fileCabinetPath?: string
+	fileCabinetRequestId?: string
+	fileCabinetWritePayload?: FileCabinetWriteRequest
 	workplaceOwnerProfileDefaults?: WorkplaceOwnerProfile
 	workplaceRootOwnerName?: string
 	workplaceActionItemPayload?: CreateActionItemPayload
@@ -607,6 +608,13 @@ export interface BalanceDataResponsePayload {
 	error?: string
 }
 
+export type ConversationParticipantControlAction = "toggleMute" | "togglePriority"
+
+export interface ConversationParticipantControlPayload {
+	participantId: string
+	action: ConversationParticipantControlAction
+}
+
 export interface SeeNewChangesPayload {
 	commitRange: CommitRange
 }
@@ -652,6 +660,7 @@ export type WebViewMessagePayload =
 	// kilocode_change start
 	| ProfileDataResponsePayload
 	| BalanceDataResponsePayload
+	| ConversationParticipantControlPayload
 	| SeeNewChangesPayload
 	// kilocode_change end
 	| CheckpointDiffPayload

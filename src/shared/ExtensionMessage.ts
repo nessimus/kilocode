@@ -15,6 +15,10 @@ import type {
 	QueuedMessage,
 	EndlessSurfaceRecord,
 	EndlessSurfaceState,
+	ConversationHoldState,
+	OrchestratorAnalysis,
+	OrchestratorTimelineEvent,
+	ConversationAgent,
 } from "@roo-code/types"
 
 import { GitCommit } from "../utils/git"
@@ -26,10 +30,22 @@ import type { OuterGateState } from "./golden/outerGate"
 import { Mode } from "./modes"
 import { ModelRecord, RouterModels } from "./api"
 import { ProfileDataResponsePayload, BalanceDataResponsePayload } from "./WebviewMessage" // kilocode_change
+import type { FileCabinetPreview, FileCabinetSnapshot } from "./fileCabinet"
 import { BrowserInteractionStrategy, BrowserStreamFrame } from "./browser"
 import { ClineRulesToggles } from "./cline-rules" // kilocode_change
 import { KiloCodeWrapperProperties } from "./kilocode/wrapper" // kilocode_change
-import type { HubSnapshot } from "./hub"
+
+interface ConversationHoldPayload {
+	taskId?: string
+	state?: ConversationHoldState
+}
+
+interface OrchestratorAnalysisPayload {
+	taskId?: string
+	analysis?: OrchestratorAnalysis
+	agents?: ConversationAgent[]
+	appendTimeline?: boolean
+}
 
 // Command interface for frontend/backend communication
 export interface Command {
@@ -156,13 +172,29 @@ export interface ExtensionMessage {
 		| "showEditMessageDialog"
 		| "kilocodeNotificationsResponse" // kilocode_change
 		| "usageDataResponse" // kilocode_change
+		| "orchestratorAnalysis"
+		| "conversationHoldState"
+		| "orchestratorTimeline"
 		| "commands"
 		| "insertTextIntoTextarea"
 		| "browserStreamFrame"
 		| "openSurface"
 		| "workplaceCompanyMutationResult"
+		| "fileCabinetSnapshot"
+		| "fileCabinetPreview"
+		| "fileCabinetWriteResult"
 	text?: string
-	payload?: ProfileDataResponsePayload | BalanceDataResponsePayload // kilocode_change: Add payload for profile and balance data
+	payload?:
+		| ProfileDataResponsePayload
+		| BalanceDataResponsePayload
+		| ConversationHoldPayload
+		| OrchestratorAnalysisPayload
+	fileCabinetSnapshot?: FileCabinetSnapshot
+	fileCabinetPreview?: FileCabinetPreview
+	fileCabinetWriteSuccess?: boolean
+	conversationHoldState?: ConversationHoldState
+	conversationAgents?: ConversationAgent[]
+	lastOrchestratorAnalysis?: OrchestratorAnalysis
 	action?:
 		| "chatButtonClicked"
 		| "mcpButtonClicked"
@@ -171,7 +203,6 @@ export interface ExtensionMessage {
 		| "promptsButtonClicked"
 		| "profileButtonClicked" // kilocode_change
 		| "marketplaceButtonClicked"
-		| "hubButtonClicked"
 		| "cloudButtonClicked"
 		| "didBecomeVisible"
 		| "focusInput"
@@ -441,12 +472,15 @@ export type ExtensionState = Pick<
 	kiloCodeImageApiKey?: string
 	openRouterUseMiddleOutTransform?: boolean
 	messageQueue?: QueuedMessage[]
+	conversationHoldState?: ConversationHoldState
+	conversationAgents?: ConversationAgent[]
+	lastOrchestratorAnalysis?: OrchestratorAnalysis
+	orchestratorTimeline?: OrchestratorTimelineEvent[]
 	lastShownAnnouncementId?: string
 	apiModelId?: string
 	mcpServers?: McpServer[]
 	hasSystemPromptOverride?: boolean
 	mdmCompliant?: boolean
-	hubSnapshot?: HubSnapshot
 }
 
 export interface ClineSayTool {

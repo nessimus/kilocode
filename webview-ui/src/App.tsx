@@ -12,7 +12,6 @@ import { TelemetryEventName } from "@roo-code/types"
 import { initializeSourceMaps, exposeSourceMapsForDebugging } from "./utils/sourceMapInitializer"
 import { ExtensionStateContextProvider, useExtensionState } from "./context/ExtensionStateContext"
 import ChatView, { ChatViewRef } from "./components/chat/ChatView"
-import HubView from "./components/hub/HubView"
 import ChatsHubView from "./components/chats/ChatsHubView"
 import HistoryView from "./components/history/HistoryView"
 import SettingsView, { SettingsViewRef } from "./components/settings/SettingsView"
@@ -40,6 +39,8 @@ import SurfaceDetailPage from "./components/surfaces/SurfaceDetailPage"
 import type { BrainstormSurfaceSummary } from "./components/surfaces/types"
 import OwnerProfileSetupDialog from "./components/kilocode/outerGate/OwnerProfileSetupDialog"
 import WorkplaceRootDialog from "./components/kilocode/outerGate/WorkplaceRootDialog"
+import FileCabinetView from "./components/fileCabinet/FileCabinetView"
+import WorkforceHubView from "./components/workforceHub/WorkforceHubView"
 
 type Tab =
 	| "settings"
@@ -47,7 +48,6 @@ type Tab =
 	| "mcp"
 	| "modes"
 	| "lobby"
-	| "hub"
 	| "chatsHub"
 	| "marketplace"
 	| "account"
@@ -57,6 +57,8 @@ type Tab =
 	| "workforce"
 	| "outerGate"
 	| "brainstorm"
+	| "fileCabinet"
+	| "workforceHub"
 
 type ViewRoute = { page: "lobby" } | { page: "brainstorm" } | { page: "surface"; surfaceId: string }
 
@@ -131,7 +133,6 @@ const tabsByMessageAction: Partial<Record<NonNullable<ExtensionMessage["action"]
 	historyButtonClicked: "history",
 	profileButtonClicked: "profile",
 	marketplaceButtonClicked: "marketplace",
-	hubButtonClicked: "hub",
 	// cloudButtonClicked: "cloud", // kilocode_change: no cloud
 }
 
@@ -519,6 +520,8 @@ const App = () => {
 			{tab === "profile" && <ProfileView onDone={() => switchTab("lobby")} />}
 			{tab === "workspace" && <ActionWorkspaceView onDone={() => switchTab("lobby")} />}
 			{tab === "workforce" && <WorkforceView onDone={() => switchTab("lobby")} />}
+			<FileCabinetView isHidden={tab !== "fileCabinet"} />
+			<WorkforceHubView isHidden={tab !== "workforceHub"} />
 			{tab === "marketplace" && (
 				<MarketplaceView
 					stateManager={marketplaceStateManager}
@@ -533,7 +536,6 @@ const App = () => {
 				showAnnouncement={showAnnouncement}
 				hideAnnouncement={() => setShowAnnouncement(false)}
 			/>
-			<HubView isHidden={tab !== "hub"} targetSection={currentSection} />
 			<ChatsHubView
 				isHidden={tab !== "chatsHub"}
 				showAnnouncement={showAnnouncement}

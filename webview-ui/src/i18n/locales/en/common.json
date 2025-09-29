@@ -86,52 +86,61 @@
 			"imageDataUriCopied": "Image data URI copied to clipboard"
 		}
 	},
-	"hub": {
-		"title": "Agent Hub",
-		"rooms": "Agent Rooms",
-		"newRoom": "New Session",
-		"noAgents": "No agents yet",
-		"empty": "Create a room to begin a group conversation.",
-		"participants": "Participants",
-		"team": "Team",
-		"addAgent": "Add Agent",
-		"agentNamePlaceholder": "Display name",
-		"add": "Add",
-		"human": "human",
-		"removeAgent": "Remove agent",
-		"generating": "…thinking",
-		"unknown": "Unknown",
-		"noMessages": "Introduce the topic or invite your agents to begin.",
-		"composePlaceholder": "Share context or a new objective…",
-		"send": "Send",
-		"noRoomSelected": "Create or select a room to begin your collaborative session.",
-		"addEmployeesFirst": "Add employees to your workspace before starting a hub session.",
-		"noAvailableEmployees": "Everyone from {{company}} is already in this room.",
-		"hideRooms": "Hide Rooms",
-		"showRooms": "Show Rooms",
-		"hideTeam": "Hide Team",
-		"showTeam": "Show Team",
-		"stop": "Stop",
-		"followUpPrompt": "Suggested follow-ups",
-		"manageEmployees": "Manage employees",
-		"editEmployeeTitle": "Edit teammate profile",
-		"employeeSelectionLabel": "Choose teammate",
-		"employeeNameLabel": "Name",
-		"employeeRoleLabel": "Role",
-		"employeeMbtiLabel": "MBTI type",
-		"employeeMbtiPlaceholder": "Not set",
-		"employeeTraitsLabel": "Signature traits",
-		"employeePersonalityLabel": "Working style",
-		"employeeDescriptionLabel": "Job description",
-		"employeeSave": "Save changes",
-		"employeeValidation": "Name and role are required to update this teammate.",
-		"manageEmployeesEmpty": "Add employees to your workspace first.",
-		"autonomousOn": "Autonomous On",
-		"autonomousOff": "Autonomous Off"
-	},
+	"stop": "Stop",
 	"chatsHub": {
 		"title": "Chats Hub",
-		"placeholder": "We'll configure the Chats Hub experience here soon."
+		"placeholder": "We'll configure the Chats Hub experience here soon.",
+		"hero": {
+			"title": "Start your next chat",
+			"subtitle": "Bring the right people into the conversation and share what matters most.",
+			"primaryCta": "Start chat",
+			"secondaryCta": "Manage participants",
+			"workforceCta": "Open Workforce"
+		},
+		"participants": {
+			"title": "Participants",
+			"subtitle": "Select the teammates or agents you'd like to bring into the conversation.",
+			"unknown": "Participant",
+			"placeholder": "No participants selected yet."
+		},
+		"prechat": {
+			"greeting": "Welcome back, {{name}}.",
+			"participantsLabel": "People in the space",
+			"addParticipant": "Add",
+			"missionEyebrow": "Conversation overview",
+			"missionTitle": "Company mission",
+			"missionEmpty": "Add a short note so everyone knows what success looks like.",
+			"statPeople": "people ready",
+			"statTeams": "teams active",
+			"statDepartments": "departments",
+			"leadLabel": "Lead voice",
+			"recommended": "Recommended voices",
+			"suggestedTitle": "Suggested collaborators",
+			"recentsTitle": "Pick up where you left off",
+			"libraryTitle": "Reference material",
+			"libraryCollapsed": "Expand to skim the latest tasks before you jump back in.",
+			"removeParticipant": "Remove participant"
+		},
+		"recent": {
+			"title": "Recent chats",
+			"openHistory": "View history",
+			"empty": "No conversations yet. Your next conversation will show up here.",
+			"untitled": "Untitled conversation"
+		},
+		"hold": {
+			"waitingParticipants": "participants",
+			"manual": "Conversation paused. Queued responses from {{agents}}.",
+			"ingest": "Processing your message. Agents will resume shortly.",
+			"responding": "Resuming orchestrated responses…",
+			"resumeAll": "Resume All",
+			"holdAll": "Hold All",
+			"resumeAllOption": "All participants",
+			"resumeWith": "Resume With",
+			"resume": "Resume"
+		},
+		"composer": {
+			"hint": "Your message pauses other participants until you finish."
+		}
 	},
 	"brainstorm": {
 		"title": "Brainstorm Hub",
@@ -215,6 +224,14 @@
 	},
 	"actionHub": {
 		"title": "Action Items Hub"
+	},
+	"fileCabinet": {
+		"title": "File Cabinet",
+		"placeholder": "Your company files will live here soon."
+	},
+	"workforceHub": {
+		"title": "Workforce Hub",
+		"placeholder": "Team and staffing insights will appear here soon."
 	},
 	"outerGate": {
 		"title": "Outer Gates"

@@ -82,6 +82,7 @@ const createInitialCompany = () => {
         actionStatuses: statuses,
         actionItems,
         actionRelations: [],
+        shifts: [],
     };
 };
 const createInitialState = () => ({

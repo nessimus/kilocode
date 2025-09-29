@@ -14,6 +14,10 @@ import {
 	ORGANIZATION_ALLOW_ALL,
 	EndlessSurfaceRecord,
 	EndlessSurfaceAgentAccess,
+	ConversationHoldState,
+	OrchestratorAnalysis,
+	ConversationAgent,
+	OrchestratorTimelineEvent,
 } from "@roo-code/types"
 
 import {
@@ -31,7 +35,6 @@ import { CustomSupportPrompts } from "@roo/support-prompt"
 import { experimentDefault } from "@roo/experiments"
 import { RouterModels } from "@roo/api"
 import { McpMarketplaceCatalog } from "../../../src/shared/kilocode/mcp" // kilocode_change
-import type { HubSnapshot, HubAgentBlueprint, HubSettingsUpdate } from "@roo/hub"
 import { defaultOuterGateState, type OuterGateInsightUpdate } from "@roo/golden/outerGate"
 
 import { vscode } from "@src/utils/vscode"
@@ -267,13 +270,6 @@ export interface ExtensionStateContextType extends ExtensionState {
 	setOwnerProfileDefaults: (profile: WorkplaceOwnerProfile) => void
 	configureWorkplaceRoot: (ownerName?: string) => void
 	setShowWelcome: (value: boolean) => void
-	hubSnapshot?: HubSnapshot
-	createHubRoom: (title?: string, options?: { autonomous?: boolean; participants?: HubAgentBlueprint[] }) => void
-	setActiveHubRoom: (roomId: string) => void
-	sendHubMessage: (roomId: string, text: string) => void
-	addHubAgent: (roomId: string, agent: HubAgentBlueprint) => void
-	removeHubParticipant: (roomId: string, participantId: string) => void
-	updateHubSettings: (roomId: string, settings: HubSettingsUpdate) => void
 	sendOuterGateMessage: (text: string) => void
 	triggerOuterGateAction: (slug: string) => void
 	requestOuterGatePassionMap: () => void
@@ -418,6 +414,10 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 			codebaseIndexSearchMinScore: undefined,
 		},
 		codebaseIndexModels: { ollama: {}, openai: {} },
+		conversationHoldState: undefined,
+		conversationAgents: [],
+		lastOrchestratorAnalysis: undefined,
+		orchestratorTimeline: [],
 		alwaysAllowUpdateTodoList: true,
 		includeDiagnosticMessages: true,
 		maxDiagnosticMessages: 50,
@@ -426,7 +426,6 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		openRouterImageGenerationSelectedModel: "",
 			workplaceState: { companies: [], ownerProfileDefaults: undefined },
 			workplaceRootConfigured: false,
-			hubSnapshot: { rooms: [], activeRoomId: undefined },
 		outerGateState: defaultOuterGateState,
 	})
 
@@ -468,38 +467,6 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 				...value,
 			},
 		}))
-	}, [])
-
-	const createHubRoom = useCallback(
-		(title?: string, options?: { autonomous?: boolean; participants?: HubAgentBlueprint[] }) => {
-			vscode.postMessage({
-				type: "hubCreateRoom",
-				text: title,
-				hubAutonomous: options?.autonomous,
-				hubParticipants: options?.participants,
-			})
-		},
-		[],
-	)
-
-	const setActiveHubRoom = useCallback((roomId: string) => {
-		vscode.postMessage({ type: "hubSetActiveRoom", hubRoomId: roomId })
-	}, [])
-
-	const sendHubMessage = useCallback((roomId: string, text: string) => {
-		vscode.postMessage({ type: "hubSendMessage", hubRoomId: roomId, text })
-	}, [])
-
-	const addHubAgent = useCallback((roomId: string, agent: HubAgentBlueprint) => {
-		vscode.postMessage({ type: "hubAddAgent", hubRoomId: roomId, hubAgent: agent })
-	}, [])
-
-	const removeHubParticipant = useCallback((roomId: string, participantId: string) => {
-		vscode.postMessage({ type: "hubRemoveParticipant", hubRoomId: roomId, participantId })
-	}, [])
-
-	const updateHubSettings = useCallback((roomId: string, settings: HubSettingsUpdate) => {
-		vscode.postMessage({ type: "hubUpdateSettings", hubRoomId: roomId, hubSettings: settings })
 	}, [])
 
 	const sendOuterGateMessage = useCallback((text: string) => {
@@ -547,8 +514,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 				const payload = {
 					type: "action",
 					action: "switchTab",
-					tab: "hub",
-					values: { section: "integrations" },
+					tab: "workspace",
 				}
 				window.postMessage(payload, "*")
 				break
@@ -663,6 +629,46 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 				if (newState.marketplaceInstalledMetadata !== undefined) {
 					setMarketplaceInstalledMetadata(newState.marketplaceInstalledMetadata)
 				}
+				break
+			}
+			case "conversationHoldState": {
+				const nextState =
+					(typeof message.payload === "object" && message.payload !== null && "state" in message.payload
+						? (message.payload as { state?: ConversationHoldState }).state
+						: undefined) ?? message.conversationHoldState ?? undefined
+				setState((prevState) => ({ ...prevState, conversationHoldState: nextState }))
+				break
+			}
+			case "orchestratorAnalysis": {
+				const payload =
+					(typeof message.payload === "object" && message.payload !== null
+						? (message.payload as {
+							analysis?: OrchestratorAnalysis
+							agents?: ConversationAgent[]
+							appendTimeline?: boolean
+						})
+						: {})
+				setState((prevState) => {
+					const nextTimeline = payload.appendTimeline && payload.analysis
+						? [
+							...(prevState.orchestratorTimeline ?? []),
+							{
+								id: `analysis-${Date.now()}`,
+								timestamp: Date.now(),
+								type: "analysis" as OrchestratorTimelineEvent["type"],
+								summary: payload.analysis.rationale ?? "Updated routing analysis",
+								relatedAgentIds: payload.analysis.primarySpeakers?.map((agent) => agent.id),
+								metadata: payload.analysis,
+							},
+						]
+						: prevState.orchestratorTimeline
+					return {
+						...prevState,
+						lastOrchestratorAnalysis: payload.analysis ?? prevState.lastOrchestratorAnalysis,
+						conversationAgents: payload.agents ?? prevState.conversationAgents ?? [],
+						orchestratorTimeline: nextTimeline,
+					}
+				})
 				break
 			}
 				case "outerGateState": {
@@ -1110,13 +1116,6 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		includeTaskHistoryInEnhance,
 		setIncludeTaskHistoryInEnhance,
 		workplaceState,
-		hubSnapshot: state.hubSnapshot,
-		createHubRoom,
-		setActiveHubRoom,
-		sendHubMessage,
-		addHubAgent,
-		removeHubParticipant,
-		updateHubSettings,
 		createCompany: (payload) => vscode.postMessage({ type: "createCompany", workplaceCompanyPayload: payload }),
 		updateCompany: (payload) => vscode.postMessage({ type: "updateCompany", workplaceCompanyUpdate: payload }),
 		setCompanyFavorite: (payload) =>

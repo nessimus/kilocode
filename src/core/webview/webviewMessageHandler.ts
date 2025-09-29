@@ -98,7 +98,6 @@ import {
 	HaltWorkdayPayload,
 	WorkplaceOwnerProfile,
 } from "../../shared/golden/workplace"
-import type { HubAgentBlueprint, HubSettingsUpdate } from "../../shared/hub"
 
 const ALLOWED_VSCODE_SETTINGS = new Set(["terminal.integrated.inheritEnv"])
 
@@ -4549,62 +4548,100 @@ export const webviewMessageHandler = async (
 			break
 		}
 
-		case "hubCreateRoom": {
-			const options = {
-				title: message.text,
-				autonomous: message.hubAutonomous,
-				participants: message.hubParticipants as HubAgentBlueprint[] | undefined,
-			}
+		case "fileCabinetLoad": {
+			try {
+				const manager = provider.getWorkplaceFilesystemManager()
+				const companyId =
+					message.fileCabinetCompanyId ?? provider.getWorkplaceService()?.getState().activeCompanyId
+				if (!manager || !companyId) {
+					await provider.postMessageToWebview({
+						type: "fileCabinetSnapshot",
+						text: "File cabinet unavailable",
+						fileCabinetSnapshot: undefined,
+					})
+					break
+				}
 
-			provider.getConversationHub().createRoom(options)
-			break
-		}
-		case "hubAddAgent": {
-			const roomId = message.hubRoomId
-			const blueprint = message.hubAgent as HubAgentBlueprint | undefined
-			if (roomId && blueprint) {
-				void provider.getConversationHub().addAgent(roomId, blueprint)
+				const snapshot = await manager.getFileCabinetSnapshot(companyId)
+				await provider.postMessageToWebview({ type: "fileCabinetSnapshot", fileCabinetSnapshot: snapshot })
+			} catch (error) {
+				console.error("[FileCabinet] load failed", error)
+				await provider.postMessageToWebview({
+					type: "fileCabinetSnapshot",
+					text: error instanceof Error ? error.message : "Unable to load files",
+					fileCabinetSnapshot: undefined,
+				})
 			}
 			break
 		}
-		case "hubSendMessage": {
-			const roomId = message.hubRoomId
-			if (roomId && typeof message.text === "string") {
-				provider.getConversationHub().sendUserMessage(roomId, message.text)
+
+		case "fileCabinetPreview": {
+			try {
+				const manager = provider.getWorkplaceFilesystemManager()
+				const companyId =
+					message.fileCabinetCompanyId ?? provider.getWorkplaceService()?.getState().activeCompanyId
+				const targetPath = message.fileCabinetPath
+				if (!manager || !companyId || !targetPath) {
+					await provider.postMessageToWebview({
+						type: "fileCabinetPreview",
+						fileCabinetPreview: {
+							companyId: companyId ?? "",
+							path: targetPath ?? "",
+							kind: "other",
+							byteSize: 0,
+							createdAt: new Date().toISOString(),
+							modifiedAt: new Date().toISOString(),
+							error: "Preview unavailable",
+						},
+					})
+					break
+				}
+
+				const preview = await manager.getFileCabinetPreview(companyId, targetPath)
+				await provider.postMessageToWebview({ type: "fileCabinetPreview", fileCabinetPreview: preview })
+			} catch (error) {
+				console.error("[FileCabinet] preview failed", error)
+				await provider.postMessageToWebview({
+					type: "fileCabinetPreview",
+					fileCabinetPreview: {
+						companyId: message.fileCabinetCompanyId ?? "",
+						path: message.fileCabinetPath ?? "",
+						kind: "other",
+						byteSize: 0,
+						createdAt: new Date().toISOString(),
+						modifiedAt: new Date().toISOString(),
+						error: error instanceof Error ? error.message : "Preview unavailable",
+					},
+				})
 			}
 			break
 		}
-		case "hubSetActiveRoom": {
-			if (message.hubRoomId) {
-				provider.getConversationHub().setActiveRoom(message.hubRoomId)
-			}
-			break
-		}
-		case "hubRemoveParticipant": {
-			const roomId = message.hubRoomId
-			const participantId = message.participantId
-			if (roomId && participantId) {
-				provider.getConversationHub().removeParticipant(roomId, participantId)
-			}
-			break
-		}
-		case "hubUpdateSettings": {
-			const roomId = message.hubRoomId
-			const settings = message.hubSettings as HubSettingsUpdate | undefined
-			if (roomId && settings) {
-				provider.getConversationHub().updateSettings(roomId, settings)
-			}
-			break
-		}
-		case "hubStop": {
-			if (message.hubRoomId) {
-				provider.getConversationHub().stopRoom(message.hubRoomId)
-			}
-			break
-		}
-		case "hubTriggerAgent": {
-			if (message.hubRoomId && message.agentId) {
-				provider.getConversationHub().triggerAgent(message.hubRoomId, message.agentId)
+
+		case "fileCabinetWriteFile": {
+			try {
+				const manager = provider.getWorkplaceFilesystemManager()
+				const payload = message.fileCabinetWritePayload
+				if (!manager || !payload) {
+					await provider.postMessageToWebview({
+						type: "fileCabinetWriteResult",
+						fileCabinetWriteSuccess: false,
+						text: "Unable to save file",
+					})
+					break
+				}
+
+				await manager.writeCompanyFile(payload)
+				await provider.postMessageToWebview({
+					type: "fileCabinetWriteResult",
+					fileCabinetWriteSuccess: true,
+				})
+			} catch (error) {
+				console.error("[FileCabinet] write failed", error)
+				await provider.postMessageToWebview({
+					type: "fileCabinetWriteResult",
+					fileCabinetWriteSuccess: false,
+					text: error instanceof Error ? error.message : "Unable to save file",
+				})
 			}
 			break
 		}
@@ -4627,6 +4664,24 @@ export const webviewMessageHandler = async (
 				provider.getCurrentTask()?.messageQueueService.updateMessage(id, text, images)
 			}
 
+			break
+		}
+		case "conversationHold": {
+			try {
+				await provider.getCurrentTask()?.applyConversationHold(message.conversationHoldState)
+			} catch (error) {
+				provider.log(`Failed to apply conversation hold: ${String(error)}`)
+			}
+			break
+		}
+		case "conversationQueueRelease": {
+			try {
+				await provider.getCurrentTask()?.releaseQueuedResponses(
+					message.queueReleaseRequest?.agentIds,
+				)
+			} catch (error) {
+				provider.log(`Failed to release queued responses: ${String(error)}`)
+			}
 			break
 		}
 	}

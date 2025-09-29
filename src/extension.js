@@ -38,6 +38,7 @@ import { initializeI18n } from "./i18n";
 import { registerGhostProvider } from "./services/ghost"; // kilocode_change
 import { getKiloCodeWrapperProperties } from "./core/kilocode/wrapper"; // kilocode_change
 import { createWorkplaceService } from "./services/workplace/WorkplaceService";
+import { WorkplaceFilesystemManager, FOCUS_SIDEBAR_FLAG_KEY } from "./services/workplace/WorkplaceFilesystemManager";
 import { CloverSessionService } from "./services/outerGate/CloverSessionService";
 /**
  * Built using https://github.com/microsoft/vscode-webview-ui-toolkit
@@ -117,6 +118,9 @@ export async function activate(context) {
     // kilocode_change end
     const contextProxy = await ContextProxy.getInstance(context);
     const workplaceService = await createWorkplaceService(context);
+    const workplaceFilesystemManager = new WorkplaceFilesystemManager(context);
+    await workplaceFilesystemManager.initialize(workplaceService.getState());
+    workplaceService.attachStateObserver(workplaceFilesystemManager);
     const cloverSessionService = new CloverSessionService(context, () => workplaceService);
     const endlessSurfaceService = new EndlessSurfaceService(context, (message, ...rest) => {
         const serializedRest = rest.map((entry) => typeof entry === "string"
@@ -152,8 +156,21 @@ export async function activate(context) {
     // Initialize the provider *before* the Roo Code Cloud service.
     const provider = new ClineProvider(context, outputChannel, "sidebar", contextProxy, mdmService);
     provider.attachWorkplaceService(workplaceService);
+    provider.attachWorkplaceFilesystemManager(workplaceFilesystemManager);
     provider.attachEndlessSurfaceService(endlessSurfaceService);
     provider.attachCloverSessionService(cloverSessionService);
+    const fsConfigListener = workplaceFilesystemManager.addConfigurationListener(() => provider.postStateToWebview());
+    context.subscriptions.push(fsConfigListener);
+    const shouldFocusSidebar = context.globalState.get(FOCUS_SIDEBAR_FLAG_KEY);
+    if (shouldFocusSidebar) {
+        await context.globalState.update(FOCUS_SIDEBAR_FLAG_KEY, false);
+        try {
+            await vscode.commands.executeCommand("kilo-code.SidebarProvider.focus");
+        }
+        catch (error) {
+            outputChannel.appendLine(`[WorkplaceFilesystem] Failed to focus sidebar: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
     // Initialize Roo Code Cloud service.
     const postStateListener = () => ClineProvider.getVisibleInstance()?.postStateToWebview();
     authStateChangedHandler = async (data) => {
@@ -275,6 +292,13 @@ export async function activate(context) {
         endlessSurfaceService,
         cloverSessionService,
     });
+    context.subscriptions.push(vscode.commands.registerCommand(`${Package.name}.chooseWorkplaceFolder`, async () => {
+        await workplaceFilesystemManager.chooseRootFolder();
+        const root = workplaceFilesystemManager.getRootUri();
+        if (root) {
+            void vscode.window.showInformationMessage(`Golden Workplace root set to ${root.fsPath}. Opening the associated workspace...`);
+        }
+    }));
     const dumpCodexInfoDisposable = vscode.commands.registerCommand("golden-workplace.dev.dumpCodexInfo", async () => {
         const codex = vscode.extensions.getExtension("openai.chatgpt");
         if (!codex) {

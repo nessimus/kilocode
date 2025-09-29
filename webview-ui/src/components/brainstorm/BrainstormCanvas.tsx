@@ -1861,9 +1861,9 @@ const handleNoteSheetFocusChange = useCallback(
 	}, [])
 
 	const handleBack = useCallback(() => {
-		vscode.postMessage({ type: "action", action: "switchTab", tab: "hub" })
+		vscode.postMessage({ type: "action", action: "switchTab", tab: "brainstorm" })
 		if (typeof window !== "undefined") {
-			window.postMessage({ type: "action", action: "switchTab", tab: "hub" }, "*")
+			window.postMessage({ type: "action", action: "switchTab", tab: "brainstorm" }, "*")
 		}
 	}, [])
 

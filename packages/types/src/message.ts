@@ -1,5 +1,11 @@
 import { z } from "zod"
 import { kiloCodeMetaDataSchema } from "./kilocode.js"
+import {
+	orchestratorAgentSchema,
+	orchestratorHoldModeSchema,
+	orchestratorQueueStateSchema,
+	orchestratorSuppressedAgentSchema,
+} from "./conversation.js"
 
 /**
  * ClineAsk
@@ -199,6 +205,20 @@ export const toolResultMessagePayloadSchema = z.object({
 
 export type ToolResultMessagePayload = z.infer<typeof toolResultMessagePayloadSchema>
 
+const orchestratorMessageMetadataSchema = z.object({
+	respondedViaOrchestrator: z.boolean().optional(),
+	queueState: orchestratorQueueStateSchema.optional(),
+	holdMode: orchestratorHoldModeSchema.optional(),
+	groupId: z.string().optional(),
+	rationale: z.string().optional(),
+	primarySpeakers: z.array(orchestratorAgentSchema).optional(),
+	secondarySpeakers: z.array(orchestratorAgentSchema).optional(),
+	suppressedAgents: z.array(orchestratorSuppressedAgentSchema).optional(),
+	auditEventId: z.string().optional(),
+})
+
+export type OrchestratorMessageMetadata = z.infer<typeof orchestratorMessageMetadataSchema>
+
 /**
  * ToolProgressStatus
  */
@@ -254,6 +274,7 @@ export const clineMessageSchema = z.object({
 				.optional(),
 			kiloCode: kiloCodeMetaDataSchema.optional(),
 			toolResult: toolResultMessagePayloadSchema.optional(),
+			orchestrator: orchestratorMessageMetadataSchema.optional(),
 		})
 		.optional(),
 })

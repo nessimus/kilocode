@@ -513,6 +513,8 @@ describe("ClineProvider", () => {
             diagnosticsEnabled: true,
             openRouterImageApiKey: undefined,
             openRouterImageGenerationSelectedModel: undefined,
+            workplaceRootConfigured: false,
+            workplaceRootUri: undefined,
         };
         const message = {
             type: "state",

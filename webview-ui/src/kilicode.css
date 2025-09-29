@@ -1,0 +1,498 @@
+
+.prechat__meta {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.prechat__meta-value {
+	font-size: 13px;
+	font-weight: 500;
+	color: color-mix(in srgb, var(--vscode-foreground) 92%, transparent 8%);
+}
+
+.prechat__meta-role {
+	font-size: 12px;
+	letter-spacing: 0.02em;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 70%, transparent 30%);
+}
+
+.prechat__hero {
+	display: flex;
+	flex-direction: column;
+	gap: clamp(20px, 5vw, 32px);
+}
+
+.prechat__hero-body {
+	display: flex;
+	flex-direction: column;
+	gap: clamp(20px, 4vw, 28px);
+	padding: clamp(24px, 5vw, 36px);
+	border-radius: 24px;
+	border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 26%, transparent 74%);
+	background: linear-gradient(
+		140deg,
+		color-mix(in srgb, var(--vscode-focusBorder) 22%, transparent 78%) 0%,
+		color-mix(in srgb, var(--vscode-editor-background) 95%, rgba(255, 255, 255, 0.07) 5%) 60%
+	);
+	box-shadow: 0 24px 48px rgba(0, 0, 0, 0.22);
+}
+
+.prechat__hero-columns {
+	display: grid;
+	gap: clamp(20px, 4vw, 32px);
+	grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.prechat__hero-column {
+	display: flex;
+	flex-direction: column;
+	gap: clamp(12px, 3vw, 20px);
+}
+
+.prechat__hero-column--primary {
+	gap: clamp(14px, 4vw, 24px);
+}
+
+.prechat__hero-column--secondary {
+	gap: clamp(14px, 3vw, 24px);
+}
+
+.prechat__badge {
+	width: 56px;
+	height: 56px;
+	border-radius: 16px;
+	display: grid;
+	place-items: center;
+	font-weight: 600;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--vscode-foreground) 85%, transparent 15%);
+	border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 40%, transparent 60%);
+	background: color-mix(in srgb, var(--vscode-focusBorder) 22%, var(--vscode-editor-background) 78%);
+}
+
+.prechat__timestamp {
+	margin: 0;
+	font-size: 12px;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 80%, transparent 20%);
+}
+
+.prechat__greeting {
+	font-size: 13px;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 88%, transparent 12%);
+}
+
+.prechat__headline {
+	margin: 0;
+	font-size: clamp(22px, 4vw, 32px);
+	font-weight: 650;
+	letter-spacing: -0.01em;
+	color: var(--vscode-foreground);
+}
+
+.prechat__lede {
+	margin: 0;
+	font-size: clamp(14px, 1.8vw, 16px);
+	line-height: 1.5;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 90%, transparent 10%);
+}
+
+.prechat__label {
+	font-size: 11px;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 78%, transparent 22%);
+}
+
+.prechat__lead {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.prechat__lead-select {
+	min-width: 200px;
+	max-width: 260px;
+}
+
+.prechat__mission-block {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 16px;
+	border-radius: 16px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 55%, transparent 45%);
+	background: color-mix(in srgb, var(--vscode-editor-background) 96%, rgba(255, 255, 255, 0.06) 4%);
+}
+
+.prechat__mission-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.prechat__mission-copy {
+	margin: 0;
+	font-size: 14px;
+	line-height: 1.5;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 88%, transparent 12%);
+}
+
+.prechat__mission-actions {
+	justify-content: flex-end;
+}
+
+.prechat__participants {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.prechat__chip-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+}
+
+.prechat__chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 12px;
+	border-radius: 999px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 55%, transparent 45%);
+	background: color-mix(in srgb, var(--vscode-editor-background) 94%, rgba(255, 255, 255, 0.05) 6%);
+	color: var(--vscode-foreground);
+	font-size: 12px;
+	line-height: 1.2;
+}
+
+.prechat__chip-remove {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	border: none;
+	border-radius: 10px;
+	margin-left: 4px;
+	background: transparent;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 70%, transparent 30%);
+	cursor: pointer;
+	transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.prechat__chip-remove:hover,
+.prechat__chip-remove:focus-visible {
+	background: color-mix(in srgb, var(--vscode-focusBorder) 20%, transparent 80%);
+	color: var(--vscode-foreground);
+	outline: none;
+}
+
+.prechat__chip-avatar {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	border-radius: 50%;
+	font-size: 12px;
+	font-weight: 600;
+	background: color-mix(in srgb, var(--vscode-focusBorder) 35%, transparent 65%);
+	color: var(--vscode-foreground);
+}
+
+.prechat__chip-text {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.prechat__chip-role {
+	font-size: 11px;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 78%, transparent 22%);
+}
+
+.prechat__chip--add {
+	cursor: pointer;
+	background: color-mix(in srgb, var(--vscode-focusBorder) 16%, transparent 84%);
+	border-style: dashed;
+	transition:
+		background-color 0.2s ease,
+		color 0.2s ease,
+		border-color 0.2s ease;
+}
+
+.prechat__chip--add:hover,
+.prechat__chip--add:focus-visible {
+	background: color-mix(in srgb, var(--vscode-focusBorder) 22%, transparent 78%);
+	border-color: color-mix(in srgb, var(--vscode-focusBorder) 38%, transparent 62%);
+	outline: none;
+}
+
+.prechat__chip--add:disabled {
+	opacity: 0.6;
+	cursor: not-allowed;
+	background: color-mix(in srgb, var(--vscode-panel-border) 24%, transparent 76%);
+	border-color: color-mix(in srgb, var(--vscode-panel-border) 60%, transparent 40%);
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 85%, transparent 15%);
+}
+
+.prechat__chip--add:disabled:hover,
+.prechat__chip--add:disabled:focus-visible {
+	background: color-mix(in srgb, var(--vscode-panel-border) 24%, transparent 76%);
+	border-color: color-mix(in srgb, var(--vscode-panel-border) 60%, transparent 40%);
+	outline: none;
+}
+
+.prechat__empty-copy {
+	font-size: 12px;
+	font-style: italic;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 75%, transparent 25%);
+}
+
+.prechat__hero-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+	justify-content: flex-start;
+}
+
+.prechat__status-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	border-radius: 999px;
+	padding: 4px 10px;
+	font-size: 11px;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	background: color-mix(in srgb, var(--vscode-focusBorder) 18%, transparent 82%);
+	color: var(--vscode-foreground);
+}
+
+.prechat__speaker-pill {
+	display: inline-flex;
+	align-items: center;
+	padding: 2px 8px;
+	border-radius: 999px;
+	font-size: 10px;
+	letter-spacing: 0.05em;
+	text-transform: uppercase;
+	background: color-mix(in srgb, var(--vscode-focusBorder) 20%, transparent 80%);
+	color: var(--vscode-foreground);
+}
+
+.prechat__add-wrapper {
+	position: relative;
+}
+
+.prechat__add-menu {
+	position: absolute;
+	right: 0;
+	top: calc(100% + 8px);
+	min-width: 220px;
+	padding: 8px;
+	border-radius: 16px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 55%, transparent 45%);
+	background: color-mix(in srgb, var(--vscode-editor-background) 97%, rgba(255, 255, 255, 0.08) 3%);
+	box-shadow: 0 16px 32px rgba(0, 0, 0, 0.28);
+	z-index: 5;
+}
+
+.prechat__add-list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.prechat__add-option {
+	width: 100%;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 10px;
+	border-radius: 12px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 55%, transparent 45%);
+	background: color-mix(in srgb, var(--vscode-editor-background) 95%, rgba(255, 255, 255, 0.05) 5%);
+	color: var(--vscode-foreground);
+	font-size: 12px;
+	cursor: pointer;
+	transition:
+		border-color 0.2s ease,
+		background-color 0.2s ease,
+		transform 0.2s ease;
+}
+
+.prechat__add-option:hover,
+.prechat__add-option:focus-visible {
+	outline: none;
+	transform: translateY(-1px);
+	border-color: color-mix(in srgb, var(--vscode-focusBorder) 40%, transparent 60%);
+	background: color-mix(in srgb, var(--vscode-focusBorder) 18%, transparent 82%);
+}
+
+.prechat__add-avatar {
+	width: 28px;
+	height: 28px;
+	border-radius: 50%;
+	display: grid;
+	place-items: center;
+	font-weight: 600;
+	background: color-mix(in srgb, var(--vscode-focusBorder) 32%, transparent 68%);
+	color: var(--vscode-foreground);
+}
+
+.prechat__add-text {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 2px;
+}
+
+.prechat__add-name {
+	font-weight: 500;
+	color: var(--vscode-foreground);
+}
+
+.prechat__add-role {
+	font-size: 11px;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 76%, transparent 24%);
+}
+
+.prechat__stats-row {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.prechat__stats {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 16px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.prechat__stats li {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 120px;
+}
+
+.prechat__stat-value {
+	font-size: 18px;
+	font-weight: 600;
+	color: var(--vscode-foreground);
+}
+
+.prechat__stat-label {
+	font-size: 11px;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 76%, transparent 24%);
+}
+
+.prechat__suggestions--inline {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.prechat__suggestion-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+}
+
+.prechat__recent-task + .prechat__recent-task {
+	margin-top: 10px;
+}
+
+.prechat__recent-task {
+	border-radius: 18px;
+	overflow: hidden;
+}
+
+.prechat__suggestion-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+	padding: 8px 12px;
+	border-radius: 14px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 55%, transparent 45%);
+	background: color-mix(in srgb, var(--vscode-editor-background) 94%, rgba(255, 255, 255, 0.05) 6%);
+	cursor: pointer;
+	transition:
+		border-color 0.2s ease,
+		background-color 0.2s ease,
+		transform 0.2s ease;
+}
+
+.prechat__suggestion-chip:hover,
+.prechat__suggestion-chip:focus-visible {
+	outline: none;
+	transform: translateY(-1px);
+	border-color: color-mix(in srgb, var(--vscode-focusBorder) 40%, transparent 60%);
+	background: color-mix(in srgb, var(--vscode-focusBorder) 18%, transparent 82%);
+}
+
+.prechat__suggestion-avatar {
+	width: 30px;
+	height: 30px;
+	border-radius: 10px;
+	display: grid;
+	place-items: center;
+	font-weight: 600;
+	background: color-mix(in srgb, var(--vscode-focusBorder) 28%, transparent 72%);
+	color: var(--vscode-foreground);
+}
+
+.prechat__suggestion-meta {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.prechat__person-name {
+	font-weight: 500;
+	color: var(--vscode-foreground);
+}
+
+.prechat__person-role {
+	font-size: 11px;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 76%, transparent 24%);
+}
+
+@media (max-width: 960px) {
+	.prechat__hero-columns {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.prechat__lead {
+		flex-direction: column;
+		align-items: stretch;
+	}
+
+	.prechat__lead-select {
+		width: 100%;
+		max-width: none;
+	}
+}

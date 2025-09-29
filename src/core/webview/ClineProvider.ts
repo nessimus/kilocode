@@ -99,8 +99,6 @@ import { EndlessSurfaceService } from "../surfaces/EndlessSurfaceService"
 import { webviewMessageHandler } from "./webviewMessageHandler"
 import { getNonce } from "./getNonce"
 import { getUri } from "./getUri"
-import { ConversationHubService } from "../hub/ConversationHubService"
-import type { HubAgentBlueprint, HubSnapshot } from "../../shared/hub"
 import { singleCompletionHandler } from "../../utils/single-completion-handler"
 import { countTokens } from "../../utils/countTokens"
 
@@ -200,7 +198,6 @@ export class ClineProvider
 	private static globalWorkplaceService?: WorkplaceService
 	private static globalEndlessSurfaceService?: EndlessSurfaceService
 	private static globalCloverSessionService?: CloverSessionService
-	private readonly workdayRoomMap = new Map<string, string>()
 	// Used in package.json as the view's id. This value cannot be changed due
 	// to how VSCode caches views based on their id, and updating the id would
 	// break existing instances of the extension.
@@ -235,7 +232,6 @@ export class ClineProvider
 	private recentTasksCache?: string[]
 	private pendingOperations: Map<string, PendingEditOperation> = new Map()
 	private static readonly PENDING_OPERATION_TIMEOUT_MS = 30000 // 30 seconds
-	private readonly conversationHub: ConversationHubService
 
 	public isViewLaunched = false
 	public settingsImportedAt?: number
@@ -293,11 +289,6 @@ export class ClineProvider
 			})
 
 		this.marketplaceManager = new MarketplaceManager(this.context, this.customModesManager)
-
-		this.conversationHub = new ConversationHubService(this)
-		this.conversationHub.on("stateChanged", () => {
-			void this.postStateToWebview()
-		})
 
 		// Forward <most> task events to the provider.
 		// We do something fairly similar for the IPC-based API.
@@ -374,6 +365,10 @@ export class ClineProvider
 
 	public attachWorkplaceFilesystemManager(manager: WorkplaceFilesystemManager) {
 		this.workplaceFilesystemManager = manager
+	}
+
+	public getWorkplaceFilesystemManager(): WorkplaceFilesystemManager | undefined {
+		return this.workplaceFilesystemManager
 	}
 
 	public getWorkplaceService(): WorkplaceService | undefined {
@@ -458,10 +453,6 @@ export class ClineProvider
 
 	private handleEndlessSurfaceStateChange = () => {
 		void this.postStateToWebview()
-	}
-
-	public getConversationHub(): ConversationHubService {
-		return this.conversationHub
 	}
 
 	/**
@@ -985,7 +976,6 @@ export class ClineProvider
 		this.mcpHub = undefined
 		this.marketplaceManager?.cleanup()
 		this.customModesManager?.dispose()
-		this.conversationHub.dispose()
 		this.cleanupEndlessSurfaceListeners()
 		this.endlessSurfaceService = undefined
 		this.log("Disposed all disposables")
@@ -2866,197 +2856,9 @@ Clover:`
 		}
 	}
 
-	private buildWorkdayAgentBlueprint(employee: WorkplaceEmployee): HubAgentBlueprint {
-		const personaMode = employee.personaMode
-		const summary = personaMode?.summary ?? employee.role ?? "AI Teammate"
-		const instructions = personaMode?.instructions ?? employee.description ?? undefined
-		const baseModeSlug = personaMode?.baseModeSlug ?? "code"
-		return {
-			displayName: employee.name,
-			mode: baseModeSlug,
-			persona: {
-				employeeId: employee.id,
-				summary,
-				instructions,
-				baseModeSlug,
-				role: employee.role,
-				personality: employee.personality,
-				mbtiType: employee.mbtiType,
-				customAttributes: employee.customAttributes,
-			},
-		}
-	}
-
-	private formatIsoForDisplay(iso?: string): string {
-		if (!iso) {
-			return "now"
-		}
-		try {
-			const date = new Date(iso)
-			if (Number.isNaN(date.getTime())) {
-				return iso
-			}
-			return date.toLocaleString()
-		} catch {
-			return iso
-		}
-	}
-
-	private buildWorkdayKickoffMessage(company: WorkplaceCompany, workday: WorkplaceWorkdayState): string {
-		const activeEmployees = workday.activeEmployeeIds
-			.map((id) => company.employees.find((employee) => employee.id === id && !employee.deletedAt))
-			.filter((employee): employee is WorkplaceEmployee => Boolean(employee))
-
-		const header = `Workday is live for ${company.name} as of ${this.formatIsoForDisplay(
-			workday.startedAt,
-		)}.`
-		const roster =
-			activeEmployees.length > 0
-				? `Active teammates: ${activeEmployees
-						.map((employee) => `${employee.name}${employee.role ? ` (${employee.role})` : ""}`)
-						.join(", ")}.`
-				: `No employees are currently active. Update schedules or select teammates to begin.`
-
-		const priorities = [
-			"Audit the action workspace and create missing goals, projects, or tasks before diving into execution.",
-			"Update the status and notes for anything you touch so coworkers can rely on the tracker as the source of truth.",
-			"Document outcomes (links, commits, recordings) inside the relevant action item prior to marking it complete.",
-			"Coordinate handoffs or blockers here in the hub—mention teammates when you need their attention.",
-		]
-
-		const focusBlock = ["Focus for this block:", ...priorities.map((item) => `- ${item}`)].join("\n")
-		const closing = "Let’s keep communication transparent and wrap each task with a succinct summary before moving on."
-
-		return [header, roster, "", focusBlock, "", closing].filter(Boolean).join("\n")
-	}
-
-	private buildWorkdayHaltMessage(company: WorkplaceCompany, workday: WorkplaceWorkdayState): string {
-		const header = `Halting the workday for ${company.name} as of ${this.formatIsoForDisplay(workday.haltedAt)}.`
-		const wrap =
-			"Capture final notes, push any remaining updates to the action workspace, and flag follow-up needs before signing off."
-		return `${header}\n\n- Update every in-progress action item with current status and next step.\n- Add concise summaries so we can restart smoothly.\n\n${wrap}`
-	}
-
-	private async synchronizeWorkdayParticipants(
-		companyId: string,
-		roomId: string,
-		company: WorkplaceCompany,
-		workday: WorkplaceWorkdayState,
-	): Promise<void> {
-		const hub = this.getConversationHub()
-		const snapshot = hub.getSnapshot()
-		const room = snapshot.rooms.find((candidate) => candidate.id === roomId)
-		if (!room) {
-			this.workdayRoomMap.delete(companyId)
-			return
-		}
-
-		const desired = new Set(workday.activeEmployeeIds)
-		const participantMap = new Map(
-			room.participants
-				.filter((participant) => participant.type === "agent" && participant.persona?.employeeId)
-				.map((participant) => [participant.persona?.employeeId as string, participant]),
-		)
-
-		for (const [employeeId, participant] of participantMap.entries()) {
-			if (!desired.has(employeeId)) {
-				hub.removeParticipant(roomId, participant.id)
-			}
-		}
-
-		for (const employeeId of desired) {
-			if (participantMap.has(employeeId)) {
-				continue
-			}
-			const employee = company.employees.find((candidate) => candidate.id === employeeId && !candidate.deletedAt)
-			if (!employee) {
-				continue
-			}
-			await hub.addAgent(roomId, this.buildWorkdayAgentBlueprint(employee))
-		}
-	}
-
-	private async ensureWorkdayRoom(company: WorkplaceCompany): Promise<string | undefined> {
-		const hub = this.getConversationHub()
-		const workday = company.workday
-		if (!workday || workday.activeEmployeeIds.length === 0) {
-			return undefined
-		}
-
-		const existingId = this.workdayRoomMap.get(company.id)
-		const snapshot = hub.getSnapshot()
-		let roomId = existingId
-		let room = existingId ? snapshot.rooms.find((entry) => entry.id === existingId) : undefined
-
-		if (!room) {
-			const participants = workday.activeEmployeeIds
-				.map((id) => company.employees.find((employee) => employee.id === id && !employee.deletedAt))
-				.filter((employee): employee is WorkplaceEmployee => Boolean(employee))
-				.map((employee) => this.buildWorkdayAgentBlueprint(employee))
-			const created = hub.createRoom({
-				title: `${company.name} • Workday Ops`,
-				autonomous: true,
-				participants,
-			})
-			roomId = created.id
-			this.workdayRoomMap.set(company.id, roomId)
-			const refreshed = hub.getSnapshot()
-			room = refreshed.rooms.find((entry) => entry.id === roomId)
-		}
-
-		if (!roomId || !room) {
-			return undefined
-		}
-
-		await this.synchronizeWorkdayParticipants(company.id, roomId, company, workday)
-		return roomId
-	}
-
-	private async announceWorkdayStart(company: WorkplaceCompany, workday: WorkplaceWorkdayState): Promise<void> {
-		const roomId = await this.ensureWorkdayRoom(company)
-		if (!roomId) {
-			return
-		}
-
-		const hub = this.getConversationHub()
-		const message = this.buildWorkdayKickoffMessage(company, workday)
-		hub.sendUserMessage(roomId, message)
-		hub.setActiveRoom(roomId)
-	}
-
-	private async announceWorkdayHalt(company: WorkplaceCompany, workday: WorkplaceWorkdayState): Promise<void> {
-		const roomId = this.workdayRoomMap.get(company.id)
-		if (!roomId) {
-			return
-		}
-		const hub = this.getConversationHub()
-		const snapshot = hub.getSnapshot()
-		const room = snapshot.rooms.find((entry) => entry.id === roomId)
-		if (!room) {
-			this.workdayRoomMap.delete(company.id)
-			return
-		}
-
-		const message = this.buildWorkdayHaltMessage(company, workday)
-		hub.sendUserMessage(roomId, message)
-		hub.stopRoom(roomId)
-	}
-
 	public async handleWorkdayStatusChange(companyId: string, state?: WorkplaceState): Promise<void> {
-		const snapshot = state ?? this.getWorkplaceService()?.getState()
-		if (!snapshot) {
-			return
-		}
-		const company = snapshot.companies.find((entry) => entry.id === companyId)
-		if (!company || !company.workday) {
-			return
-		}
-
-		if (company.workday.status === "active" && company.workday.activeEmployeeIds.length > 0) {
-			await this.announceWorkdayStart(company, company.workday)
-		} else {
-			await this.announceWorkdayHalt(company, company.workday)
-		}
+		void companyId
+		void state
 	}
 
 	// kilocode_change start
@@ -3304,7 +3106,6 @@ Clover:`
 			notificationSmsGateway,
 			notificationTelegramChatId,
 			openRouterUseMiddleOutTransform,
-			hubSnapshot,
 		} = state
 
 		verboseProviderLog("getStateToPostToWebview", {
@@ -3370,6 +3171,9 @@ Clover:`
 			clineMessages: this.getCurrentTask()?.clineMessages || [],
 			currentTaskTodos: this.getCurrentTask()?.todoList || [],
 			messageQueue: this.getCurrentTask()?.messageQueueService?.messages,
+			conversationHoldState: this.getCurrentTask()?.currentConversationHoldState,
+			conversationAgents: this.getCurrentTask()?.currentConversationAgents ?? [],
+			lastOrchestratorAnalysis: this.getCurrentTask()?.currentOrchestratorAnalysis,
 			taskHistory: (taskHistory || [])
 				.filter((item: HistoryItem) => item.ts && item.task)
 				.sort((a: HistoryItem, b: HistoryItem) => b.ts - a.ts),
@@ -3491,7 +3295,6 @@ Clover:`
 			workplaceRootConfigured: this.workplaceFilesystemManager?.isConfigured() ?? false,
 			workplaceRootUri: this.workplaceFilesystemManager?.getRootUri()?.fsPath,
 			outerGateState: this.getOuterGateStateSnapshot(),
-			hubSnapshot,
 		}
 	}
 
@@ -3728,7 +3531,6 @@ Clover:`
 			workplaceState: workplaceStateSnapshot ?? { companies: [] },
 			workplaceRootConfigured: this.workplaceFilesystemManager?.isConfigured() ?? false,
 			workplaceRootUri: this.workplaceFilesystemManager?.getRootUri()?.fsPath,
-			hubSnapshot: this.conversationHub.getSnapshot(),
 		}
 		const companyCount = result.workplaceState?.companies?.length ?? 0
 		const companyNames = result.workplaceState?.companies?.map((company: WorkplaceCompany) => company.name) ?? []

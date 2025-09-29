@@ -45,6 +45,7 @@ export const toolParamNames = [
     "action_item_id",
     "action_item_ids",
     "name",
+    "emoji",
     "vision",
     "mission",
     "owner_profile",

@@ -547,6 +547,7 @@ describe("SYSTEM_PROMPT", () => {
             actionStatuses: createDefaultActionStatuses(),
             actionItems: [],
             actionRelations: [],
+            shifts: [],
             ownerProfile: { name: "", role: "Owner & CEO" },
         };
         const workplaceState = {
@@ -641,6 +642,7 @@ describe("SYSTEM_PROMPT", () => {
             actionStatuses: createDefaultActionStatuses(),
             actionItems: [],
             actionRelations: [],
+            shifts: [],
             ownerProfile: { name: "", role: "Owner & CEO" },
         };
         const loadSystemPromptFileSpy = vi

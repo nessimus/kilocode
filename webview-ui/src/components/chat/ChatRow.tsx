@@ -4,7 +4,13 @@ import { useTranslation, Trans } from "react-i18next"
 import deepEqual from "fast-deep-equal"
 import { VSCodeBadge, VSCodeButton } from "@vscode/webview-ui-toolkit/react"
 
-import type { ClineMessage, FollowUpData, SuggestionItem, ToolResultMessagePayload } from "@roo-code/types"
+import type {
+	ClineMessage,
+	FollowUpData,
+	SuggestionItem,
+	ToolResultMessagePayload,
+	OrchestratorMessageMetadata,
+} from "@roo-code/types"
 
 import { ClineApiReqInfo, ClineAskUseMcpServer, ClineSayTool } from "@roo/ExtensionMessage"
 import { COMMAND_OUTPUT_STRING } from "@roo/combineCommandSequences"
@@ -79,6 +85,10 @@ const ChatRow = memo(
 		const { highlighted } = props // kilocode_change: Add highlighted prop
 		const { showTaskTimeline } = useExtensionState() // kilocode_change: Used by KiloChatRowGutterBar
 		const { isLast, onHeightChange, message } = props
+		const orchestratorMetadata =
+			(message.metadata?.orchestrator as OrchestratorMessageMetadata | undefined) ?? undefined
+		const isQueued = orchestratorMetadata?.queueState === "queued"
+		const respondedViaOrchestrator = Boolean(orchestratorMetadata?.respondedViaOrchestrator)
 		// Store the previous height to compare with the current height
 		// This allows us to detect changes without causing re-renders
 		const prevHeightRef = useRef(0)
@@ -88,7 +98,14 @@ const ChatRow = memo(
 				// kilocode_change: add highlighted className
 				className={cn(
 					`golden-chat-row px-[15px] py-[10px] pr-[6px] relative ${highlighted ? "animate-message-highlight" : ""}`,
+					isQueued && "opacity-70",
 				)}>
+					{(respondedViaOrchestrator || isQueued) && (
+						<div className="flex items-center justify-between pb-1 text-[11px] uppercase tracking-wide text-[color-mix(in_srgb,var(--vscode-descriptionForeground)_90%,transparent)]">
+							{respondedViaOrchestrator && <span>Responded via Orchestrator</span>}
+							{isQueued && <span className="text-[color-mix(in_srgb,var(--vscode-descriptionForeground)_60%,transparent)]">Queued Reply</span>}
+						</div>
+					)}
 				{showTaskTimeline && <KiloChatRowGutterBar message={message} />}
 				<ChatRowContent {...props} />
 			</div>,

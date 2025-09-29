@@ -3,6 +3,7 @@ import { z } from "zod"
 import { RooCodeEventName } from "./events.js"
 import type { RooCodeSettings } from "./global-settings.js"
 import type { ClineMessage, QueuedMessage, TokenUsage } from "./message.js"
+import type { ConversationHoldState } from "./conversation.js"
 import type { ToolUsage, ToolName } from "./tool.js"
 import type { StaticAppProperties, GitProperties, TelemetryProperties } from "./telemetry.js"
 import type { TodoItem } from "./todo.js"
@@ -126,6 +127,8 @@ export interface TaskLike {
 	approveAsk(options?: { text?: string; images?: string[] }): void
 	denyAsk(options?: { text?: string; images?: string[] }): void
 	submitUserMessage(text: string, images?: string[], mode?: string, providerProfile?: string): Promise<void>
+	applyConversationHold(state?: ConversationHoldState): Promise<void>
+	releaseQueuedResponses(agentIds?: string[]): Promise<void>
 	abortTask(): void
 }
 

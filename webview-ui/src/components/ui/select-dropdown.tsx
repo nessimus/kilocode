@@ -253,7 +253,7 @@ export const SelectDropdown = React.memo(
 						sideOffset={sideOffset}
 						container={portalContainer}
 						className={cn(
-							"w-[min(280px,calc(var(--radix-popover-trigger-width,240px)))] rounded-md border border-[color-mix(in_srgb,var(--vscode-foreground)_14%,transparent)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_97%,transparent)] p-0 shadow-[0_8px_20px_rgba(0,0,0,0.35)]",
+							"w-[max(260px,calc(var(--radix-popover-trigger-width,240px)))] rounded-md border border-[color-mix(in_srgb,var(--vscode-foreground)_14%,transparent)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_97%,transparent)] p-0 shadow-[0_8px_20px_rgba(0,0,0,0.35)]",
 							contentClassName,
 						)}>
 						<div className="flex max-h-80 flex-col">
