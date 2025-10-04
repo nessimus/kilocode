@@ -13,6 +13,7 @@ import { initializeSourceMaps, exposeSourceMapsForDebugging } from "./utils/sour
 import { ExtensionStateContextProvider, useExtensionState } from "./context/ExtensionStateContext"
 import ChatView, { ChatViewRef } from "./components/chat/ChatView"
 import ChatsHubView from "./components/chats/ChatsHubView"
+import HubView from "./components/hub/HubView"
 import HistoryView from "./components/history/HistoryView"
 import SettingsView, { SettingsViewRef } from "./components/settings/SettingsView"
 import ProfileView from "./components/kilocode/profile/ProfileView" // kilocode_change
@@ -58,6 +59,7 @@ type Tab =
 	| "outerGate"
 	| "brainstorm"
 	| "fileCabinet"
+	| "hub"
 	| "workforceHub"
 
 type ViewRoute = { page: "lobby" } | { page: "brainstorm" } | { page: "surface"; surfaceId: string }
@@ -133,6 +135,7 @@ const tabsByMessageAction: Partial<Record<NonNullable<ExtensionMessage["action"]
 	historyButtonClicked: "history",
 	profileButtonClicked: "profile",
 	marketplaceButtonClicked: "marketplace",
+	hubButtonClicked: "hub",
 	// cloudButtonClicked: "cloud", // kilocode_change: no cloud
 }
 
@@ -522,6 +525,7 @@ const App = () => {
 			{tab === "workforce" && <WorkforceView onDone={() => switchTab("lobby")} />}
 			<FileCabinetView isHidden={tab !== "fileCabinet"} />
 			<WorkforceHubView isHidden={tab !== "workforceHub"} />
+			<HubView isHidden={tab !== "hub"} targetSection={currentSection} />
 			{tab === "marketplace" && (
 				<MarketplaceView
 					stateManager={marketplaceStateManager}

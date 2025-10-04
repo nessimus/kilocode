@@ -93,6 +93,7 @@ export interface CreateTaskOptions {
 	consecutiveMistakeLimit?: number
 	experiments?: Record<string, boolean>
 	initialTodos?: TodoItem[]
+	clientTurnId?: string
 }
 
 export enum TaskStatus {

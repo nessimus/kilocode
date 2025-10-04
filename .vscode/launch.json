@@ -16,7 +16,8 @@
 			"preLaunchTask": "${defaultBuildTask}",
 			"env": {
 				"NODE_ENV": "development",
-				"VSCODE_DEBUG_MODE": "true"
+				"VSCODE_DEBUG_MODE": "true",
+				"CHAT_HUB_DEBUG": "true"
 			},
 			"resolveSourceMapLocations": ["${workspaceFolder}/**", "!**/node_modules/**"],
 			"presentation": {
@@ -40,7 +41,8 @@
 			"preLaunchTask": "${defaultBuildTask}",
 			"env": {
 				"NODE_ENV": "development",
-				"VSCODE_DEBUG_MODE": "true"
+				"VSCODE_DEBUG_MODE": "true",
+				"CHAT_HUB_DEBUG": "true"
 			},
 			"resolveSourceMapLocations": ["${workspaceFolder}/**", "!**/node_modules/**"],
 			"presentation": { "hidden": false, "group": "tasks", "order": 1 }

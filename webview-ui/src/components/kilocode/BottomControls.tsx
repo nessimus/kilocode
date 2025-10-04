@@ -24,6 +24,13 @@ const BottomControls: React.FC<BottomControlsProps> = ({ showApiConfig = false }
 		}
 	}
 
+	const openHub = () => {
+		vscode.postMessage({ type: "action", action: "switchTab", tab: "hub" })
+		if (typeof window !== "undefined") {
+			window.postMessage({ type: "action", action: "switchTab", tab: "hub" }, "*")
+		}
+	}
+
 	const openChatsHub = () => {
 		vscode.postMessage({ type: "action", action: "switchTab", tab: "chatsHub" })
 		if (typeof window !== "undefined") {
@@ -60,6 +67,7 @@ const BottomControls: React.FC<BottomControlsProps> = ({ showApiConfig = false }
 	}
 
 	const outerGateLabel = t("common:outerGate.title", { defaultValue: "Outer Gates" }) as string
+	const agentHubLabel = t("common:hub.title", { defaultValue: "Agent Hub" }) as string
 	const chatsHubLabel = t("common:chatsHub.title", { defaultValue: "Chats Hub" }) as string
 	const brainstormHubLabel = t("common:brainstorm.title", { defaultValue: "Brainstorm Hub" }) as string
 	const fileCabinetLabel = t("common:fileCabinet.title", { defaultValue: "File Cabinet" }) as string
@@ -75,6 +83,12 @@ const BottomControls: React.FC<BottomControlsProps> = ({ showApiConfig = false }
 					title={outerGateLabel}
 					ariaLabel={outerGateLabel}
 					onClick={openOuterGate}
+				/>
+				<BottomButton
+					iconClass="codicon-robot"
+					title={agentHubLabel}
+					ariaLabel={agentHubLabel}
+					onClick={openHub}
 				/>
 				<BottomButton
 					iconClass="codicon-comment-discussion"

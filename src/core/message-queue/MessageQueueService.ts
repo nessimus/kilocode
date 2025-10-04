@@ -4,6 +4,23 @@ import { v4 as uuidv4 } from "uuid"
 
 import { QueuedMessage } from "@roo-code/types"
 
+const CHAT_HUB_LOG_PREFIX = "[ChatHubInvestigate]"
+const isChatHubDebugEnabled = process.env.CHAT_HUB_DEBUG === "true"
+const debugLog = (...args: unknown[]) => {
+	if (!isChatHubDebugEnabled) {
+		return
+	}
+	if (args.length === 0) {
+		console.log(CHAT_HUB_LOG_PREFIX)
+		return
+	}
+	if (typeof args[0] === "string" && args[0].startsWith(CHAT_HUB_LOG_PREFIX)) {
+		console.log(...args)
+		return
+	}
+	console.log(CHAT_HUB_LOG_PREFIX, ...args)
+}
+
 export interface MessageQueueState {
 	messages: QueuedMessage[]
 	isProcessing: boolean
@@ -12,6 +29,11 @@ export interface MessageQueueState {
 
 export interface QueueEvents {
 	stateChanged: [messages: QueuedMessage[]]
+}
+
+interface AddMessageOptions {
+	silent?: boolean
+	clientTurnId?: string
 }
 
 export class MessageQueueService extends EventEmitter<QueueEvents> {
@@ -33,7 +55,7 @@ export class MessageQueueService extends EventEmitter<QueueEvents> {
 		return { index, message: this._messages[index] }
 	}
 
-	public addMessage(text: string, images?: string[]): QueuedMessage | undefined {
+	public addMessage(text: string, images?: string[], options?: AddMessageOptions): QueuedMessage | undefined {
 		if (!text && !images?.length) {
 			return undefined
 		}
@@ -43,10 +65,20 @@ export class MessageQueueService extends EventEmitter<QueueEvents> {
 			id: uuidv4(),
 			text,
 			images,
+			silent: options?.silent,
+			clientTurnId: options?.clientTurnId,
 		}
 
 		this._messages.push(message)
 		this.emit("stateChanged", this._messages)
+		debugLog("messageQueue.addMessage", {
+			messageId: message.id,
+			textPreview: text.slice(0, 80),
+			imageCount: images?.length ?? 0,
+			silent: options?.silent ?? false,
+			clientTurnId: options?.clientTurnId,
+			queueSize: this._messages.length,
+		})
 
 		return message
 	}
@@ -55,11 +87,20 @@ export class MessageQueueService extends EventEmitter<QueueEvents> {
 		const { index, message } = this.findMessage(id)
 
 		if (!message) {
+			debugLog("messageQueue.removeMessage.miss", {
+				messageId: id,
+				queueSize: this._messages.length,
+			})
 			return false
 		}
 
 		this._messages.splice(index, 1)
 		this.emit("stateChanged", this._messages)
+		debugLog("messageQueue.removeMessage", {
+			messageId: id,
+			queueSize: this._messages.length,
+			clientTurnId: message.clientTurnId,
+		})
 		return true
 	}
 
@@ -67,6 +108,10 @@ export class MessageQueueService extends EventEmitter<QueueEvents> {
 		const { message } = this.findMessage(id)
 
 		if (!message) {
+			debugLog("messageQueue.updateMessage.miss", {
+				messageId: id,
+				queueSize: this._messages.length,
+			})
 			return false
 		}
 
@@ -74,12 +119,24 @@ export class MessageQueueService extends EventEmitter<QueueEvents> {
 		message.text = text
 		message.images = images
 		this.emit("stateChanged", this._messages)
+		debugLog("messageQueue.updateMessage", {
+			messageId: id,
+			textPreview: text.slice(0, 80),
+			imageCount: images?.length ?? 0,
+			queueSize: this._messages.length,
+			clientTurnId: message.clientTurnId,
+		})
 		return true
 	}
 
 	public dequeueMessage(): QueuedMessage | undefined {
 		const message = this._messages.shift()
 		this.emit("stateChanged", this._messages)
+		debugLog("messageQueue.dequeueMessage", {
+			dequeuedId: message?.id,
+			queueSize: this._messages.length,
+			clientTurnId: message?.clientTurnId,
+		})
 		return message
 	}
 
@@ -94,5 +151,6 @@ export class MessageQueueService extends EventEmitter<QueueEvents> {
 	public dispose(): void {
 		this._messages = []
 		this.removeAllListeners()
+		debugLog("messageQueue.dispose", { queueSize: this._messages.length })
 	}
 }

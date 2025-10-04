@@ -100,6 +100,7 @@ interface ChatTextAreaProps {
 	// Edit mode props
 	isEditMode?: boolean
 	onCancel?: () => void
+	portalContainerId?: string
 }
 
 export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
@@ -123,6 +124,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			modeShortcutText,
 			isEditMode = false,
 			onCancel,
+			portalContainerId,
 		},
 		ref,
 	) => {
@@ -406,13 +408,13 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				if (!getDisplayMedia) {
 					throw new Error("getDisplayMedia not available")
 				}
-					screenStream = await getDisplayMedia({
-						video: {
-							frameRate: { ideal: 15, max: 30 },
-							cursor: "always",
-						} as CursorMediaTrackConstraints,
-						audio: false,
-					})
+				screenStream = await getDisplayMedia({
+					video: {
+						frameRate: { ideal: 15, max: 30 },
+						cursor: "always",
+					} as CursorMediaTrackConstraints,
+					audio: false,
+				})
 				logRealtime("request:screen-granted", {
 					trackCount: screenStream.getTracks().length,
 				})
@@ -1686,6 +1688,8 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		)
 
 		// Helper function to render non-edit mode controls
+		const resolvedPortalContainerId = portalContainerId ?? "roo-portal"
+
 		const renderNonEditModeControls = () => {
 			if (isEditMode) {
 				return null
@@ -1711,6 +1715,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 								onChange={setMode}
 								modeShortcutText={modeShortcutText}
 								customModes={customModes}
+								portalContainerId={resolvedPortalContainerId}
 							/>
 						</div>
 						<KiloProfileSelector
@@ -1721,6 +1726,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							pinnedApiConfigs={pinnedApiConfigs}
 							togglePinnedApiConfig={togglePinnedApiConfig}
 							selectApiConfigDisabled={selectApiConfigDisabled}
+							portalContainerId={resolvedPortalContainerId}
 						/>
 					</div>
 					<div className="flex items-center gap-1 shrink-0">

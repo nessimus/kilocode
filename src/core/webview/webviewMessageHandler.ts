@@ -7,6 +7,7 @@ import * as vscode from "vscode"
 import axios from "axios" // kilocode_change
 import { getKiloBaseUriFromToken } from "../../shared/kilocode/token" // kilocode_change
 import { ProfileData, SeeNewChangesPayload } from "../../shared/WebviewMessage" // kilocode_change
+import type { HubAgentBlueprint, HubSettingsUpdate } from "../../shared/hub"
 
 import {
 	type Language,
@@ -35,9 +36,28 @@ import { MessageEnhancer } from "./messageEnhancer"
 import {
 	type WebviewMessage,
 	type EditQueuedMessagePayload,
+	type ConversationParticipantControlPayload,
 	checkoutDiffPayloadSchema,
 	checkoutRestorePayloadSchema,
 } from "../../shared/WebviewMessage"
+
+const CHAT_HUB_LOG_PREFIX = "[ChatHubInvestigate]"
+const isChatHubDebugEnabled = process.env.CHAT_HUB_DEBUG === "true"
+const chatHubDebugLog = (...args: unknown[]) => {
+	if (isChatHubDebugEnabled) {
+		console.log(...args)
+	}
+}
+const CHAT_INVESTIGATION_MESSAGE_TYPES = new Set<WebviewMessage["type"]>([
+	"newTask",
+	"askResponse",
+	"queueMessage",
+	"removeQueuedMessage",
+	"editQueuedMessage",
+	"conversationParticipantControl",
+	"conversationHold",
+	"conversationQueueRelease",
+])
 import { checkExistKey } from "../../shared/checkExistApiConfig"
 import { experimentDefault } from "../../shared/experiments"
 import { Terminal } from "../../integrations/terminal/Terminal"
@@ -121,6 +141,12 @@ export const webviewMessageHandler = async (
 	message: WebviewMessage,
 	marketplaceManager?: MarketplaceManager,
 ) => {
+	if (CHAT_INVESTIGATION_MESSAGE_TYPES.has(message.type)) {
+		chatHubDebugLog(CHAT_HUB_LOG_PREFIX, "webviewMessageHandler.receive", {
+			type: message.type,
+			hasPayload: Object.prototype.hasOwnProperty.call(message, "payload"),
+		})
+	}
 	// Utility functions provided for concise get/update of global state via contextProxy API.
 	const getGlobalState = <K extends keyof GlobalState>(key: K) => provider.contextProxy.getValue(key)
 	const updateGlobalState = async <K extends keyof GlobalState>(key: K, value: GlobalState[K]) =>
@@ -188,7 +214,7 @@ export const webviewMessageHandler = async (
 
 				hasCheckpoint = checkpoints.length > 0
 			} else {
-				console.log("[webviewMessageHandler] Message not found! Looking for ts:", messageTs)
+				debugWebviewLog("Message not found! Looking for ts:", messageTs)
 			}
 		}
 
@@ -299,10 +325,10 @@ export const webviewMessageHandler = async (
 
 				hasCheckpoint = checkpoints.length > 0
 			} else {
-				console.log("[webviewMessageHandler] Edit - Message not found in clineMessages!")
+				debugWebviewLog("Edit - Message not found in clineMessages!")
 			}
 		} else {
-			console.log("[webviewMessageHandler] Edit - No currentCline available!")
+			debugWebviewLog("Edit - No currentCline available!")
 		}
 
 		// Send message to webview to show edit confirmation dialog
@@ -612,7 +638,7 @@ export const webviewMessageHandler = async (
 			break
 		}
 		case "selectCompany": {
-			console.log("[webviewMessageHandler] handling selectCompany", message.workplaceCompanyId)
+			debugWebviewLog("handling selectCompany", message.workplaceCompanyId)
 			const companyId = message.workplaceCompanyId
 			const service = provider.getWorkplaceService()
 			if (!service) {
@@ -624,7 +650,7 @@ export const webviewMessageHandler = async (
 			break
 		}
 		case "setActiveEmployee": {
-			console.log("[webviewMessageHandler] handling setActiveEmployee", {
+			debugWebviewLog("handling setActiveEmployee", {
 				companyId: message.workplaceCompanyId,
 				employeeId: message.workplaceEmployeeId,
 			})
@@ -1344,11 +1370,19 @@ export const webviewMessageHandler = async (
 			provider.isViewLaunched = true
 			break
 		case "newTask":
+			chatHubDebugLog(CHAT_HUB_LOG_PREFIX, "webviewMessageHandler.newTask", {
+				textPreview: message.text?.slice(0, 80),
+				imageCount: message.images?.length ?? 0,
+				previousTaskId: provider.getCurrentTask()?.taskId,
+				clientTurnId: message.clientTurnId,
+			})
 			// Initializing new instance of Cline will make sure that any
 			// agentically running promises in old instance don't affect our new
 			// task. This essentially creates a fresh slate for the new task.
 			try {
-				await provider.createTask(message.text, message.images)
+				await provider.createTask(message.text, message.images, undefined, {
+					clientTurnId: message.clientTurnId,
+				})
 				// Task created successfully - notify the UI to reset
 				await provider.postMessageToWebview({
 					type: "invoke",
@@ -1427,7 +1461,23 @@ export const webviewMessageHandler = async (
 			await provider.postStateToWebview()
 			break
 		case "askResponse":
-			provider.getCurrentTask()?.handleWebviewAskResponse(message.askResponse!, message.text, message.images)
+			{
+				const currentTask = provider.getCurrentTask()
+				chatHubDebugLog(CHAT_HUB_LOG_PREFIX, "webviewMessageHandler.askResponse", {
+					taskId: currentTask?.taskId,
+					askResponse: message.askResponse,
+					hasText: Boolean(message.text && message.text.trim().length > 0),
+					imageCount: message.images?.length ?? 0,
+					queueSize: currentTask?.messageQueueService.messages.length ?? 0,
+					clientTurnId: message.clientTurnId,
+				})
+				currentTask?.handleWebviewAskResponse(
+					message.askResponse!,
+					message.text,
+					message.images,
+					message.clientTurnId,
+				)
+			}
 			break
 		case "autoCondenseContext":
 			await updateGlobalState("autoCondenseContext", message.bool)
@@ -2774,10 +2824,7 @@ export const webviewMessageHandler = async (
 		}
 		case "outerGateUpdateInsight": {
 			if (message.outerGateInsightId) {
-				await provider.updateOuterGateInsight(
-					message.outerGateInsightId,
-					message.outerGateInsightUpdates ?? {},
-				)
+				await provider.updateOuterGateInsight(message.outerGateInsightId, message.outerGateInsightUpdates ?? {})
 			}
 			break
 		}
@@ -4548,6 +4595,66 @@ export const webviewMessageHandler = async (
 			break
 		}
 
+		case "hubCreateRoom": {
+			const options = {
+				title: message.text,
+				autonomous: message.hubAutonomous,
+				participants: message.hubParticipants as HubAgentBlueprint[] | undefined,
+			}
+
+			provider.getConversationHub().createRoom(options)
+			break
+		}
+		case "hubAddAgent": {
+			const roomId = message.hubRoomId
+			const blueprint = message.hubAgent as HubAgentBlueprint | undefined
+			if (roomId && blueprint) {
+				void provider.getConversationHub().addAgent(roomId, blueprint)
+			}
+			break
+		}
+		case "hubSendMessage": {
+			const roomId = message.hubRoomId
+			if (roomId && typeof message.text === "string") {
+				provider.getConversationHub().sendUserMessage(roomId, message.text)
+			}
+			break
+		}
+		case "hubSetActiveRoom": {
+			if (message.hubRoomId) {
+				provider.getConversationHub().setActiveRoom(message.hubRoomId)
+			}
+			break
+		}
+		case "hubRemoveParticipant": {
+			const roomId = message.hubRoomId
+			const participantId = message.participantId
+			if (roomId && participantId) {
+				provider.getConversationHub().removeParticipant(roomId, participantId)
+			}
+			break
+		}
+		case "hubUpdateSettings": {
+			const roomId = message.hubRoomId
+			const settings = message.hubSettings as HubSettingsUpdate | undefined
+			if (roomId && settings) {
+				provider.getConversationHub().updateSettings(roomId, settings)
+			}
+			break
+		}
+		case "hubStop": {
+			if (message.hubRoomId) {
+				provider.getConversationHub().stopRoom(message.hubRoomId)
+			}
+			break
+		}
+		case "hubTriggerAgent": {
+			if (message.hubRoomId && message.agentId) {
+				provider.getConversationHub().triggerAgent(message.hubRoomId, message.agentId)
+			}
+			break
+		}
+
 		case "fileCabinetLoad": {
 			try {
 				const manager = provider.getWorkplaceFilesystemManager()
@@ -4646,28 +4753,188 @@ export const webviewMessageHandler = async (
 			break
 		}
 
+		case "fileCabinetCreateFile": {
+			try {
+				const manager = provider.getWorkplaceFilesystemManager()
+				const payload = message.fileCabinetCreateFilePayload
+				const companyId = payload?.companyId ?? provider.getWorkplaceService()?.getState().activeCompanyId
+				if (!manager || !payload || !companyId) {
+					await provider.postMessageToWebview({
+						type: "fileCabinetFileResult",
+						fileCabinetFileSuccess: false,
+						text: "Unable to create document",
+					})
+					break
+				}
+
+				const request = { ...payload, companyId }
+				const result = await manager.createCompanyFile(request)
+				const snapshot = await manager.getFileCabinetSnapshot(companyId)
+				if (snapshot) {
+					await provider.postMessageToWebview({ type: "fileCabinetSnapshot", fileCabinetSnapshot: snapshot })
+				}
+				const normalizedPath = result.path.startsWith("/") ? result.path : `/${result.path}`
+				await provider.postMessageToWebview({
+					type: "fileCabinetFileResult",
+					fileCabinetFileSuccess: true,
+					fileCabinetFilePath: normalizedPath,
+					fileCabinetFileName: result.fileName,
+					fileCabinetCompanyId: companyId,
+				})
+			} catch (error) {
+				console.error("[FileCabinet] file create failed", error)
+				await provider.postMessageToWebview({
+					type: "fileCabinetFileResult",
+					fileCabinetFileSuccess: false,
+					text: error instanceof Error ? error.message : "Unable to create document",
+				})
+			}
+			break
+		}
+
+		case "fileCabinetCreateFolder": {
+			try {
+				const manager = provider.getWorkplaceFilesystemManager()
+				const payload = message.fileCabinetCreateFolderPayload
+				const companyId = payload?.companyId ?? provider.getWorkplaceService()?.getState().activeCompanyId
+				if (!manager || !payload || !companyId || !payload.path?.trim()) {
+					await provider.postMessageToWebview({
+						type: "fileCabinetFolderResult",
+						fileCabinetFolderSuccess: false,
+						text: "Unable to create folder",
+					})
+					break
+				}
+
+				const request = { companyId, path: payload.path }
+				await manager.createCompanyFolder(request)
+				const snapshot = await manager.getFileCabinetSnapshot(companyId)
+				if (snapshot) {
+					await provider.postMessageToWebview({ type: "fileCabinetSnapshot", fileCabinetSnapshot: snapshot })
+				}
+				await provider.postMessageToWebview({
+					type: "fileCabinetFolderResult",
+					fileCabinetFolderSuccess: true,
+					fileCabinetFolderPath: request.path,
+				})
+			} catch (error) {
+				console.error("[FileCabinet] folder create failed", error)
+				await provider.postMessageToWebview({
+					type: "fileCabinetFolderResult",
+					fileCabinetFolderSuccess: false,
+					text: error instanceof Error ? error.message : "Unable to create folder",
+				})
+			}
+			break
+		}
+
+		case "fileCabinetOpenFolder": {
+			try {
+				const manager = provider.getWorkplaceFilesystemManager()
+				const companyId =
+					message.fileCabinetCompanyId ?? provider.getWorkplaceService()?.getState().activeCompanyId
+				if (!manager || !companyId) {
+					await provider.postMessageToWebview({
+						type: "fileCabinetFileResult",
+						fileCabinetFileSuccess: false,
+						text: "Unable to open folder",
+					})
+					break
+				}
+				await manager.openCompanyFolder({ companyId, path: message.fileCabinetPath })
+			} catch (error) {
+				console.error("[FileCabinet] open folder failed", error)
+				await provider.postMessageToWebview({
+					type: "fileCabinetFileResult",
+					fileCabinetFileSuccess: false,
+					text: error instanceof Error ? error.message : "Unable to open folder",
+				})
+			}
+			break
+		}
+
 		/**
 		 * Chat Message Queue
 		 */
 
 		case "queueMessage": {
-			provider.getCurrentTask()?.messageQueueService.addMessage(message.text ?? "", message.images)
+			const currentTask = provider.getCurrentTask()
+			const queued = currentTask?.messageQueueService.addMessage(message.text ?? "", message.images, {
+				silent: message.silent,
+				clientTurnId: message.clientTurnId,
+			})
+			const queueSize = currentTask?.messageQueueService.messages.length ?? 0
+			chatHubDebugLog(CHAT_HUB_LOG_PREFIX, "webviewMessageHandler.queueMessage", {
+				taskId: currentTask?.taskId,
+				queued: Boolean(queued),
+				queuedId: queued?.id,
+				queueSize,
+				silent: message.silent ?? false,
+				textPreview: message.text?.slice(0, 80),
+				imageCount: message.images?.length ?? 0,
+				clientTurnId: message.clientTurnId,
+			})
 			break
 		}
 		case "removeQueuedMessage": {
-			provider.getCurrentTask()?.messageQueueService.removeMessage(message.text ?? "")
+			const currentTask = provider.getCurrentTask()
+			const removed = currentTask?.messageQueueService.removeMessage(message.text ?? "") ?? false
+			chatHubDebugLog(CHAT_HUB_LOG_PREFIX, "webviewMessageHandler.removeQueuedMessage", {
+				taskId: currentTask?.taskId,
+				removed,
+				queueSize: currentTask?.messageQueueService.messages.length ?? 0,
+				messageId: message.text,
+			})
 			break
 		}
 		case "editQueuedMessage": {
 			if (message.payload) {
 				const { id, text, images } = message.payload as EditQueuedMessagePayload
-				provider.getCurrentTask()?.messageQueueService.updateMessage(id, text, images)
+				const currentTask = provider.getCurrentTask()
+				const updated = currentTask?.messageQueueService.updateMessage(id, text, images) ?? false
+				chatHubDebugLog(CHAT_HUB_LOG_PREFIX, "webviewMessageHandler.editQueuedMessage", {
+					taskId: currentTask?.taskId,
+					updated,
+					queueSize: currentTask?.messageQueueService.messages.length ?? 0,
+					messageId: id,
+					textPreview: text?.slice(0, 80),
+					imageCount: images?.length ?? 0,
+				})
 			}
 
 			break
 		}
+		case "conversationParticipantControl": {
+			const payload =
+				typeof message.payload === "object" && message.payload
+					? (message.payload as ConversationParticipantControlPayload)
+					: undefined
+			const currentTask = provider.getCurrentTask()
+			provider.updateConversationParticipantCache(payload, currentTask ? "webview-active-task" : "webview-cached")
+			if (!currentTask) {
+				chatHubDebugLog(
+					CHAT_HUB_LOG_PREFIX,
+					"webviewMessageHandler.conversationParticipantControl.cached",
+					payload ?? {},
+				)
+				break
+			}
+			try {
+				await currentTask.handleParticipantControl(payload)
+			} catch (error) {
+				provider.log(`Failed to handle participant control: ${String(error)}`)
+			}
+			break
+		}
 		case "conversationHold": {
 			try {
+				chatHubDebugLog(CHAT_HUB_LOG_PREFIX, "webviewMessageHandler.conversationHold", {
+					taskId: provider.getCurrentTask()?.taskId,
+					incomingState: message.conversationHoldState,
+					payload:
+						message.conversationHoldState ??
+						(typeof message.payload === "object" ? message.payload : undefined),
+				})
 				await provider.getCurrentTask()?.applyConversationHold(message.conversationHoldState)
 			} catch (error) {
 				provider.log(`Failed to apply conversation hold: ${String(error)}`)
@@ -4676,9 +4943,12 @@ export const webviewMessageHandler = async (
 		}
 		case "conversationQueueRelease": {
 			try {
-				await provider.getCurrentTask()?.releaseQueuedResponses(
-					message.queueReleaseRequest?.agentIds,
-				)
+				chatHubDebugLog(CHAT_HUB_LOG_PREFIX, "webviewMessageHandler.conversationQueueRelease", {
+					taskId: provider.getCurrentTask()?.taskId,
+					agentIds: message.queueReleaseRequest?.agentIds,
+					flushAll: message.queueReleaseRequest?.flushAll,
+				})
+				await provider.getCurrentTask()?.releaseQueuedResponses(message.queueReleaseRequest?.agentIds)
 			} catch (error) {
 				provider.log(`Failed to release queued responses: ${String(error)}`)
 			}

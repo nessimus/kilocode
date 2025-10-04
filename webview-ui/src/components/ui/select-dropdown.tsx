@@ -42,12 +42,10 @@ export interface SelectDropdownProps {
 	shortcutText?: string
 	renderItem?: (option: DropdownOption) => React.ReactNode
 	disableSearch?: boolean
-	triggerIcon?:
-		| React.ForwardRefExoticComponent<IconProps & React.RefAttributes<SVGSVGElement>>
-		| boolean
-		| undefined
+	triggerIcon?: React.ForwardRefExoticComponent<IconProps & React.RefAttributes<SVGSVGElement>> | boolean | undefined
 	onCreateOption?: (value: string) => void | Promise<void>
 	createOptionLabel?: (value: string) => string
+	portalContainerId?: string
 }
 
 const isInteractiveOption = (option: DropdownOption) => {
@@ -55,10 +53,7 @@ const isInteractiveOption = (option: DropdownOption) => {
 }
 
 const getTriggerIcon = (
-	icon:
-		| React.ForwardRefExoticComponent<IconProps & React.RefAttributes<SVGSVGElement>>
-		| boolean
-		| undefined,
+	icon: React.ForwardRefExoticComponent<IconProps & React.RefAttributes<SVGSVGElement>> | boolean | undefined,
 ) => {
 	if (icon === false) return null
 	if (icon === true || icon === undefined) return CaretDownIcon
@@ -87,6 +82,7 @@ export const SelectDropdown = React.memo(
 				triggerIcon,
 				onCreateOption,
 				createOptionLabel,
+				portalContainerId,
 			},
 			ref,
 		) => {
@@ -94,7 +90,7 @@ export const SelectDropdown = React.memo(
 			const [open, setOpen] = React.useState(initiallyOpen)
 			const [searchValue, setSearchValue] = React.useState("")
 			const searchInputRef = React.useRef<HTMLInputElement>(null)
-			const portalContainer = useRooPortal("roo-portal")
+			const portalContainer = useRooPortal(portalContainerId ?? "roo-portal")
 
 			const TriggerIcon = React.useMemo(() => getTriggerIcon(triggerIcon), [triggerIcon])
 
@@ -230,14 +226,19 @@ export const SelectDropdown = React.memo(
 						"inline-flex min-w-0 max-w-full items-center gap-1.5 whitespace-nowrap rounded-sm border border-[color-mix(in_srgb,var(--vscode-foreground)_12%,transparent)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_92%,transparent)]",
 						"px-2 py-1 text-xs text-vscode-foreground transition-colors",
 						"focus-visible:outline focus-visible:outline-1 focus-visible:outline-vscode-focusBorder",
-						disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer hover:bg-[color-mix(in_srgb,var(--vscode-editor-background)_88%,transparent)]",
+						disabled
+							? "opacity-50 cursor-not-allowed"
+							: "cursor-pointer hover:bg-[color-mix(in_srgb,var(--vscode-editor-background)_88%,transparent)]",
 						triggerClassName,
 					)}
 					aria-haspopup="listbox"
 					aria-expanded={open}>
 					{TriggerIcon ? <TriggerIcon className="size-3 opacity-70" aria-hidden="true" /> : null}
 					{selectedOption?.codicon ? (
-						<span className={cn("codicon text-[12px] opacity-80", selectedOption.codicon)} aria-hidden="true" />
+						<span
+							className={cn("codicon text-[12px] opacity-80", selectedOption.codicon)}
+							aria-hidden="true"
+						/>
 					) : null}
 					<span className="truncate" title={displayText || undefined}>
 						{displayText}
@@ -294,8 +295,7 @@ export const SelectDropdown = React.memo(
 										return (
 											<div
 												key={`shortcut-${index}`}
-												className="px-3 py-1 text-[11px] uppercase tracking-wide text-[color-mix(in_srgb,var(--vscode-foreground)_60%,transparent)]"
-											>
+												className="px-3 py-1 text-[11px] uppercase tracking-wide text-[color-mix(in_srgb,var(--vscode-foreground)_60%,transparent)]">
 												{option.label || shortcutText}
 											</div>
 										)
@@ -327,7 +327,13 @@ export const SelectDropdown = React.memo(
 											) : (
 												<>
 													{option.codicon ? (
-														<span className={cn("codicon text-[14px] opacity-80", option.codicon)} aria-hidden="true" />
+														<span
+															className={cn(
+																"codicon text-[14px] opacity-80",
+																option.codicon,
+															)}
+															aria-hidden="true"
+														/>
 													) : null}
 													<div className="flex min-w-0 flex-1 flex-col">
 														<span className="truncate">{option.label}</span>
@@ -346,20 +352,20 @@ export const SelectDropdown = React.memo(
 									)
 								})}
 
-				{interactiveOptions.length === 0 && !canCreateOption && (
-					<div className="px-3 py-4 text-center text-xs text-[color-mix(in_srgb,var(--vscode-foreground)_60%,transparent)]">
-						{t("common:ui.no_results")}
-					</div>
-				)}
+								{interactiveOptions.length === 0 && !canCreateOption && (
+									<div className="px-3 py-4 text-center text-xs text-[color-mix(in_srgb,var(--vscode-foreground)_60%,transparent)]">
+										{t("common:ui.no_results")}
+									</div>
+								)}
 
-				{canCreateOption && (
-					<button
-						type="button"
-						onClick={handleCreateOption}
-						className="mx-2 mb-1 mt-2 w-[calc(100%-1rem)] rounded-sm border border-dashed border-[color-mix(in_srgb,var(--vscode-foreground)_18%,transparent)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_92%,transparent)] px-3 py-2 text-left text-xs text-vscode-foreground hover:border-vscode-focusBorder hover:bg-[color-mix(in_srgb,var(--vscode-editor-background)_88%,transparent)]">
-						{createOptionLabel?.(searchValue.trim()) ?? `Create "${searchValue.trim()}"`}
-					</button>
-				)}
+								{canCreateOption && (
+									<button
+										type="button"
+										onClick={handleCreateOption}
+										className="mx-2 mb-1 mt-2 w-[calc(100%-1rem)] rounded-sm border border-dashed border-[color-mix(in_srgb,var(--vscode-foreground)_18%,transparent)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_92%,transparent)] px-3 py-2 text-left text-xs text-vscode-foreground hover:border-vscode-focusBorder hover:bg-[color-mix(in_srgb,var(--vscode-editor-background)_88%,transparent)]">
+										{createOptionLabel?.(searchValue.trim()) ?? `Create "${searchValue.trim()}"`}
+									</button>
+								)}
 							</div>
 						</div>
 					</PopoverContent>

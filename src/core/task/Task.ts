@@ -55,7 +55,7 @@ import { combineCommandSequences } from "../../shared/combineCommandSequences"
 import { t } from "../../i18n"
 import { ClineApiReqCancelReason, ClineApiReqInfo, ExtensionState } from "../../shared/ExtensionMessage"
 import { getApiMetrics, hasTokenUsageChanged } from "../../shared/getApiMetrics"
-import { ClineAskResponse } from "../../shared/WebviewMessage"
+import { ClineAskResponse, ConversationParticipantControlPayload } from "../../shared/WebviewMessage"
 import { defaultModeSlug } from "../../shared/modes"
 import { DiffStrategy } from "../../shared/tools"
 import { EXPERIMENT_IDS, experiments } from "../../shared/experiments"
@@ -78,14 +78,37 @@ import { TerminalRegistry } from "../../integrations/terminal/TerminalRegistry"
 import { calculateApiCostAnthropic } from "../../shared/cost"
 import { getWorkspacePath } from "../../utils/path"
 
+const CHAT_HUB_LOG_PREFIX = "[ChatHubInvestigate]"
+const isChatHubDebugEnabled = process.env.CHAT_HUB_DEBUG === "true"
+const debugLog = (...args: unknown[]) => {
+	if (isChatHubDebugEnabled) {
+		console.log(...args)
+	}
+}
+
+interface SubmitUserMessageOptions {
+	speakerId?: string
+	silent?: boolean
+	clientTurnId?: string
+}
+
+interface AutomatedSpeakerTurn {
+	speakerId: string
+	text: string
+	images: string[]
+	providerProfileId?: string
+}
+
+interface ConversationAgentPersonaProfile {
+	identityStatement?: string
+	additionalInstructions?: string
+	providerProfileId?: string
+}
+
 // prompts
 import { formatResponse } from "../prompts/responses"
 import { SYSTEM_PROMPT } from "../prompts/system"
-import {
-	ConversationOrchestrator,
-	createIngestHoldState,
-	createManualHoldState,
-} from "./ConversationOrchestrator"
+import { ConversationOrchestrator, createIngestHoldState, createManualHoldState } from "./ConversationOrchestrator"
 
 // core modules
 import { ToolRepetitionDetector } from "../tools/ToolRepetitionDetector"
@@ -153,6 +176,11 @@ export interface TaskOptions extends CreateTaskOptions {
 	images?: string[]
 	historyItem?: HistoryItem
 	experiments?: Record<string, boolean>
+	initialConversationParticipants?: {
+		group: string[]
+		muted: string[]
+		priority: string[]
+	}
 	startTask?: boolean
 	rootTask?: Task
 	parentTask?: Task
@@ -240,6 +268,25 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	private conversationHoldState?: ConversationHoldState
 	private lastOrchestratorAnalysis?: OrchestratorAnalysis
 	private conversationAgents: ConversationAgent[] = []
+	private conversationAgentPersonas: Map<string, ConversationAgentPersonaProfile> = new Map()
+	private conversationParticipantState = {
+		group: [] as string[],
+		muted: new Set<string>(),
+		priority: new Set<string>(),
+	}
+	private readonly initialParticipantSnapshot?: {
+		group: string[]
+		muted: string[]
+		priority: string[]
+	}
+	private activeSpeakerId?: string
+	private lastUserMessagePayload?: { text: string; images: string[] }
+	private lastClientTurnId?: string
+	private autoSpeakerTurnInProgress: boolean = false
+	private automatedSpeakerTurnQueue: AutomatedSpeakerTurn[] = []
+	private pendingPrimarySpeakerPrompt?: string
+	private pendingPrimaryProviderProfileId?: string
+	private pendingGroupSpeakers: Set<string> = new Set()
 
 	didFinishAbortingStream = false
 	abandoned = false
@@ -348,9 +395,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		onCreated,
 		initialTodos,
 		workspacePath,
+		initialConversationParticipants,
+		clientTurnId,
 	}: TaskOptions) {
 		super()
 		this.context = context // kilocode_change
+		this.initialParticipantSnapshot = initialConversationParticipants
+		this.lastClientTurnId = clientTurnId
 
 		if (startTask && !task && !images && !historyItem) {
 			throw new Error("Either historyItem or task/images must be provided")
@@ -387,6 +438,19 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		this.api = buildApiHandler(apiConfiguration)
 		this.autoApprovalHandler = new AutoApprovalHandler()
 		this.conversationOrchestrator = new ConversationOrchestrator()
+
+		if (initialConversationParticipants) {
+			const { group = [], muted = [], priority = [] } = initialConversationParticipants
+			this.conversationParticipantState.group = [...new Set(group)]
+			this.conversationParticipantState.muted = new Set(muted)
+			this.conversationParticipantState.priority = new Set(priority)
+			debugLog(CHAT_HUB_LOG_PREFIX, "constructor applied initialConversationParticipants", {
+				taskId: this.taskId,
+				group: this.conversationParticipantState.group,
+				muted: Array.from(this.conversationParticipantState.muted),
+				priority: Array.from(this.conversationParticipantState.priority),
+			})
+		}
 
 		this.urlContentFetcher = new UrlContentFetcher(provider.context)
 		this.browserSession = new BrowserSession(provider.context)
@@ -519,54 +583,210 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			this._taskMode = state?.mode || defaultModeSlug
 		} catch (error) {
 			// If there's an error getting state, use the default mode
-		this._taskMode = defaultModeSlug
-		// Use the provider's log method for better error visibility
-		const errorMessage = `Failed to initialize task mode: ${error instanceof Error ? error.message : String(error)}`
-		provider.log(errorMessage)
+			this._taskMode = defaultModeSlug
+			// Use the provider's log method for better error visibility
+			const errorMessage = `Failed to initialize task mode: ${error instanceof Error ? error.message : String(error)}`
+			provider.log(errorMessage)
+		}
 	}
-}
 
 	private async pushConversationHoldState(state?: ConversationHoldState): Promise<void> {
 		this.conversationHoldState = state
+		debugLog(CHAT_HUB_LOG_PREFIX, "pushConversationHoldState", {
+			taskId: this.taskId,
+			state,
+		})
 		const provider = this.providerRef.deref()
 		if (!provider) {
 			return
 		}
-			try {
-				await provider.postMessageToWebview({
-					type: "conversationHoldState",
-					conversationHoldState: state,
-					payload: {
-						taskId: this.taskId,
-						state,
-					},
-				})
+		try {
+			await provider.postMessageToWebview({
+				type: "conversationHoldState",
+				conversationHoldState: state,
+				payload: {
+					taskId: this.taskId,
+					state,
+				},
+			})
 		} catch (error) {
 			console.error("[Task#pushConversationHoldState] Failed to post hold state", error)
 		}
 	}
 
-	private async pushOrchestratorAnalysis(
-		analysis: OrchestratorAnalysis,
-		agents: ConversationAgent[],
-	addToTimeline: boolean = true,
-	): Promise<void> {
-		this.lastOrchestratorAnalysis = analysis
-		this.conversationAgents = agents
+	public async handleParticipantControl(payload?: ConversationParticipantControlPayload): Promise<void> {
+		if (!payload) {
+			return
+		}
+		const { action } = payload
+		debugLog(CHAT_HUB_LOG_PREFIX, "handleParticipantControl", {
+			action,
+			participantId: payload.participantId,
+			participantIds: payload.participantIds,
+			currentState: {
+				group: this.conversationParticipantState.group,
+				muted: Array.from(this.conversationParticipantState.muted),
+				priority: Array.from(this.conversationParticipantState.priority),
+			},
+			clientTurnId: this.lastClientTurnId,
+		})
+		switch (action) {
+			case "setParticipants": {
+				if (!Array.isArray(payload.participantIds)) {
+					break
+				}
+				const encountered = new Set<string>()
+				const ordered = payload.participantIds.filter((id) => {
+					if (!id || encountered.has(id)) {
+						return false
+					}
+					encountered.add(id)
+					return true
+				})
+				this.conversationParticipantState.group = ordered
+				break
+			}
+			case "toggleMute": {
+				const id = payload.participantId
+				if (!id) {
+					break
+				}
+				const muted = this.conversationParticipantState.muted
+				if (muted.has(id)) {
+					muted.delete(id)
+				} else {
+					muted.add(id)
+				}
+				break
+			}
+			case "togglePriority": {
+				const id = payload.participantId
+				if (!id) {
+					break
+				}
+				const priority = this.conversationParticipantState.priority
+				if (priority.has(id)) {
+					priority.delete(id)
+				} else {
+					priority.add(id)
+				}
+				break
+			}
+		}
+		await this.syncConversationAgents("participantControl")
+	}
+
+	private async syncConversationAgents(reason: string = "unspecified"): Promise<void> {
 		const provider = this.providerRef.deref()
 		if (!provider) {
 			return
 		}
-			try {
-				await provider.postMessageToWebview({
-					type: "orchestratorAnalysis",
-					conversationAgents: agents,
-					lastOrchestratorAnalysis: analysis,
-					payload: {
-						taskId: this.taskId,
-						analysis,
-						agents,
+		debugLog(CHAT_HUB_LOG_PREFIX, "syncConversationAgents:begin", {
+			reason,
+			taskId: this.taskId,
+			groupIds: this.conversationParticipantState.group,
+			mutedIds: Array.from(this.conversationParticipantState.muted),
+			priorityIds: Array.from(this.conversationParticipantState.priority),
+			clientTurnId: this.lastClientTurnId,
+		})
+		let providerState: ExtensionState | undefined
+		try {
+			providerState = (await provider.getState?.()) as ExtensionState | undefined
+		} catch (error) {
+			console.warn("[Task#syncConversationAgents] Unable to read provider state", error)
+		}
+		const agents = this.deriveConversationAgentsFromState(providerState)
+		this.conversationAgents = agents
+		debugLog(CHAT_HUB_LOG_PREFIX, "syncConversationAgents:derived", {
+			reason,
+			taskId: this.taskId,
+			agentCount: agents.length,
+			companyCount: providerState?.workplaceState?.companies?.length ?? 0,
+			activeCompanyId: providerState?.workplaceState?.activeCompanyId,
+			clientTurnId: this.lastClientTurnId,
+		})
+		try {
+			await provider.postMessageToWebview({
+				type: "orchestratorAnalysis",
+				conversationAgents: agents,
+				lastOrchestratorAnalysis: this.lastOrchestratorAnalysis,
+				payload: {
+					taskId: this.taskId,
+					agents,
+					analysis: this.lastOrchestratorAnalysis,
+					appendTimeline: false,
+				},
+			})
+		} catch (error) {
+			console.error("[Task#syncConversationAgents] Failed to post orchestrator agents", error)
+		}
+	}
+
+	private async ensureConversationAgentsSynced(
+		reason: string,
+		maxWaitMs: number = 2000,
+		pollIntervalMs: number = 150,
+	): Promise<void> {
+		const startedAt = Date.now()
+		let attempt = 0
+		while (Date.now() - startedAt <= maxWaitMs) {
+			attempt += 1
+			await this.syncConversationAgents(`${reason}:attempt-${attempt}`)
+			if (this.conversationAgents.length > 0) {
+				debugLog(CHAT_HUB_LOG_PREFIX, "ensureConversationAgentsSynced:ready", {
+					reason,
+					taskId: this.taskId,
+					attempt,
+					totalElapsedMs: Date.now() - startedAt,
+					agentIds: this.conversationAgents.map((agent) => agent.id),
+					clientTurnId: this.lastClientTurnId,
+				})
+				return
+			}
+			await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
+		}
+		console.warn(CHAT_HUB_LOG_PREFIX, "ensureConversationAgentsSynced:timeout", {
+			reason,
+			taskId: this.taskId,
+			attempts: Math.max(1, Math.floor((Date.now() - startedAt) / pollIntervalMs)),
+			groupIds: this.conversationParticipantState.group,
+			agentCount: this.conversationAgents.length,
+			clientTurnId: this.lastClientTurnId,
+		})
+	}
+
+	private async pushOrchestratorAnalysis(
+		analysis: OrchestratorAnalysis,
+		agents: ConversationAgent[],
+		addToTimeline: boolean = true,
+	): Promise<void> {
+		this.lastOrchestratorAnalysis = analysis
+		this.conversationAgents = agents
+		debugLog(CHAT_HUB_LOG_PREFIX, "pushOrchestratorAnalysis", {
+			taskId: this.taskId,
+			primarySpeakers: analysis.primarySpeakers?.map((agent) => agent.id),
+			secondaryCandidates: analysis.secondaryCandidates?.map((agent) => agent.id),
+			suppressed: analysis.suppressedAgents?.map((agent) => agent.id),
+			rationale: analysis.rationale,
+			hold: analysis.hold,
+			agentCount: agents.length,
+			clientTurnId: this.lastClientTurnId,
+		})
+		const provider = this.providerRef.deref()
+		if (!provider) {
+			return
+		}
+		try {
+			await provider.postMessageToWebview({
+				type: "orchestratorAnalysis",
+				conversationAgents: agents,
+				lastOrchestratorAnalysis: analysis,
+				payload: {
+					taskId: this.taskId,
+					analysis,
+					agents,
 					appendTimeline: addToTimeline,
+					clientTurnId: this.lastClientTurnId,
 				},
 			})
 		} catch (error) {
@@ -577,22 +797,135 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	private deriveConversationAgentsFromState(state?: ExtensionState): ConversationAgent[] {
 		const companies = state?.workplaceState?.companies ?? []
 		if (!companies.length) {
+			debugLog(CHAT_HUB_LOG_PREFIX, "deriveConversationAgentsFromState:noCompanies", {
+				taskId: this.taskId,
+				reason: this.initialParticipantSnapshot ? "initialSnapshot" : "providerState",
+			})
 			return []
 		}
 		const activeCompanyId = state?.workplaceState?.activeCompanyId
-		const company =
-			companies.find((entry) => entry.id === activeCompanyId) ??
-			companies[0]
+		const company = companies.find((entry) => entry.id === activeCompanyId) ?? companies[0]
 		if (!company) {
+			debugLog(CHAT_HUB_LOG_PREFIX, "deriveConversationAgentsFromState:noCompanyMatch", {
+				taskId: this.taskId,
+				activeCompanyId,
+				availableCompanyIds: companies.map((entry) => entry.id),
+			})
 			return []
 		}
 		const activeEmployeeId = company.activeEmployeeId ?? state?.workplaceState?.activeEmployeeId
-		return company.employees.map<ConversationAgent>((employee) => ({
-			id: employee.id,
-			name: employee.name,
-			role: employee.role,
-			isActive: employee.id === activeEmployeeId,
-		}))
+		const prioritySet = this.conversationParticipantState.priority
+		const mutedSet = this.conversationParticipantState.muted
+		const groupIds = this.conversationParticipantState.group
+		this.conversationAgentPersonas.clear()
+
+		const buildPersonaProfile = (employee: any): ConversationAgentPersonaProfile => {
+			const personaInstructions: string[] = []
+			const identityParts: string[] = []
+			const companyName = company.name?.trim()
+			const trimmedRole = employee.role?.trim()
+			if (employee.name) {
+				const identityFragments: string[] = [
+					`You are ${employee.name}${trimmedRole ? `, ${trimmedRole}` : ""}.`,
+				]
+				if (companyName) {
+					identityFragments.push(`You work at ${companyName}.`)
+				}
+				identityParts.push(identityFragments.join(" "))
+			}
+			const description = employee.description?.trim()
+			if (description) {
+				identityParts.push(description)
+			}
+			const personality = employee.personality?.trim()
+			if (personality) {
+				identityParts.push(`Personality: ${personality}.`)
+			}
+			const traits =
+				Array.isArray(employee.personalityTraits) && employee.personalityTraits.length > 0
+					? employee.personalityTraits
+					: undefined
+			if (traits) {
+				identityParts.push(`Key traits: ${traits.join(", ")}.`)
+			}
+			const personaMode = employee.personaMode
+			if (personaMode?.summary) {
+				identityParts.push(`Primary focus: ${personaMode.summary}.`)
+			}
+			if (personaMode?.instructions) {
+				personaInstructions.push(personaMode.instructions)
+			}
+			return {
+				identityStatement: identityParts.length ? identityParts.join(" ") : undefined,
+				additionalInstructions: personaInstructions.length ? personaInstructions.join("\n\n") : undefined,
+				providerProfileId: personaMode?.providerProfileId,
+			}
+		}
+
+		const baseAgents = company.employees.map<ConversationAgent>((employee) => {
+			const employeeLoad = (employee as unknown as { load?: number }).load
+			this.conversationAgentPersonas.set(employee.id, buildPersonaProfile(employee))
+			return {
+				id: employee.id,
+				name: employee.name,
+				role: employee.role,
+				isActive: employee.id === activeEmployeeId,
+				load: prioritySet.has(employee.id) ? 0 : (employeeLoad ?? 0),
+			}
+		})
+
+		let agents = baseAgents
+
+		if (mutedSet.size > 0) {
+			agents = agents.filter((agent) => !mutedSet.has(agent.id))
+		}
+
+		if (groupIds.length > 0) {
+			const allowed = new Set(groupIds)
+			agents = agents.filter((agent) => allowed.has(agent.id))
+			agents.sort((a, b) => groupIds.indexOf(a.id) - groupIds.indexOf(b.id))
+		}
+
+		debugLog(CHAT_HUB_LOG_PREFIX, "deriveConversationAgentsFromState", {
+			taskId: this.taskId,
+			activeCompanyId: company.id,
+			activeEmployeeId,
+			agentIds: agents.map((agent) => agent.id),
+			mutedIds: Array.from(mutedSet),
+			priorityIds: Array.from(prioritySet),
+			groupIds,
+			clientTurnId: this.lastClientTurnId,
+		})
+		return agents
+	}
+
+	private resolveSpeakerSequence(
+		analysis: OrchestratorAnalysis,
+		requestedSpeakerId?: string,
+		fallbackActiveId?: string,
+	): { primary?: string; remaining: string[] } {
+		const primaryCandidates = analysis.primarySpeakers?.map((agent) => agent.id).filter(Boolean) ?? []
+		const uniqueCandidates = Array.from(new Set(primaryCandidates))
+		let primary =
+			requestedSpeakerId && uniqueCandidates.includes(requestedSpeakerId) ? requestedSpeakerId : undefined
+
+		if (primary) {
+			const index = uniqueCandidates.indexOf(primary)
+			uniqueCandidates.splice(index, 1)
+		}
+
+		if (!primary) {
+			primary = uniqueCandidates.shift()
+		}
+
+		if (!primary && fallbackActiveId) {
+			primary = fallbackActiveId
+		}
+
+		return {
+			primary,
+			remaining: uniqueCandidates,
+		}
 	}
 
 	private buildOrchestratorMessageMetadata(): OrchestratorMessageMetadata | undefined {
@@ -610,18 +943,401 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			return undefined
 		}
 
+		const primarySpeakers = (() => {
+			if (!analysis?.primarySpeakers?.length) {
+				return analysis?.primarySpeakers
+			}
+			const current = [...analysis.primarySpeakers]
+			const activeId = this.activeSpeakerId
+			if (!activeId) {
+				return current
+			}
+			const existingIndex = current.findIndex((agent) => agent.id === activeId)
+			if (existingIndex === 0) {
+				return current
+			}
+			let overrideAgent = existingIndex >= 0 ? current.splice(existingIndex, 1)[0] : undefined
+			if (!overrideAgent) {
+				const convoAgent = this.conversationAgents.find((agent) => agent.id === activeId)
+				if (convoAgent) {
+					overrideAgent = {
+						id: convoAgent.id,
+						label: convoAgent.name,
+						role: convoAgent.role,
+						confidence: 0.99,
+						tier: "directed",
+						reason: "Active orchestrated speaker",
+					}
+				}
+			}
+			if (overrideAgent) {
+				current.unshift(overrideAgent)
+			}
+			return current
+		})()
+
 		return {
 			respondedViaOrchestrator: respondedViaOrchestrator || undefined,
 			queueState,
 			holdMode,
 			rationale: analysis?.rationale,
-			primarySpeakers: analysis?.primarySpeakers,
+			primarySpeakers,
 			secondarySpeakers: analysis?.secondaryCandidates,
 			suppressedAgents: analysis?.suppressedAgents,
+			clientTurnId: this.lastClientTurnId,
+		}
+	}
+
+	private async forceActiveSpeaker(employeeId: string): Promise<void> {
+		if (!employeeId) {
+			return
+		}
+		const provider = this.providerRef.deref()
+		const workplaceService = provider?.getWorkplaceService()
+		if (!provider || !workplaceService) {
+			return
+		}
+		debugLog(CHAT_HUB_LOG_PREFIX, "forceActiveSpeaker", {
+			taskId: this.taskId,
+			employeeId,
+			clientTurnId: this.lastClientTurnId,
+		})
+		try {
+			const state = workplaceService.getState()
+			const activeCompanyId = state.activeCompanyId ?? state.companies[0]?.id
+			if (!activeCompanyId) {
+				return
+			}
+			if (state.activeEmployeeId !== employeeId || state.activeCompanyId !== activeCompanyId) {
+				await workplaceService.setActiveEmployee(activeCompanyId, employeeId)
+				await provider.postStateToWebview()
+			}
+			await this.syncConversationAgents("forceActiveSpeaker")
+			this.activeSpeakerId = employeeId
+		} catch (error) {
+			console.warn(
+				`[Task#forceActiveSpeaker] Failed to activate employee ${employeeId}: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			)
+		}
+	}
+
+	private buildSpeakerPrompt(employeeId: string, userText: string): string {
+		const agent = this.conversationAgents.find((candidate) => candidate.id === employeeId)
+		const speakerName = agent?.name ?? "the assigned participant"
+		const normalizedRole = agent?.role ? ` (${agent.role})` : ""
+		const persona = this.conversationAgentPersonas.get(employeeId)
+		const analysis = this.lastOrchestratorAnalysis
+		const intent = analysis?.intent
+		const documentCreationBanned = Boolean(intent?.documentCreationBanned)
+		const respondDirectly = Boolean(intent?.respondDirectly || documentCreationBanned)
+		const multiSpeaker = Boolean(intent?.multiSpeaker)
+		const directedAgentIds = intent?.directedAgentIds ?? []
+		const otherScheduledSpeakers =
+			analysis?.primarySpeakers
+				?.map((candidate) => {
+					if (!candidate?.id || candidate.id === employeeId) {
+						return undefined
+					}
+					return (
+						candidate.label ??
+						this.conversationAgents.find((agent) => agent.id === candidate.id)?.name ??
+						candidate.id
+					)
+				})
+				.filter((value): value is string => Boolean(value)) ?? []
+		const promptSections: string[] = []
+		if (persona?.identityStatement) {
+			promptSections.push(persona.identityStatement)
+		} else {
+			promptSections.push(`You are ${speakerName}${normalizedRole}.`)
+		}
+		if (persona?.additionalInstructions) {
+			promptSections.push(persona.additionalInstructions)
+		}
+		promptSections.push(
+			`Task: Provide a concise self-introduction (maximum two sentences) spoken in first person as ${speakerName}${normalizedRole}. Mention your role and one way you help the team. Do not reference or introduce any other participants and do not speculate about their responses.`,
+		)
+		if (respondDirectly) {
+			promptSections.push(
+				"Respond directly in this chat using a spoken tone. Do not create, edit, or summarize any documents, files, templates, or external artifacts—stay entirely within this message.",
+			)
+		}
+		if (documentCreationBanned) {
+			promptSections.push(
+				"Document creation is explicitly banned for this request. Avoid triggering any document-writing tools, follow-up drafts, or file outputs.",
+			)
+		}
+		const trimmedUserText = userText?.trim()
+		if (trimmedUserText) {
+			promptSections.push(
+				`Context from the user for reference only (do not repeat for anyone else):\n${trimmedUserText}`,
+			)
+		}
+		promptSections.push(
+			`If the user already received your introduction, acknowledge briefly and offer one fresh detail or defer to the next participant instead of repeating yourself.`,
+		)
+		if (multiSpeaker) {
+			promptSections.push(
+				"Other participants still need to respond after you. Keep it brief, stay focused on your own introduction, and do not mark the task complete or imply the discussion is finished.",
+			)
+		}
+		debugLog(CHAT_HUB_LOG_PREFIX, "buildSpeakerPrompt", {
+			taskId: this.taskId,
+			employeeId,
+			personaIdentity: Boolean(persona?.identityStatement),
+			instructionsLength: persona?.additionalInstructions?.length ?? 0,
+			clientTurnId: this.lastClientTurnId,
+		})
+		return promptSections.join("\n\n")
+	}
+
+	private queueAutomatedSpeakerTurns(text: string, images: string[], speakerIds: string[]): void {
+		const uniqueSpeakerIds = Array.from(new Set(speakerIds.filter(Boolean)))
+		if (!uniqueSpeakerIds.length) {
+			return
+		}
+		uniqueSpeakerIds.forEach((speakerId) => {
+			const prompt = this.buildSpeakerPrompt(speakerId, text)
+			const persona = this.conversationAgentPersonas.get(speakerId)
+			debugLog(CHAT_HUB_LOG_PREFIX, "queueAutomatedSpeakerTurn", {
+				taskId: this.taskId,
+				speakerId,
+				providerProfileId: persona?.providerProfileId,
+				clientTurnId: this.lastClientTurnId,
+			})
+			this.automatedSpeakerTurnQueue.push({
+				speakerId,
+				text: prompt,
+				images: images?.length ? [...images] : [],
+				providerProfileId: persona?.providerProfileId,
+			})
+		})
+	}
+
+	private markSpeakerResponded(speakerId?: string) {
+		if (!speakerId) {
+			return
+		}
+		if (this.pendingGroupSpeakers.delete(speakerId)) {
+			debugLog(CHAT_HUB_LOG_PREFIX, "groupSpeakerResponded", {
+				taskId: this.taskId,
+				speakerId,
+				pendingCount: this.pendingGroupSpeakers.size,
+				clientTurnId: this.lastClientTurnId,
+			})
+		}
+	}
+
+	private async orchestrateSpeakerSequence(
+		text: string,
+		images: string[],
+		options: { requestedSpeakerId?: string; queueRemaining: boolean; isSilent?: boolean } = {
+			queueRemaining: true,
+		},
+	): Promise<{ primarySpeakerId?: string }> {
+		const provider = this.providerRef.deref()
+		if (!provider) {
+			return {}
+		}
+
+		let providerState: ExtensionState | undefined
+		try {
+			providerState = (await provider.getState?.()) as ExtensionState | undefined
+		} catch (error) {
+			console.warn("[Task#orchestrateSpeakerSequence] Unable to read provider state", error)
+		}
+
+		const agents = this.deriveConversationAgentsFromState(providerState)
+		debugLog(CHAT_HUB_LOG_PREFIX, "submitUserMessage agents", {
+			taskId: this.taskId,
+			agentCount: agents.length,
+			agentIds: agents.map((agent) => agent.id),
+			clientTurnId: this.lastClientTurnId,
+		})
+		if (!agents.length) {
+			console.warn(CHAT_HUB_LOG_PREFIX, "submitUserMessage:noAgents", {
+				taskId: this.taskId,
+				textPreview: text.slice(0, 80),
+				groupIds: this.conversationParticipantState.group,
+				companyCount: providerState?.workplaceState?.companies?.length ?? 0,
+				clientTurnId: this.lastClientTurnId,
+			})
+			return {}
+		}
+
+		const isManualHoldActive = this.conversationHoldState?.mode === "manual_hold"
+		let activeHoldState = this.conversationHoldState
+		if (!isManualHoldActive) {
+			activeHoldState = createIngestHoldState()
+			await this.pushConversationHoldState(activeHoldState)
+		}
+
+		const activeAgentId =
+			agents.find((agent) => agent.isActive)?.id ?? providerState?.workplaceState?.activeEmployeeId
+		const analysis = this.conversationOrchestrator.analyze({
+			text,
+			agents,
+			activeAgentId,
+			holdState: activeHoldState,
+		})
+		debugLog(CHAT_HUB_LOG_PREFIX, "conversationOrchestrator.analyze", {
+			taskId: this.taskId,
+			textPreview: text.slice(0, 80),
+			activeAgentId,
+			analysis,
+			clientTurnId: this.lastClientTurnId,
+		})
+		await this.pushOrchestratorAnalysis(analysis, agents, true)
+
+		const speakerSequence = this.resolveSpeakerSequence(analysis, options.requestedSpeakerId, activeAgentId)
+		if (speakerSequence.primary) {
+			await this.forceActiveSpeaker(speakerSequence.primary)
+			this.activeSpeakerId = speakerSequence.primary
+			const promptSourceText = text?.trim()?.length ? text : (this.lastUserMessagePayload?.text ?? text)
+			this.pendingPrimarySpeakerPrompt = this.buildSpeakerPrompt(speakerSequence.primary, promptSourceText)
+			const personaProfile = this.conversationAgentPersonas.get(speakerSequence.primary)
+			this.pendingPrimaryProviderProfileId = personaProfile?.providerProfileId
+		}
+
+		const shouldQueueRemaining =
+			options.queueRemaining &&
+			!options.isSilent &&
+			speakerSequence.remaining.length > 0 &&
+			(analysis.intent?.multiSpeaker ?? true)
+
+		if (shouldQueueRemaining) {
+			this.automatedSpeakerTurnQueue = []
+			this.queueAutomatedSpeakerTurns(text, images, speakerSequence.remaining)
+		}
+
+		const pendingSpeakers = new Set<string>()
+		if (speakerSequence.primary) {
+			pendingSpeakers.add(speakerSequence.primary)
+		}
+		speakerSequence.remaining.forEach((id) => pendingSpeakers.add(id))
+		this.pendingGroupSpeakers = pendingSpeakers
+
+		return { primarySpeakerId: speakerSequence.primary }
+	}
+
+	private async processAutomatedSpeakerTurns(): Promise<void> {
+		const queuedTurns = this.automatedSpeakerTurnQueue.length
+		if (this.autoSpeakerTurnInProgress || !queuedTurns) {
+			debugLog(CHAT_HUB_LOG_PREFIX, "processAutomatedSpeakerTurns:skip", {
+				taskId: this.taskId,
+				queuedTurns,
+				autoSpeakerTurnInProgress: this.autoSpeakerTurnInProgress,
+				clientTurnId: this.lastClientTurnId,
+			})
+			return
+		}
+		debugLog(CHAT_HUB_LOG_PREFIX, "processAutomatedSpeakerTurns:start", {
+			taskId: this.taskId,
+			queuedTurns,
+			clientTurnId: this.lastClientTurnId,
+		})
+		this.autoSpeakerTurnInProgress = true
+		try {
+			while (this.automatedSpeakerTurnQueue.length) {
+				const nextTurn = this.automatedSpeakerTurnQueue.shift()
+				if (!nextTurn) {
+					continue
+				}
+				await this.runAutomatedSpeakerTurn(nextTurn)
+			}
+		} finally {
+			this.autoSpeakerTurnInProgress = false
+		}
+		debugLog(CHAT_HUB_LOG_PREFIX, "processAutomatedSpeakerTurns:complete", {
+			taskId: this.taskId,
+			remainingTurns: this.automatedSpeakerTurnQueue.length,
+			clientTurnId: this.lastClientTurnId,
+		})
+		if (this.automatedSpeakerTurnQueue.length) {
+			void this.processAutomatedSpeakerTurns()
+		}
+	}
+
+	private async withProviderProfile<T>(profileId: string | undefined, callback: () => Promise<T>): Promise<T> {
+		const provider = this.providerRef.deref()
+		if (!provider || !profileId) {
+			return callback()
+		}
+		let previousProfile: string | undefined
+		let switched = false
+		try {
+			previousProfile = await provider.getProviderProfile().catch((error) => {
+				console.warn(
+					`[Task#withProviderProfile] Failed to read current provider profile: ${error instanceof Error ? error.message : String(error)}`,
+				)
+				return undefined
+			})
+			if (!previousProfile || previousProfile !== profileId) {
+				await provider
+					.setProviderProfile(profileId)
+					.then(() => {
+						switched = true
+					})
+					.catch((error) => {
+						console.warn(
+							`[Task#withProviderProfile] Failed to activate provider profile ${profileId}: ${error instanceof Error ? error.message : String(error)}`,
+						)
+					})
+			}
+			return await callback()
+		} finally {
+			if (provider && switched && previousProfile && previousProfile !== profileId) {
+				await provider.setProviderProfile(previousProfile).catch((error) => {
+					console.warn(
+						`[Task#withProviderProfile] Failed to restore provider profile ${previousProfile}: ${error instanceof Error ? error.message : String(error)}`,
+					)
+				})
+			}
+		}
+	}
+
+	private async runAutomatedSpeakerTurn(turn: AutomatedSpeakerTurn): Promise<void> {
+		const { speakerId, text, images, providerProfileId } = turn
+		const persona = this.conversationAgentPersonas.get(speakerId)
+		const desiredProfile = providerProfileId ?? persona?.providerProfileId
+		try {
+			debugLog(CHAT_HUB_LOG_PREFIX, "runAutomatedSpeakerTurn", {
+				taskId: this.taskId,
+				speakerId,
+				providerProfileId: desiredProfile,
+				promptPreview: text.slice(0, 120),
+				clientTurnId: this.lastClientTurnId,
+			})
+			await this.withProviderProfile(desiredProfile, async () => {
+				await this.forceActiveSpeaker(speakerId)
+				await this.ensureRespondingHold()
+				this.conversationOrchestrator.registerResponse([speakerId])
+				const userContent: Anthropic.Messages.ContentBlockParam[] = [
+					{ type: "text", text },
+					...formatResponse.imageBlocks(images ?? []),
+				]
+				await this.recursivelyMakeClineRequests(userContent, false)
+			})
+			this.markSpeakerResponded(speakerId)
+		} catch (error) {
+			console.error(
+				`[Task#runAutomatedSpeakerTurn] Failed to process automated turn for speaker ${speakerId}: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			)
+			const errorDetails = error instanceof Error ? error.message : "An unexpected error occurred."
+			await this.say("error", `I wasn't able to continue the conversation with ${speakerId}. ${errorDetails}`)
 		}
 	}
 
 	private async ensureRespondingHold(): Promise<void> {
+		debugLog(CHAT_HUB_LOG_PREFIX, "ensureRespondingHold", {
+			taskId: this.taskId,
+			currentMode: this.conversationHoldState?.mode ?? "none",
+			clientTurnId: this.lastClientTurnId,
+		})
 		if (!this.conversationHoldState) {
 			return
 		}
@@ -639,6 +1355,25 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	}
 
 	private async maybeReleaseAutomaticHold(): Promise<void> {
+		if (
+			this.automatedSpeakerTurnQueue.length > 0 ||
+			this.autoSpeakerTurnInProgress ||
+			this.pendingGroupSpeakers.size > 0
+		) {
+			debugLog(CHAT_HUB_LOG_PREFIX, "maybeReleaseAutomaticHold:deferred", {
+				taskId: this.taskId,
+				queuedTurns: this.automatedSpeakerTurnQueue.length,
+				autoSpeakerTurnInProgress: this.autoSpeakerTurnInProgress,
+				pendingCount: this.pendingGroupSpeakers.size,
+				clientTurnId: this.lastClientTurnId,
+			})
+			return
+		}
+		debugLog(CHAT_HUB_LOG_PREFIX, "maybeReleaseAutomaticHold", {
+			taskId: this.taskId,
+			currentMode: this.conversationHoldState?.mode ?? "none",
+			clientTurnId: this.lastClientTurnId,
+		})
 		if (!this.conversationHoldState) {
 			return
 		}
@@ -648,6 +1383,11 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		if (this.conversationHoldState.mode === "idle") {
 			return
 		}
+		debugLog(CHAT_HUB_LOG_PREFIX, "maybeReleaseAutomaticHold:transition", {
+			taskId: this.taskId,
+			nextMode: "idle",
+			clientTurnId: this.lastClientTurnId,
+		})
 		await this.pushConversationHoldState({
 			mode: "idle",
 			initiatedBy: "system",
@@ -997,8 +1737,23 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		const isStatusMutable = !partial && isBlocking && !isMessageQueued
 		let statusMutationTimeouts: NodeJS.Timeout[] = []
 
-		if (isStatusMutable) {
-			console.log(`Task#ask will block -> type: ${type}`)
+		if (type === "completion_result" && this.pendingGroupSpeakers.size > 0) {
+			debugLog(CHAT_HUB_LOG_PREFIX, "task.ask:completionResultDeferred", {
+				taskId: this.taskId,
+				pendingSpeakers: Array.from(this.pendingGroupSpeakers),
+				clientTurnId: this.lastClientTurnId,
+			})
+			this.askResponseText = undefined
+			this.askResponseImages = undefined
+			this.askResponse = "noButtonClicked"
+		} else if (isStatusMutable) {
+			debugLog(CHAT_HUB_LOG_PREFIX, "task.ask:willBlock", {
+				taskId: this.taskId,
+				askType: type,
+				askTimestamp: askTs,
+				queueSize: this.messageQueueService.messages.length,
+				clientTurnId: this.lastClientTurnId,
+			})
 
 			if (isInteractiveAsk(type)) {
 				statusMutationTimeouts.push(
@@ -1035,13 +1790,28 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				)
 			}
 		} else if (isMessageQueued) {
-			console.log("Task#ask will process message queue")
+			debugLog(CHAT_HUB_LOG_PREFIX, "task.ask:processQueue", {
+				taskId: this.taskId,
+				queueSize: this.messageQueueService.messages.length,
+				clientTurnId: this.lastClientTurnId,
+			})
 
 			const message = this.messageQueueService.dequeueMessage()
 
 			if (message) {
+				debugLog(CHAT_HUB_LOG_PREFIX, "task.ask:dequeueMessage", {
+					taskId: this.taskId,
+					messageId: message.id,
+					silent: message.silent ?? false,
+					textPreview: message.text?.slice(0, 80),
+					imageCount: message.images?.length ?? 0,
+					clientTurnId: message.clientTurnId,
+				})
 				setTimeout(async () => {
-					await this.submitUserMessage(message.text, message.images)
+					await this.submitUserMessage(message.text, message.images, undefined, undefined, {
+						silent: message.silent,
+						clientTurnId: message.clientTurnId,
+					})
 				}, 0)
 			}
 		}
@@ -1080,7 +1850,18 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		this.handleWebviewAskResponse("messageResponse", text, images)
 	}
 
-	handleWebviewAskResponse(askResponse: ClineAskResponse, text?: string, images?: string[]) {
+	handleWebviewAskResponse(askResponse: ClineAskResponse, text?: string, images?: string[], clientTurnId?: string) {
+		if (clientTurnId) {
+			this.lastClientTurnId = clientTurnId
+		}
+		debugLog(CHAT_HUB_LOG_PREFIX, "task.handleWebviewAskResponse", {
+			taskId: this.taskId,
+			askResponse,
+			hasText: Boolean(text && text.trim().length > 0),
+			imageCount: images?.length ?? 0,
+			queueSize: this.messageQueueService.messages.length,
+			clientTurnId: clientTurnId ?? this.lastClientTurnId,
+		})
 		// this.askResponse = askResponse kilocode_change
 		this.askResponseText = text
 		this.askResponseImages = images
@@ -1130,57 +1911,69 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		images?: string[],
 		mode?: string,
 		providerProfile?: string,
+		options: SubmitUserMessageOptions = {},
 	): Promise<void> {
 		try {
+			const requestedSpeakerId = options.speakerId
+			const isSilent = options.silent ?? false
+			const clientTurnId = options.clientTurnId ?? this.lastClientTurnId ?? crypto.randomUUID()
+			this.lastClientTurnId = clientTurnId
 			text = (text ?? "").trim()
 			images = images ?? []
+
+			if (!isSilent) {
+				this.lastUserMessagePayload = { text, images: [...images] }
+			}
 
 			if (text.length === 0 && images.length === 0) {
 				return
 			}
 
+			debugLog(CHAT_HUB_LOG_PREFIX, "submitUserMessage", {
+				taskId: this.taskId,
+				textPreview: text.slice(0, 80),
+				imageCount: images.length,
+				mode,
+				providerProfile,
+				clientTurnId,
+			})
+
 			const provider = this.providerRef.deref()
 
-			if (provider) {
-				let providerState: ExtensionState | undefined
-				try {
-					providerState = (await provider.getState?.()) as ExtensionState | undefined
-				} catch (stateError) {
-					console.warn("[Task#submitUserMessage] Unable to read provider state for orchestrator analysis", stateError)
-				}
-
-				const agents = this.deriveConversationAgentsFromState(providerState)
-				const isManualHoldActive = this.conversationHoldState?.mode === "manual_hold"
-				let activeHoldState = this.conversationHoldState
-				if (!isManualHoldActive) {
-					activeHoldState = createIngestHoldState()
-					await this.pushConversationHoldState(activeHoldState)
-				}
-
-				if (agents.length) {
-					const activeAgentId =
-						agents.find((agent) => agent.isActive)?.id ?? providerState?.workplaceState?.activeEmployeeId
-					const analysis = this.conversationOrchestrator.analyze({
-						text,
-						agents,
-						activeAgentId,
-						holdState: activeHoldState,
-					})
-					await this.pushOrchestratorAnalysis(analysis, agents, true)
-				}
-				if (mode) {
-					await provider.setMode(mode)
-				}
-
-				if (providerProfile) {
-					await provider.setProviderProfile(providerProfile)
-				}
-
-				this.emit(RooCodeEventName.TaskUserMessage, this.taskId)
-
-				provider.postMessageToWebview({ type: "invoke", invoke: "sendMessage", text, images })
-			} else {
+			if (!provider) {
 				console.error("[Task#submitUserMessage] Provider reference lost")
+				return
+			}
+
+			await this.orchestrateSpeakerSequence(text, images, {
+				requestedSpeakerId,
+				queueRemaining: !isSilent,
+				isSilent,
+			})
+
+			if (mode) {
+				await provider.setMode(mode)
+			}
+
+			if (providerProfile) {
+				await provider.setProviderProfile(providerProfile)
+			}
+
+			if (!isSilent) {
+				this.emit(RooCodeEventName.TaskUserMessage, this.taskId)
+				debugLog(CHAT_HUB_LOG_PREFIX, "postMessage sendMessage", {
+					taskId: this.taskId,
+					textPreview: text.slice(0, 80),
+					imageCount: images.length,
+					clientTurnId,
+				})
+				provider.postMessageToWebview({
+					type: "invoke",
+					invoke: "sendMessage",
+					text,
+					images,
+					clientTurnId,
+				})
 			}
 		} catch (error) {
 			console.error("[Task#submitUserMessage] Failed to submit user message:", error)
@@ -1188,14 +1981,18 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	}
 
 	public async applyConversationHold(state?: ConversationHoldState): Promise<void> {
+		debugLog(CHAT_HUB_LOG_PREFIX, "applyConversationHold", {
+			taskId: this.taskId,
+			incomingMode: state?.mode ?? "clear",
+			initiatedBy: state?.initiatedBy,
+			clientTurnId: this.lastClientTurnId,
+		})
 		if (!state) {
 			await this.pushConversationHoldState(undefined)
 			return
 		}
 		if (state.mode === "manual_hold") {
-			await this.pushConversationHoldState(
-				createManualHoldState(state.initiatedBy ?? "user"),
-			)
+			await this.pushConversationHoldState(createManualHoldState(state.initiatedBy ?? "user"))
 			return
 		}
 		if (state.mode === "ingest_hold") {
@@ -1212,7 +2009,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		const releasedAgentIds =
 			agentIds && agentIds.length
 				? agentIds
-				: this.lastOrchestratorAnalysis?.primarySpeakers?.map((agent) => agent.id) ?? []
+				: (this.lastOrchestratorAnalysis?.primarySpeakers?.map((agent) => agent.id) ?? [])
+		debugLog(CHAT_HUB_LOG_PREFIX, "releaseQueuedResponses", {
+			taskId: this.taskId,
+			releasedAgentIds,
+			manualAgentIds: agentIds,
+			lastAnalysis: this.lastOrchestratorAnalysis,
+		})
 		if (releasedAgentIds.length) {
 			this.conversationOrchestrator.registerResponse(releasedAgentIds)
 		}
@@ -1237,7 +2040,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 		// Get condensing configuration
 		const state = await this.providerRef.deref()?.getState()
-		console.log("[Task.getSystemPrompt] provider state", {
+		debugLog("[Task.getSystemPrompt] provider state", {
 			activeCompanyId: state?.workplaceState?.activeCompanyId,
 			activeEmployeeId: state?.workplaceState?.activeEmployeeId,
 			companyCount: state?.workplaceState?.companies?.length ?? 0,
@@ -1328,6 +2131,16 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		} = {},
 		contextCondense?: ContextCondense,
 	): Promise<undefined> {
+		debugLog(CHAT_HUB_LOG_PREFIX, "task.say:begin", {
+			taskId: this.taskId,
+			sayType: type,
+			hasText: Boolean(typeof text === "string" && text.trim().length > 0),
+			imageCount: images?.length ?? 0,
+			partial,
+			partialDefined: partial !== undefined,
+			isNonInteractive: options.isNonInteractive ?? false,
+			clientTurnId: this.lastClientTurnId,
+		})
 		if (this.abort) {
 			throw new Error(`[Kilo Code#say] task ${this.taskId}.${this.instanceId} aborted`)
 		}
@@ -1460,6 +2273,27 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				await this.maybeReleaseAutomaticHold()
 			}
 		}
+
+		if (!options.isNonInteractive && !partial && type === "text") {
+			this.markSpeakerResponded(this.activeSpeakerId)
+		}
+		if (
+			!options.isNonInteractive &&
+			!partial &&
+			!this.autoSpeakerTurnInProgress &&
+			this.automatedSpeakerTurnQueue.length
+		) {
+			void this.processAutomatedSpeakerTurns()
+		}
+		debugLog(CHAT_HUB_LOG_PREFIX, "task.say:complete", {
+			taskId: this.taskId,
+			sayType: type,
+			partial,
+			isNonInteractive: options.isNonInteractive ?? false,
+			queueSize: this.messageQueueService.messages.length,
+			holdMode: this.conversationHoldState?.mode,
+			clientTurnId: this.lastClientTurnId,
+		})
 	}
 
 	async sayAndCreateMissingParamError(toolName: ToolName, paramName: string, relPath?: string) {
@@ -1499,18 +2333,25 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		// No need to add any messages - the todoList property is already set
 
 		await this.providerRef.deref()?.postStateToWebview()
+		await this.ensureConversationAgentsSynced("startTask")
+
+		const normalizedTask = task ?? ""
+		const normalizedImages = images ?? []
+		await this.orchestrateSpeakerSequence(normalizedTask, normalizedImages, {
+			queueRemaining: true,
+		})
 
 		await this.say("text", task, images)
 		this.isInitialized = true
 
-		let imageBlocks: Anthropic.ImageBlockParam[] = formatResponse.imageBlocks(images)
+		let imageBlocks: Anthropic.ImageBlockParam[] = formatResponse.imageBlocks(normalizedImages)
 
 		// Task starting
 
 		await this.initiateTaskLoop([
 			{
 				type: "text",
-				text: `<task>\n${task}\n</task>`,
+				text: `<task>\n${normalizedTask}\n</task>`,
 			},
 			...imageBlocks,
 		])
@@ -1973,11 +2814,22 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 		let nextUserContent = userContent
 		let includeFileDetails = true
+		let providerProfileOverride = this.pendingPrimaryProviderProfileId
+		this.pendingPrimaryProviderProfileId = undefined
 
 		this.emit(RooCodeEventName.TaskStarted)
 
 		while (!this.abort) {
-			const didEndLoop = await this.recursivelyMakeClineRequests(nextUserContent, includeFileDetails)
+			if (providerProfileOverride) {
+				debugLog(CHAT_HUB_LOG_PREFIX, "initiateTaskLoop:primaryTurn", {
+					taskId: this.taskId,
+					providerProfileId: providerProfileOverride,
+				})
+			}
+			const didEndLoop = await this.withProviderProfile(providerProfileOverride, async () =>
+				this.recursivelyMakeClineRequests(nextUserContent, includeFileDetails),
+			)
+			providerProfileOverride = undefined
 			includeFileDetails = false // We only need file details the first time.
 
 			// The way this agentic loop works is that cline will be given a
@@ -2017,6 +2869,11 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			const currentItem = stack.pop()!
 			const currentUserContent = currentItem.userContent
 			const currentIncludeFileDetails = currentItem.includeFileDetails
+
+			if (this.pendingPrimarySpeakerPrompt) {
+				currentUserContent.unshift({ type: "text", text: this.pendingPrimarySpeakerPrompt })
+				this.pendingPrimarySpeakerPrompt = undefined
+			}
 
 			if (this.abort) {
 				throw new Error(

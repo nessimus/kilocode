@@ -3,15 +3,11 @@ import { useDeepCompareEffect, useEvent, useMount } from "react-use"
 import debounce from "debounce"
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso"
 import removeMd from "remove-markdown"
-import {
-	VSCodeButton,
-	VSCodeDropdown,
-	VSCodeOption,
-	VSCodeTextArea,
-} from "@vscode/webview-ui-toolkit/react"
+import { VSCodeButton, VSCodeDropdown, VSCodeOption, VSCodeTextArea } from "@vscode/webview-ui-toolkit/react"
 import useSound from "use-sound"
 import { LRUCache } from "lru-cache"
 import { useTranslation } from "react-i18next"
+import clsx from "clsx"
 
 import { useDebounceEffect } from "@src/utils/useDebounceEffect"
 import { appendImages } from "@src/utils/imageUtils"
@@ -62,7 +58,9 @@ import { showSystemNotification } from "@/kilocode/helpers" // kilocode_change
 import { CheckpointWarning } from "../chat/CheckpointWarning"
 import { QueuedMessages } from "../chat/QueuedMessages"
 import GroupParticipantsPanel from "./GroupParticipantsPanel"
+import GroupThreadLayout from "./GroupThreadLayout"
 import TaskItem from "../history/TaskItem"
+import { chatHubDebugLog } from "@/utils/chatHubLogging"
 
 export interface ChatHubChatViewProps {
 	isHidden: boolean
@@ -79,12 +77,26 @@ export const MAX_IMAGES_PER_MESSAGE = 20 // This is the Anthropic limit.
 
 const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0
 
+const arraysEqual = (a: readonly string[], b: readonly string[]) =>
+	a.length === b.length && a.every((value, index) => value === b[index])
+
 const formatTimestamp = (date: Date) =>
 	new Intl.DateTimeFormat(undefined, {
 		weekday: "long",
 		hour: "numeric",
 		minute: "2-digit",
 	}).format(date)
+
+const createClientTurnId = () => {
+	try {
+		if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+			return crypto.randomUUID()
+		}
+	} catch (_error) {
+		// fall through to fallback id
+	}
+	return `turn-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
+}
 
 const ChatHubChatViewComponent: React.ForwardRefRenderFunction<ChatHubChatViewRef, ChatHubChatViewProps> = (
 	{ isHidden, showAnnouncement, hideAnnouncement },
@@ -250,11 +262,11 @@ const ChatHubChatViewComponent: React.ForwardRefRenderFunction<ChatHubChatViewRe
 		setLocalPersonaId(fallbackPersonaId)
 	}, [fallbackPersonaId])
 	const displayPersonaId = localPersonaId ?? fallbackPersonaId
-	const [groupParticipantIds, setGroupParticipantIds] = useState<string[]>(() =>
-		displayPersonaId ? [displayPersonaId] : [],
-	)
+	const [groupParticipantIds, setGroupParticipantIds] = useState<string[]>([])
+	const [hasExplicitRoster, setHasExplicitRoster] = useState(false)
 	const [mutedParticipantIds, setMutedParticipantIds] = useState<string[]>([])
 	const [priorityParticipantIds, setPriorityParticipantIds] = useState<string[]>([])
+	const lastRosterSyncRef = useRef<{ mode: "auto" | "explicit"; ids: string[] } | undefined>(undefined)
 
 	const activeParticipantIds = useMemo(() => {
 		const validIds = new Set(companyEmployees.map((employee) => employee.id))
@@ -273,94 +285,125 @@ const ChatHubChatViewComponent: React.ForwardRefRenderFunction<ChatHubChatViewRe
 	const activeCompanyResolvedId = activeCompany?.id
 	const hasCompanies = companies.length > 0
 	const selectedCompanyId = activeCompanyResolvedId ?? (hasCompanies ? (companies[0]?.id ?? "") : "")
-const hasPersonaOptions = !!(
-	activeCompanyResolvedId &&
-	companyEmployees.length > 0 &&
-	displayPersonaId &&
-	!isGroupConversation
-)
-const [resumeAgentId, setResumeAgentId] = useState<string>("")
-const holdMode = conversationHoldState?.mode ?? "idle"
-const isManualHoldActive = holdMode === "manual_hold"
-const orchestratedPrimaryAgents = useMemo(() => {
-	const idToAgent = new Map(conversationAgents.map((agent) => [agent.id, agent]))
-	return (lastOrchestratorAnalysis?.primarySpeakers ?? []).map(
-		(agent) => idToAgent.get(agent.id)?.name ?? agent.label ?? agent.id,
+	const hasPersonaOptions = !!(
+		activeCompanyResolvedId &&
+		companyEmployees.length > 0 &&
+		displayPersonaId &&
+		!isGroupConversation
 	)
-}, [conversationAgents, lastOrchestratorAnalysis])
-const holdBannerCopy = useMemo(() => {
-	if (isManualHoldActive) {
-		const agentList = orchestratedPrimaryAgents.length
-			? orchestratedPrimaryAgents.join(", ")
-			: t("chatsHub.hold.waitingParticipants", { defaultValue: "participants" })
-		return t("chatsHub.hold.manual", {
-			defaultValue: "Conversation paused. Queued responses from {{agents}}.",
-			agents: agentList,
+	const [resumeAgentId, setResumeAgentId] = useState<string>("")
+	const holdMode = conversationHoldState?.mode ?? "idle"
+	const isManualHoldActive = holdMode === "manual_hold"
+	const orchestratedPrimaryAgents = useMemo(() => {
+		const idToAgent = new Map(conversationAgents.map((agent) => [agent.id, agent]))
+		return (lastOrchestratorAnalysis?.primarySpeakers ?? []).map(
+			(agent) => idToAgent.get(agent.id)?.name ?? agent.label ?? agent.id,
+		)
+	}, [conversationAgents, lastOrchestratorAnalysis])
+
+	const participantDisplayNameById = useMemo(() => {
+		return conversationAgents.reduce(
+			(accumulator, agent) => {
+				if (agent.name) {
+					accumulator[agent.id] = agent.name
+				}
+				return accumulator
+			},
+			{} as Record<string, string>,
+		)
+	}, [conversationAgents])
+	const holdBannerCopy = useMemo(() => {
+		if (isManualHoldActive) {
+			const agentList = orchestratedPrimaryAgents.length
+				? orchestratedPrimaryAgents.join(", ")
+				: t("chatsHub.hold.waitingParticipants", { defaultValue: "participants" })
+			return t("chatsHub.hold.manual", {
+				defaultValue: "Conversation paused. Queued responses from {{agents}}.",
+				agents: agentList,
+			})
+		}
+		if (holdMode === "ingest_hold") {
+			return t("chatsHub.hold.ingest", {
+				defaultValue: "Processing your message. Agents will resume shortly.",
+			})
+		}
+		if (holdMode === "responding") {
+			return t("chatsHub.hold.responding", {
+				defaultValue: "Resuming orchestrated responses…",
+			})
+		}
+		return undefined
+	}, [isManualHoldActive, orchestratedPrimaryAgents, holdMode, t])
+	useEffect(() => {
+		if (!isManualHoldActive) {
+			setResumeAgentId("")
+		}
+	}, [isManualHoldActive])
+	const handleHoldToggle = useCallback(() => {
+		if (isManualHoldActive) {
+			chatHubDebugLog("webview.handleHoldToggle", {
+				currentMode: holdMode,
+				nextMode: "idle",
+				action: "release_manual_hold",
+				participantIds: groupParticipantIds,
+			})
+			vscode.postMessage({
+				type: "conversationHold",
+				conversationHoldState: { mode: "idle", initiatedBy: "user" },
+			})
+			vscode.postMessage({
+				type: "conversationQueueRelease",
+				queueReleaseRequest: { flushAll: true },
+			})
+			return
+		}
+		chatHubDebugLog("webview.handleHoldToggle", {
+			currentMode: holdMode,
+			nextMode: "manual_hold",
+			action: "activate_manual_hold",
+			participantIds: groupParticipantIds,
 		})
-	}
-	if (holdMode === "ingest_hold") {
-		return t("chatsHub.hold.ingest", {
-			defaultValue: "Processing your message. Agents will resume shortly.",
+		vscode.postMessage({
+			type: "conversationHold",
+			conversationHoldState: { mode: "manual_hold", initiatedBy: "user" },
 		})
-	}
-	if (holdMode === "responding") {
-		return t("chatsHub.hold.responding", {
-			defaultValue: "Resuming orchestrated responses…",
+	}, [groupParticipantIds, holdMode, isManualHoldActive])
+	const handleResumeWith = useCallback(() => {
+		chatHubDebugLog("webview.handleResumeWith", {
+			resumeAgentId,
+			flushAll: !resumeAgentId,
+			participantIds: groupParticipantIds,
 		})
-	}
-	return undefined
-}, [isManualHoldActive, orchestratedPrimaryAgents, holdMode, t])
-useEffect(() => {
-	if (!isManualHoldActive) {
-		setResumeAgentId("")
-	}
-}, [isManualHoldActive])
-const handleHoldToggle = useCallback(() => {
-	if (isManualHoldActive) {
+		vscode.postMessage({
+			type: "conversationQueueRelease",
+			queueReleaseRequest: resumeAgentId ? { agentIds: [resumeAgentId] } : { flushAll: true },
+		})
 		vscode.postMessage({
 			type: "conversationHold",
 			conversationHoldState: { mode: "idle", initiatedBy: "user" },
 		})
-		vscode.postMessage({
-			type: "conversationQueueRelease",
-			queueReleaseRequest: { flushAll: true },
-		})
-		return
-	}
-	vscode.postMessage({
-		type: "conversationHold",
-		conversationHoldState: { mode: "manual_hold", initiatedBy: "user" },
+		setResumeAgentId("")
+	}, [groupParticipantIds, resumeAgentId])
+	const holdHintCopy = t("chatsHub.composer.hint", {
+		defaultValue: "Your message pauses other participants until you finish.",
 	})
-}, [isManualHoldActive])
-const handleResumeWith = useCallback(() => {
-	vscode.postMessage({
-		type: "conversationQueueRelease",
-		queueReleaseRequest: resumeAgentId ? { agentIds: [resumeAgentId] } : { flushAll: true },
-	})
-	vscode.postMessage({
-		type: "conversationHold",
-		conversationHoldState: { mode: "idle", initiatedBy: "user" },
-	})
-	setResumeAgentId("")
-}, [resumeAgentId])
-const holdHintCopy = t("chatsHub.composer.hint", {
-	defaultValue: "Your message pauses other participants until you finish.",
-})
-const recentChatHistory = useMemo(() => (_taskHistory ?? []).slice(0, 5) as HistoryItem[], [_taskHistory])
+	const recentChatHistory = useMemo(() => (_taskHistory ?? []).slice(0, 5) as HistoryItem[], [_taskHistory])
+
+	const autoRosterIds = useMemo(() => {
+		const primary = displayPersonaId ?? companyEmployees[0]?.id
+		return primary ? [primary] : []
+	}, [displayPersonaId, companyEmployees])
 
 	useEffect(() => {
 		const validIds = new Set(companyEmployees.map((employee) => employee.id))
 		setGroupParticipantIds((prev) => {
-			const deduped = Array.from(new Set(prev.filter((id) => validIds.has(id))))
-			if (displayPersonaId && !deduped.includes(displayPersonaId)) {
-				return [displayPersonaId, ...deduped]
+			const filtered = prev.filter((id) => validIds.has(id))
+			if (!hasExplicitRoster) {
+				return arraysEqual(filtered, autoRosterIds) ? filtered : [...autoRosterIds]
 			}
-			if (!deduped.length && displayPersonaId) {
-				return [displayPersonaId]
-			}
-			return deduped
+			return filtered
 		})
-	}, [companyEmployees, displayPersonaId])
+	}, [companyEmployees, autoRosterIds, hasExplicitRoster])
 
 	useEffect(() => {
 		if (!isGroupConversation) {
@@ -383,13 +426,26 @@ const recentChatHistory = useMemo(() => (_taskHistory ?? []).slice(0, 5) as Hist
 	const toggleGroupParticipant = useCallback(
 		(employeeId: string) => {
 			setGroupParticipantIds((prev) => {
-				if (employeeId === displayPersonaId) {
-					return prev
-				}
-				if (prev.includes(employeeId)) {
-					return prev.filter((id) => id !== employeeId)
-				}
-				return [...prev, employeeId]
+				const next = (() => {
+					if (employeeId === displayPersonaId) {
+						return prev
+					}
+					let next: string[]
+					if (prev.includes(employeeId)) {
+						next = prev.filter((id) => id !== employeeId)
+					} else {
+						next = [...prev, employeeId]
+					}
+					setHasExplicitRoster(next.length > 0)
+					return next
+				})()
+				chatHubDebugLog("webview.toggleGroupParticipant", {
+					employeeId,
+					wasSelected: prev.includes(employeeId),
+					nextCount: next.length,
+					turnsExplicit: next.length > 0,
+				})
+				return next
 			})
 		},
 		[displayPersonaId],
@@ -397,6 +453,10 @@ const recentChatHistory = useMemo(() => (_taskHistory ?? []).slice(0, 5) as Hist
 
 	const toggleParticipantMuteState = useCallback(
 		(employeeId: string) => {
+			chatHubDebugLog("webview.toggleParticipantMute", {
+				participantId: employeeId,
+				willMute: !mutedParticipantIds.includes(employeeId),
+			})
 			setMutedParticipantIds((prev) => {
 				if (prev.includes(employeeId)) {
 					return prev.filter((id) => id !== employeeId)
@@ -411,11 +471,15 @@ const recentChatHistory = useMemo(() => (_taskHistory ?? []).slice(0, 5) as Hist
 				},
 			})
 		},
-		[],
+		[mutedParticipantIds],
 	)
 
 	const toggleParticipantPriorityState = useCallback(
 		(employeeId: string) => {
+			chatHubDebugLog("webview.toggleParticipantPriority", {
+				participantId: employeeId,
+				willPrioritize: !priorityParticipantIds.includes(employeeId),
+			})
 			setPriorityParticipantIds((prev) => {
 				if (prev.includes(employeeId)) {
 					return prev.filter((id) => id !== employeeId)
@@ -430,7 +494,7 @@ const recentChatHistory = useMemo(() => (_taskHistory ?? []).slice(0, 5) as Hist
 				},
 			})
 		},
-		[],
+		[priorityParticipantIds],
 	)
 
 	const handleCompanyChange = useCallback(
@@ -577,43 +641,77 @@ const recentChatHistory = useMemo(() => (_taskHistory ?? []).slice(0, 5) as Hist
 	const inputValueRef = useRef(inputValue)
 	const textAreaRef = useRef<HTMLTextAreaElement>(null)
 
-const handleInsertParticipantMention = useCallback(
-	(employeeId: string) => {
-		const employee = companyEmployees.find((entry) => entry.id === employeeId)
-		if (!employee) {
+	const handleInsertParticipantMention = useCallback(
+		(employeeId: string) => {
+			const employee = companyEmployees.find((entry) => entry.id === employeeId)
+			if (!employee) {
+				return
+			}
+
+			chatHubDebugLog("webview.insertParticipantMention", {
+				employeeId,
+				employeeName: employee.name,
+			})
+
+			setInputValue((previous) => {
+				const base = previous ?? ""
+				const mention = `@${employee.name ?? "teammate"}`
+				const needsLeadingSpace = base.length > 0 && !base.endsWith(" ")
+				return `${needsLeadingSpace ? `${base} ` : base}${mention} `
+			})
+			textAreaRef.current?.focus()
+		},
+		[companyEmployees],
+	)
+
+	const handleLaunchConversation = useCallback(() => {
+		if (groupParticipantIds.length > 0) {
+			chatHubDebugLog("webview.launchConversation", {
+				participantIds: groupParticipantIds,
+				displayPersonaId,
+			})
+			const [primaryParticipant, ...additionalParticipants] = groupParticipantIds
+			if (primaryParticipant && primaryParticipant !== displayPersonaId) {
+				handlePersonaChange(primaryParticipant)
+			}
+			additionalParticipants.forEach((participantId) => {
+				if (participantId !== displayPersonaId) {
+					handleInsertParticipantMention(participantId)
+				}
+			})
+		}
+		textAreaRef.current?.focus()
+	}, [displayPersonaId, groupParticipantIds, handleInsertParticipantMention, handlePersonaChange])
+
+	useEffect(() => {
+		const autoPayload = autoRosterIds
+		const payload = hasExplicitRoster ? activeParticipantIds : autoPayload
+		const mode: "auto" | "explicit" = hasExplicitRoster ? "explicit" : "auto"
+		const previous = lastRosterSyncRef.current
+		if (previous && previous.mode === mode && arraysEqual(previous.ids, payload)) {
 			return
 		}
-
-		setInputValue((previous) => {
-			const base = previous ?? ""
-			const mention = `@${employee.name ?? "teammate"}`
-			const needsLeadingSpace = base.length > 0 && !base.endsWith(" ")
-			return `${needsLeadingSpace ? `${base} ` : base}${mention} `
+		chatHubDebugLog("webview.syncParticipants", {
+			mode,
+			participantIds: payload,
+			autoRosterCount: autoRosterIds.length,
+			hasExplicitRoster,
 		})
-		textAreaRef.current?.focus()
-	},
-	[companyEmployees],
-)
-
-const handleLaunchConversation = useCallback(() => {
-	if (groupParticipantIds.length > 0) {
-		const [primaryParticipant, ...additionalParticipants] = groupParticipantIds
-		if (primaryParticipant && primaryParticipant !== displayPersonaId) {
-			handlePersonaChange(primaryParticipant)
+		vscode.postMessage({
+			type: "conversationParticipantControl",
+			payload: {
+				action: "setParticipants",
+				participantIds: payload,
+			},
+		})
+		lastRosterSyncRef.current = { mode, ids: [...payload] }
+		if (!hasExplicitRoster && !arraysEqual(groupParticipantIds, autoRosterIds)) {
+			setGroupParticipantIds(autoRosterIds)
 		}
-		additionalParticipants.forEach((participantId) => {
-			if (participantId !== displayPersonaId) {
-				handleInsertParticipantMention(participantId)
-			}
-		})
-	}
-	textAreaRef.current?.focus()
-}, [
-	displayPersonaId,
-	groupParticipantIds,
-	handleInsertParticipantMention,
-	handlePersonaChange,
-])
+		if (hasExplicitRoster && arraysEqual(activeParticipantIds, autoRosterIds)) {
+			setHasExplicitRoster(false)
+		}
+	}, [activeParticipantIds, hasExplicitRoster, autoRosterIds, groupParticipantIds])
 
 	const activeParticipantEntries = useMemo(
 		() =>
@@ -724,6 +822,7 @@ const handleLaunchConversation = useCallback(() => {
 	// (since it relies on the content of these messages, we are deep comparing. i.e. the button state after hitting button sets enableButtons to false, and this effect otherwise would have to true again even if messages didn't change
 	const lastMessage = useMemo(() => messages.at(-1), [messages])
 	const secondLastMessage = useMemo(() => messages.at(-2), [messages])
+	const messagePair = useMemo(() => ({ lastMessage, secondLastMessage }), [lastMessage, secondLastMessage])
 
 	// Setup sound hooks with use-sound
 	const volume = typeof soundVolume === "number" ? soundVolume : 0.5
@@ -763,6 +862,10 @@ const handleLaunchConversation = useCallback(() => {
 	}
 
 	useDeepCompareEffect(() => {
+		const { lastMessage: currentLastMessage, secondLastMessage: currentSecondLastMessage } = messagePair
+
+		const lastMessage = currentLastMessage
+		const secondLastMessage = currentSecondLastMessage
 		// if last message is an ask, show user ask UI
 		// if user finished a task, then start a new task with a new conversation history since in this moment that the extension is waiting for user response, the user could close the extension and the conversation history would be lost.
 		// basically as long as a task is active, the conversation history will be persisted
@@ -955,7 +1058,7 @@ const handleLaunchConversation = useCallback(() => {
 					break
 			}
 		}
-	}, [lastMessage, secondLastMessage])
+	}, [messagePair])
 
 	useEffect(() => {
 		if (messages.length === 0) {
@@ -1095,14 +1198,36 @@ const handleLaunchConversation = useCallback(() => {
 	 * @param images - Array of image data URLs to send with the message
 	 */
 	const handleSendMessage = useCallback(
-		(text: string, images: string[]) => {
+		(text: string, images: string[], source: "user" | "extension" = "user", clientTurnIdOverride?: string) => {
 			text = text.trim()
 
 			if (text || images.length > 0) {
+				const clientTurnId = clientTurnIdOverride ?? createClientTurnId()
+				const isNewTask = messagesRef.current.length === 0
+				const shouldEchoToExtension = source !== "extension"
+				chatHubDebugLog("webview.handleSendMessage", {
+					source,
+					clientTurnId,
+					textPreview: text.slice(0, 80),
+					imageCount: images.length,
+					sendingDisabled,
+					clineAsk: clineAskRef.current,
+					messageCount: messagesRef.current.length,
+					participantIds: activeParticipantIds,
+					holdMode,
+					isNewTask,
+				})
 				if (sendingDisabled) {
 					try {
-						console.log("queueMessage", text, images)
-						vscode.postMessage({ type: "queueMessage", text, images })
+						chatHubDebugLog("webview.queueMessage", {
+							source,
+							clientTurnId,
+							textPreview: text.slice(0, 80),
+							imageCount: images.length,
+						})
+						if (shouldEchoToExtension) {
+							vscode.postMessage({ type: "queueMessage", text, images, clientTurnId })
+						}
 						setInputValue("")
 						setSelectedImages([])
 					} catch (error) {
@@ -1117,8 +1242,17 @@ const handleLaunchConversation = useCallback(() => {
 				// Mark that user has responded - this prevents any pending auto-approvals.
 				userRespondedRef.current = true
 
-				if (messagesRef.current.length === 0) {
-					vscode.postMessage({ type: "newTask", text, images })
+				if (isNewTask) {
+					chatHubDebugLog("webview.postMessage:newTask", {
+						source,
+						clientTurnId,
+						textPreview: text.slice(0, 80),
+						imageCount: images.length,
+						participantIds: activeParticipantIds,
+					})
+					if (shouldEchoToExtension) {
+						vscode.postMessage({ type: "newTask", text, images, clientTurnId })
+					}
 				} else if (clineAskRef.current) {
 					if (clineAskRef.current === "followup") {
 						markFollowUpAsAnswered()
@@ -1138,24 +1272,53 @@ const handleLaunchConversation = useCallback(() => {
 						case "resume_task":
 						case "resume_completed_task":
 						case "mistake_limit_reached":
-							vscode.postMessage({
-								type: "askResponse",
+							chatHubDebugLog("webview.postMessage:askResponse", {
+								source,
+								clientTurnId,
 								askResponse: "messageResponse",
-								text,
-								images,
+								clineAsk: clineAskRef.current,
+								textPreview: text.slice(0, 80),
+								imageCount: images.length,
+								participantIds: activeParticipantIds,
 							})
+							if (shouldEchoToExtension) {
+								vscode.postMessage({
+									type: "askResponse",
+									askResponse: "messageResponse",
+									text,
+									images,
+									clientTurnId,
+								})
+							}
 							break
 						// There is no other case that a textfield should be enabled.
 					}
 				} else {
 					// This is a new message in an ongoing task.
-					vscode.postMessage({ type: "askResponse", askResponse: "messageResponse", text, images })
+					chatHubDebugLog("webview.postMessage:askResponse", {
+						source,
+						clientTurnId,
+						askResponse: "messageResponse",
+						clineAsk: undefined,
+						textPreview: text.slice(0, 80),
+						imageCount: images.length,
+						participantIds: activeParticipantIds,
+					})
+					if (shouldEchoToExtension) {
+						vscode.postMessage({
+							type: "askResponse",
+							askResponse: "messageResponse",
+							text,
+							images,
+							clientTurnId,
+						})
+					}
 				}
 
 				handleChatReset()
 			}
 		},
-		[handleChatReset, markFollowUpAsAnswered, sendingDisabled], // messagesRef and clineAskRef are stable
+		[activeParticipantIds, handleChatReset, holdMode, markFollowUpAsAnswered, sendingDisabled], // messagesRef and clineAskRef are stable
 	)
 
 	const handleSetChatBoxMessage = useCallback(
@@ -1324,7 +1487,18 @@ const handleLaunchConversation = useCallback(() => {
 							handleChatReset()
 							break
 						case "sendMessage":
-							handleSendMessage(message.text ?? "", message.images ?? [])
+							chatHubDebugLog("webview.invoke:sendMessage", {
+								source: "extension",
+								textPreview: message.text?.slice(0, 80) ?? "",
+								imageCount: message.images?.length ?? 0,
+								clientTurnId: message.clientTurnId,
+							})
+							handleSendMessage(
+								message.text ?? "",
+								message.images ?? [],
+								"extension",
+								message.clientTurnId,
+							)
 							break
 						case "setChatBoxMessage":
 							handleSetChatBoxMessage(message.text ?? "", message.images ?? [])
@@ -2012,8 +2186,8 @@ const handleLaunchConversation = useCallback(() => {
 		}
 	}, [modifiedMessages.length, isStreaming, isHidden])
 
-const basePlaceholder = task ? t("chat:typeMessage") : t("chat:typeTask")
-const placeholderText = `${basePlaceholder} — ${holdHintCopy}`
+	const basePlaceholder = task ? t("chat:typeMessage") : t("chat:typeTask")
+	const placeholderText = `${basePlaceholder} — ${holdHintCopy}`
 
 	const switchToMode = useCallback(
 		(modeSlug: string): void => {
@@ -2451,8 +2625,7 @@ const placeholderText = `${basePlaceholder} — ${holdHintCopy}`
 												onClick={() => {
 													setIsMissionEditing(true)
 													setMissionStatus("idle")
-												}}
-											>
+												}}>
 												{t("kilocode:workplace.editMission", { defaultValue: "Edit" })}
 											</VSCodeButton>
 										)}
@@ -2464,12 +2637,13 @@ const placeholderText = `${basePlaceholder} — ${holdHintCopy}`
 												rows={3}
 												onInput={(event: any) =>
 													setMissionDraft(
-														typeof event?.target?.value === "string" ? event.target.value : "",
+														typeof event?.target?.value === "string"
+															? event.target.value
+															: "",
 													)
 												}
 												placeholder={t("kilocode:workplace.missionPlaceholder", {
-													defaultValue:
-														"Outline the purpose or focus for this conversation.",
+													defaultValue: "Outline the purpose or focus for this conversation.",
 												})}
 											/>
 											<div className="prechat__button-row prechat__mission-actions">
@@ -2492,7 +2666,9 @@ const placeholderText = `${basePlaceholder} — ${holdHintCopy}`
 											</p>
 											{missionStatus === "saved" && (
 												<span className="prechat__status-pill">
-													{t("kilocode:workplace.missionSaved", { defaultValue: "Mission updated" })}
+													{t("kilocode:workplace.missionSaved", {
+														defaultValue: "Mission updated",
+													})}
 												</span>
 											)}
 										</>
@@ -2526,7 +2702,9 @@ const placeholderText = `${basePlaceholder} — ${holdHintCopy}`
 								</div>
 								<div className="prechat__participants">
 									<span className="prechat__label">
-										{t("chatsHub.prechat.participantsLabel", { defaultValue: "People in the space" })}
+										{t("chatsHub.prechat.participantsLabel", {
+											defaultValue: "People in the space",
+										})}
 									</span>
 									<div className="prechat__chip-row">
 										{hasActiveParticipants ? (
@@ -2538,7 +2716,9 @@ const placeholderText = `${basePlaceholder} — ${holdHintCopy}`
 													<span className="prechat__chip-text">
 														<span className="prechat__chip-name">{participant.name}</span>
 														{participant.role && (
-															<span className="prechat__chip-role">{participant.role}</span>
+															<span className="prechat__chip-role">
+																{participant.role}
+															</span>
 														)}
 													</span>
 													{participant.id !== displayPersonaId && (
@@ -2549,14 +2729,19 @@ const placeholderText = `${basePlaceholder} — ${holdHintCopy}`
 															aria-label={t("chatsHub.prechat.removeParticipant", {
 																defaultValue: "Remove participant",
 															})}>
-															<span className="codicon codicon-close" aria-hidden="true" />
+															<span
+																className="codicon codicon-close"
+																aria-hidden="true"
+															/>
 														</button>
 													)}
 												</div>
 											))
 										) : (
 											<span className="prechat__empty-copy">
-												{t("chatsHub.participants.placeholder", { defaultValue: "No participants selected yet." })}
+												{t("chatsHub.participants.placeholder", {
+													defaultValue: "No participants selected yet.",
+												})}
 											</span>
 										)}
 										<div className="prechat__add-wrapper" ref={addMenuRef}>
@@ -2566,7 +2751,9 @@ const placeholderText = `${basePlaceholder} — ${holdHintCopy}`
 												disabled={!hasSelectableEmployees}
 												onClick={() => setIsAddMenuOpen((open) => !open)}>
 												<span className="codicon codicon-person-add" aria-hidden="true"></span>
-												<span>{t("chatsHub.prechat.addParticipant", { defaultValue: "Add" })}</span>
+												<span>
+													{t("chatsHub.prechat.addParticipant", { defaultValue: "Add" })}
+												</span>
 											</button>
 											{isAddMenuOpen && hasSelectableEmployees && (
 												<div className="prechat__add-menu">
@@ -2579,12 +2766,19 @@ const placeholderText = `${basePlaceholder} — ${holdHintCopy}`
 																	onClick={() => {
 																		toggleGroupParticipant(employee.id)
 																		setIsAddMenuOpen(false)
-																	}}
-																>
-																	<span className="prechat__add-avatar">{employee.name?.[0]?.toUpperCase() ?? "?"}</span>
+																	}}>
+																	<span className="prechat__add-avatar">
+																		{employee.name?.[0]?.toUpperCase() ?? "?"}
+																	</span>
 																	<span className="prechat__add-text">
-																		<span className="prechat__add-name">{employee.name}</span>
-																		{employee.role && <span className="prechat__add-role">{employee.role}</span>}
+																		<span className="prechat__add-name">
+																			{employee.name}
+																		</span>
+																		{employee.role && (
+																			<span className="prechat__add-role">
+																				{employee.role}
+																			</span>
+																		)}
 																	</span>
 																</button>
 															</li>
@@ -2622,13 +2816,17 @@ const placeholderText = `${basePlaceholder} — ${holdHintCopy}`
 										<span className="prechat__label">
 											{t("chatsHub.prechat.recommended", { defaultValue: "Recommended voices" })}
 										</span>
-										<span className="prechat__meta-value">{orchestratedPrimaryAgents.join(", ")}</span>
+										<span className="prechat__meta-value">
+											{orchestratedPrimaryAgents.join(", ")}
+										</span>
 									</div>
 								)}
 								{hasSuggestedCollaborators && (
 									<div className="prechat__suggestions prechat__suggestions--inline">
 										<span className="prechat__label">
-											{t("chatsHub.prechat.suggestedTitle", { defaultValue: "Suggested collaborators" })}
+											{t("chatsHub.prechat.suggestedTitle", {
+												defaultValue: "Suggested collaborators",
+											})}
 										</span>
 										<div className="prechat__suggestion-row">
 											{suggestedCollaborators.map((employee) => (
@@ -2637,11 +2835,15 @@ const placeholderText = `${basePlaceholder} — ${holdHintCopy}`
 													type="button"
 													className="prechat__suggestion-chip"
 													onClick={() => toggleGroupParticipant(employee.id)}>
-													<span className="prechat__suggestion-avatar">{employee.name?.[0]?.toUpperCase() ?? "?"}</span>
+													<span className="prechat__suggestion-avatar">
+														{employee.name?.[0]?.toUpperCase() ?? "?"}
+													</span>
 													<span className="prechat__suggestion-meta">
 														<span className="prechat__person-name">{employee.name}</span>
 														{employee.role && (
-															<span className="prechat__person-role">{employee.role}</span>
+															<span className="prechat__person-role">
+																{employee.role}
+															</span>
 														)}
 													</span>
 												</button>
@@ -2690,8 +2892,7 @@ const placeholderText = `${basePlaceholder} — ${holdHintCopy}`
 							) : (
 								<p className="prechat__empty-copy">
 									{t("chatsHub.recent.empty", {
-										defaultValue:
-											"No conversations yet. Your next briefing will show up here.",
+										defaultValue: "No conversations yet. Your next briefing will show up here.",
 									})}
 								</p>
 							)}
@@ -2700,7 +2901,306 @@ const placeholderText = `${basePlaceholder} — ${holdHintCopy}`
 				</section>
 			</div>
 		</div>
-	);
+	)
+
+	const composerBody = (
+		<>
+			<QueuedMessages
+				queue={messageQueue}
+				onRemove={(index: number) => {
+					if (messageQueue[index]) {
+						vscode.postMessage({ type: "removeQueuedMessage", text: messageQueue[index].id })
+					}
+				}}
+				onUpdate={(index: number, newText: string) => {
+					if (messageQueue[index]) {
+						vscode.postMessage({
+							type: "editQueuedMessage",
+							payload: { id: messageQueue[index].id, text: newText, images: messageQueue[index].images },
+						})
+					}
+				}}
+			/>
+			<div className="flex flex-col gap-2 rounded-lg border border-[color-mix(in_srgb,var(--vscode-panel-border)_28%,transparent)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_88%,transparent)] px-3 py-2 text-[11px] text-[color-mix(in_srgb,var(--vscode-descriptionForeground)_90%,transparent)]">
+				<div className="flex flex-wrap items-center justify-between gap-2">
+					<span>{holdHintCopy}</span>
+					<VSCodeButton appearance={isManualHoldActive ? "primary" : "secondary"} onClick={handleHoldToggle}>
+						{isManualHoldActive
+							? t("chatsHub.hold.resumeAll", { defaultValue: "Resume All" })
+							: t("chatsHub.hold.holdAll", { defaultValue: "Hold All" })}
+					</VSCodeButton>
+				</div>
+				{holdMode !== "idle" && holdBannerCopy && (
+					<div className="flex flex-col gap-2 rounded-md border border-[color-mix(in_srgb,var(--vscode-panel-border)_40%,transparent)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_94%,transparent)] px-3 py-2">
+						<span>{holdBannerCopy}</span>
+						{isManualHoldActive && (
+							<div className="flex flex-wrap items-center gap-2">
+								<VSCodeDropdown
+									value={resumeAgentId}
+									onChange={(event: any) => {
+										const nextValue =
+											typeof event?.target?.value === "string" ? event.target.value : ""
+										setResumeAgentId(nextValue)
+									}}
+									className="min-w-[160px]">
+									<VSCodeOption value="">
+										{t("chatsHub.hold.resumeAllOption", { defaultValue: "All participants" })}
+									</VSCodeOption>
+									{conversationAgents.map((agent) => (
+										<VSCodeOption key={agent.id} value={agent.id}>
+											{agent.name}
+										</VSCodeOption>
+									))}
+								</VSCodeDropdown>
+								<VSCodeButton appearance="secondary" onClick={handleResumeWith}>
+									{resumeAgentId
+										? t("chatsHub.hold.resumeWith", { defaultValue: "Resume With" })
+										: t("chatsHub.hold.resume", { defaultValue: "Resume" })}
+								</VSCodeButton>
+							</div>
+						)}
+					</div>
+				)}
+			</div>
+			<ChatTextArea
+				ref={textAreaRef}
+				inputValue={inputValue}
+				setInputValue={setInputValue}
+				sendingDisabled={sendingDisabled || isProfileDisabled}
+				selectApiConfigDisabled={sendingDisabled && clineAsk !== "api_req_failed"}
+				placeholderText={placeholderText}
+				selectedImages={selectedImages}
+				setSelectedImages={setSelectedImages}
+				onSend={() => handleSendMessage(inputValue, selectedImages)}
+				onSelectImages={selectImages}
+				shouldDisableImages={shouldDisableImages}
+				onHeightChange={() => {
+					if (isAtBottom) {
+						scrollToBottomAuto()
+					}
+				}}
+				mode={mode}
+				setMode={setMode}
+				modeShortcutText={modeShortcutText}
+			/>
+			<BottomControls showApiConfig />
+		</>
+	)
+
+	let primaryView: React.ReactNode
+	let prechatComposer: React.ReactNode | null = null
+
+	if (task) {
+		const personaPickerCard = hasPersonaOptions ? (
+			<div className="rounded-xl border border-[color-mix(in_srgb,var(--vscode-panel-border)_35%,transparent)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_88%,transparent)] px-3 py-3 shadow-[0_12px_28px_rgba(0,0,0,0.22)] lg:px-4 lg:py-4">
+				<div className="flex flex-col gap-3">
+					<span className="text-xs font-semibold uppercase tracking-wide text-[var(--vscode-descriptionForeground)]">
+						{t("kilocode:chat.personaPicker.label", { defaultValue: "Speaking with" })}
+					</span>
+					<div className="flex flex-wrap items-center gap-2">
+						<VSCodeDropdown
+							value={displayPersonaId ?? ""}
+							onChange={(event: any) => {
+								const nextId = typeof event?.target?.value === "string" ? event.target.value : undefined
+								if (nextId) {
+									handlePersonaChange(nextId)
+								}
+							}}
+							className="min-w-[180px]">
+							{companyEmployees.map((employee) => (
+								<VSCodeOption key={employee.id} value={employee.id}>
+									{employee.name}
+								</VSCodeOption>
+							))}
+						</VSCodeDropdown>
+						{activePersona && (
+							<StandardTooltip
+								content={
+									activePersona.description ||
+									activePersona.personality ||
+									t("kilocode:chat.personaPicker.noPersonaDetails", {
+										defaultValue: "No persona details provided.",
+									})
+								}>
+								<span className="text-[10px] uppercase tracking-wide text-[color-mix(in_srgb,var(--vscode-descriptionForeground)_85%,transparent)] border border-[color-mix(in_srgb,var(--vscode-descriptionForeground)_35%,transparent)] rounded px-1 py-[2px] truncate max-w-[220px]">
+									{activePersona.role ||
+										t("kilocode:chat.personaPicker.noRole", { defaultValue: "No role set" })}
+								</span>
+							</StandardTooltip>
+						)}
+					</div>
+				</div>
+			</div>
+		) : null
+
+		const rosterPanel = (
+			<GroupParticipantsPanel
+				employees={companyEmployees}
+				selectedIds={activeParticipantIds}
+				activeSpeakerId={displayPersonaId}
+				onToggleParticipant={toggleGroupParticipant}
+				onAddParticipant={(employeeId) => toggleGroupParticipant(employeeId)}
+				onRemoveParticipant={(employeeId) => toggleGroupParticipant(employeeId)}
+				aliasById={participantDisplayNameById}
+				mutedIds={mutedParticipantIds}
+				priorityIds={priorityParticipantIds}
+				onToggleMute={toggleParticipantMuteState}
+				onTogglePriority={toggleParticipantPriorityState}
+			/>
+		)
+
+		const transcriptStack = (
+			<div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+				{hasSystemPromptOverride && (
+					<div className="rounded-xl border border-[color-mix(in_srgb,var(--vscode-panel-border)_32%,transparent)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_90%,transparent)] px-4 py-3">
+						<SystemPromptWarning />
+					</div>
+				)}
+				{showCheckpointWarning && (
+					<div className="rounded-xl border border-[color-mix(in_srgb,var(--vscode-panel-border)_32%,transparent)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_90%,transparent)] px-4 py-3">
+						<CheckpointWarning />
+					</div>
+				)}
+				<div className="flex min-h-0 flex-1 flex-col">
+					<div className="flex grow overflow-hidden" ref={scrollContainerRef}>
+						<Virtuoso
+							ref={virtuosoRef}
+							key={task.ts}
+							className="golden-chat-stream scrollable scrollbar-fade grow overflow-y-scroll"
+							increaseViewportBy={{ top: 400, bottom: 400 }}
+							data={groupedMessages}
+							itemContent={itemContent}
+							atBottomStateChange={(isAtBottom: boolean) => {
+								setIsAtBottom(isAtBottom)
+								if (isAtBottom) {
+									disableAutoScrollRef.current = false
+								}
+								setShowScrollToBottom(disableAutoScrollRef.current && !isAtBottom)
+							}}
+							atBottomThreshold={10}
+							initialTopMostItemIndex={groupedMessages.length - 1}
+						/>
+					</div>
+					{areButtonsVisible && (
+						<div
+							className={clsx(
+								"flex w-full flex-wrap items-center gap-2 px-[15px] py-1 transition-opacity sm:h-9 sm:flex-nowrap sm:py-0",
+								showScrollToBottom ? "justify-center" : "justify-end",
+								showScrollToBottom || enableButtons || (isStreaming && !didClickCancel)
+									? "opacity-100"
+									: "opacity-50",
+							)}>
+							{showScrollToBottom ? (
+								<StandardTooltip content={t("chat:scrollToBottom")}>
+									<VSCodeButton
+										appearance="secondary"
+										className="flex-[2]"
+										onClick={() => {
+											scrollToBottomSmooth()
+											disableAutoScrollRef.current = false
+										}}>
+										<span className="codicon codicon-chevron-down"></span>
+									</VSCodeButton>
+								</StandardTooltip>
+							) : (
+								<>
+									{primaryButtonText && !isStreaming && (
+										<StandardTooltip
+											content={
+												primaryButtonText === t("chat:retry.title")
+													? t("chat:retry.tooltip")
+													: primaryButtonText === t("chat:save.title")
+														? t("chat:save.tooltip")
+														: primaryButtonText === t("chat:approve.title")
+															? t("chat:approve.tooltip")
+															: primaryButtonText === t("chat:runCommand.title")
+																? t("chat:runCommand.tooltip")
+																: primaryButtonText === t("chat:startNewTask.title")
+																	? t("chat:startNewTask.tooltip")
+																	: primaryButtonText === t("chat:resumeTask.title")
+																		? t("chat:resumeTask.tooltip")
+																		: primaryButtonText ===
+																			  t("chat:proceedAnyways.title")
+																			? t("chat:proceedAnyways.tooltip")
+																			: primaryButtonText ===
+																				  t("chat:proceedWhileRunning.title")
+																				? t("chat:proceedWhileRunning.tooltip")
+																				: undefined
+											}>
+											<VSCodeButton
+												appearance={primaryButtonIsStartNewTask ? "secondary" : "primary"}
+												disabled={!enableButtons}
+												className={primaryButtonClassName}
+												onClick={() => handlePrimaryButtonClick(inputValue, selectedImages)}>
+												{primaryButtonText}
+											</VSCodeButton>
+										</StandardTooltip>
+									)}
+									{(secondaryButtonText || isStreaming) && (
+										<StandardTooltip
+											content={
+												isStreaming
+													? t("chat:cancel.tooltip")
+													: secondaryButtonText === t("chat:startNewTask.title")
+														? t("chat:startNewTask.tooltip")
+														: secondaryButtonText === t("chat:reject.title")
+															? t("chat:reject.tooltip")
+															: secondaryButtonText === t("chat:terminate.title")
+																? t("chat:terminate.tooltip")
+																: undefined
+											}>
+											<VSCodeButton
+												appearance="secondary"
+												disabled={!enableButtons && !(isStreaming && !didClickCancel)}
+												className={secondaryButtonClassName}
+												onClick={() => handleSecondaryButtonClick(inputValue, selectedImages)}>
+												{isStreaming ? t("chat:cancel.title") : secondaryButtonText}
+											</VSCodeButton>
+										</StandardTooltip>
+									)}
+								</>
+							)}
+						</div>
+					)}
+				</div>
+			</div>
+		)
+
+		primaryView = (
+			<GroupThreadLayout
+				className="px-3 pb-3"
+				header={
+					<KiloTaskHeader
+						task={task}
+						tokensIn={apiMetrics.totalTokensIn}
+						tokensOut={apiMetrics.totalTokensOut}
+						cacheWrites={apiMetrics.totalCacheWrites}
+						cacheReads={apiMetrics.totalCacheReads}
+						totalCost={apiMetrics.totalCost}
+						contextTokens={apiMetrics.contextTokens}
+						buttonsDisabled={sendingDisabled}
+						handleCondenseContext={handleCondenseContext}
+						onClose={handleTaskCloseButtonClick}
+						groupedMessages={groupedMessages}
+						onMessageClick={handleMessageClick}
+						isTaskActive={sendingDisabled}
+						todos={latestTodos}
+					/>
+				}
+				topStack={personaPickerCard}
+				roster={rosterPanel}
+				transcript={transcriptStack}
+				composer={composerBody}
+			/>
+		)
+	} else {
+		primaryView = prechatContent
+		prechatComposer = (
+			<div className="flex flex-col gap-3 border-t border-[color-mix(in_srgb,var(--vscode-panel-border)_25%,transparent)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_94%,transparent)] px-3 pb-4 pt-3">
+				{composerBody}
+			</div>
+		)
+	}
 
 	return (
 		<div
@@ -2722,301 +3222,15 @@ const placeholderText = `${basePlaceholder} — ${holdHintCopy}`
 					}}
 				/>
 			)}
-			<div className="flex flex-1 min-h-0 flex-col overflow-hidden">
-				{task ? (
-					<div className="flex flex-1 min-h-0 flex-col gap-3 px-3 pb-3 lg:flex-row lg:gap-4">
-						<div className="flex flex-1 min-h-0 flex-col gap-3 overflow-hidden">
-							<KiloTaskHeader
-								task={task}
-								tokensIn={apiMetrics.totalTokensIn}
-								tokensOut={apiMetrics.totalTokensOut}
-								cacheWrites={apiMetrics.totalCacheWrites}
-								cacheReads={apiMetrics.totalCacheReads}
-								totalCost={apiMetrics.totalCost}
-								contextTokens={apiMetrics.contextTokens}
-								buttonsDisabled={sendingDisabled}
-								handleCondenseContext={handleCondenseContext}
-								onClose={handleTaskCloseButtonClick}
-								groupedMessages={groupedMessages}
-								onMessageClick={handleMessageClick}
-								isTaskActive={sendingDisabled}
-								todos={latestTodos}
-							/>
-							{hasPersonaOptions && (
-								<div className="rounded-xl border border-[color-mix(in_srgb,var(--vscode-panel-border)_35%,transparent)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_88%,transparent)] px-3 py-3 shadow-[0_12px_28px_rgba(0,0,0,0.22)] lg:px-4 lg:py-4">
-									<div className="flex flex-col gap-3">
-										<span className="text-xs font-semibold uppercase tracking-wide text-[var(--vscode-descriptionForeground)]">
-											{t("kilocode:chat.personaPicker.label", { defaultValue: "Speaking with" })}
-										</span>
-										<div className="flex flex-wrap items-center gap-2">
-											<VSCodeDropdown
-												value={displayPersonaId ?? ""}
-												onChange={(event: any) => {
-													const nextId =
-													typeof event?.target?.value === "string"
-														? event.target.value
-														: undefined
-												if (nextId) {
-													handlePersonaChange(nextId)
-												}
-											}}
-											className="min-w-[180px]">
-											{companyEmployees.map((employee) => (
-												<VSCodeOption key={employee.id} value={employee.id}>
-													{employee.name}
-												</VSCodeOption>
-											))}
-											</VSCodeDropdown>
-											{activePersona && (
-												<StandardTooltip
-													content={
-														activePersona.description ||
-														activePersona.personality ||
-														t("kilocode:chat.personaPicker.noPersonaDetails", {
-															defaultValue: "No persona details provided.",
-														})
-												}>
-													<span className="text-[10px] uppercase tracking-wide text-[color-mix(in_srgb,var(--vscode-descriptionForeground)_85%,transparent)] border border-[color-mix(in_srgb,var(--vscode-descriptionForeground)_35%,transparent)] rounded px-1 py-[2px] truncate max-w-[220px]">
-														{activePersona.role ||
-															t("kilocode:chat.personaPicker.noRole", {
-															defaultValue: "No role set",
-														})}
-													</span>
-												</StandardTooltip>
-											)}
-										</div>
-									</div>
-								</div>
-							)}
-							<div className="lg:hidden">
-								<GroupParticipantsPanel
-									employees={companyEmployees}
-									selectedIds={activeParticipantIds}
-									activeSpeakerId={displayPersonaId}
-									onToggleParticipant={toggleGroupParticipant}
-									mutedIds={mutedParticipantIds}
-									priorityIds={priorityParticipantIds}
-									onToggleMute={toggleParticipantMuteState}
-									onTogglePriority={toggleParticipantPriorityState}
-								/>
-							</div>
+			<div className="flex flex-1 min-h-0 flex-col overflow-hidden">{primaryView}</div>
 
-							{hasSystemPromptOverride && (
-								<div className="rounded-xl border border-[color-mix(in_srgb,var(--vscode-panel-border)_32%,transparent)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_90%,transparent)] px-4 py-3">
-									<SystemPromptWarning />
-								</div>
-							)}
-
-							{showCheckpointWarning && (
-								<div className="rounded-xl border border-[color-mix(in_srgb,var(--vscode-panel-border)_32%,transparent)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_90%,transparent)] px-4 py-3">
-									<CheckpointWarning />
-								</div>
-							)}
-							<div className="grow flex golden-chat-stream-container" ref={scrollContainerRef}>
-								<Virtuoso
-									ref={virtuosoRef}
-									key={task.ts}
-									className="golden-chat-stream scrollable scrollbar-fade grow overflow-y-scroll"
-									increaseViewportBy={{ top: 400, bottom: 400 }}
-									data={groupedMessages}
-									itemContent={itemContent}
-									atBottomStateChange={(isAtBottom: boolean) => {
-										setIsAtBottom(isAtBottom)
-										if (isAtBottom) {
-											disableAutoScrollRef.current = false
-										}
-										setShowScrollToBottom(disableAutoScrollRef.current && !isAtBottom)
-									}}
-									atBottomThreshold={10}
-									initialTopMostItemIndex={groupedMessages.length - 1}
-								/>
-							</div>
-							{areButtonsVisible && (
-								<div
-									className={`flex h-9 items-center px-[15px] ${
-										showScrollToBottom
-											? "opacity-100"
-											: enableButtons || (isStreaming && !didClickCancel)
-												? "opacity-100"
-												: "opacity-50"
-										}`}>
-									{showScrollToBottom ? (
-										<StandardTooltip content={t("chat:scrollToBottom")}>
-											<VSCodeButton
-												appearance="secondary"
-												className="flex-[2]"
-												onClick={() => {
-													scrollToBottomSmooth()
-													disableAutoScrollRef.current = false
-												}}>
-												<span className="codicon codicon-chevron-down"></span>
-											</VSCodeButton>
-										</StandardTooltip>
-									) : (
-										<>
-											{primaryButtonText && !isStreaming && (
-												<StandardTooltip
-													content={
-														primaryButtonText === t("chat:retry.title")
-															? t("chat:retry.tooltip")
-														: primaryButtonText === t("chat:save.title")
-															? t("chat:save.tooltip")
-															: primaryButtonText === t("chat:approve.title")
-																? t("chat:approve.tooltip")
-																: primaryButtonText === t("chat:runCommand.title")
-																	? t("chat:runCommand.tooltip")
-																: primaryButtonText === t("chat:startNewTask.title")
-																		? t("chat:startNewTask.tooltip")
-																		: primaryButtonText === t("chat:resumeTask.title")
-																			? t("chat:resumeTask.tooltip")
-																			: primaryButtonText === t("chat:proceedAnyways.title")
-																				? t("chat:proceedAnyways.tooltip")
-																				: primaryButtonText === t("chat:proceedWhileRunning.title")
-																					? t("chat:proceedWhileRunning.tooltip")
-																					: undefined
-													}>
-												<VSCodeButton
-													appearance={primaryButtonIsStartNewTask ? "secondary" : "primary"}
-													disabled={!enableButtons}
-													className={primaryButtonClassName}
-													onClick={() => handlePrimaryButtonClick(inputValue, selectedImages)}>
-													{primaryButtonText}
-												</VSCodeButton>
-											</StandardTooltip>
-											)}
-											{(secondaryButtonText || isStreaming) && (
-												<StandardTooltip
-													content={
-														isStreaming
-															? t("chat:cancel.tooltip")
-														: secondaryButtonText === t("chat:startNewTask.title")
-															? t("chat:startNewTask.tooltip")
-															: secondaryButtonText === t("chat:reject.title")
-																? t("chat:reject.tooltip")
-																: secondaryButtonText === t("chat:terminate.title")
-																	? t("chat:terminate.tooltip")
-																	: undefined
-													}>
-												<VSCodeButton
-													appearance="secondary"
-													disabled={!enableButtons && !(isStreaming && !didClickCancel)}
-													className={secondaryButtonClassName}
-													onClick={() => handleSecondaryButtonClick(inputValue, selectedImages)}>
-													{isStreaming ? t("chat:cancel.title") : secondaryButtonText}
-												</VSCodeButton>
-											</StandardTooltip>
-											)}
-										</>
-									)}
-								</div>
-							)}
-						</div>
-						<aside className="hidden flex-shrink-0 lg:flex lg:w-72 xl:w-80">
-							<div className="flex w-full flex-col gap-3">
-								<GroupParticipantsPanel
-									employees={companyEmployees}
-									selectedIds={activeParticipantIds}
-									activeSpeakerId={displayPersonaId}
-									onToggleParticipant={toggleGroupParticipant}
-									mutedIds={mutedParticipantIds}
-									priorityIds={priorityParticipantIds}
-									onToggleMute={toggleParticipantMuteState}
-									onTogglePriority={toggleParticipantPriorityState}
-								/>
-							</div>
-						</aside>
-					</div>
-				) : (
-					prechatContent
-				)}
-			</div>
-
-			<footer className="flex flex-col gap-3 border-t border-[color-mix(in_srgb,var(--vscode-panel-border)_25%,transparent)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_94%,transparent)] px-3 pb-4 pt-3">
-				<QueuedMessages
-					queue={messageQueue}
-					onRemove={(index: number) => {
-						if (messageQueue[index]) {
-							vscode.postMessage({ type: "removeQueuedMessage", text: messageQueue[index].id })
-						}
-					}}
-					onUpdate={(index: number, newText: string) => {
-						if (messageQueue[index]) {
-							vscode.postMessage({
-								type: "editQueuedMessage",
-								payload: { id: messageQueue[index].id, text: newText, images: messageQueue[index].images },
-							})
-						}
-					}}
-				/>
-				<div className="flex flex-col gap-2 rounded-lg border border-[color-mix(in_srgb,var(--vscode-panel-border)_28%,transparent)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_88%,transparent)] px-3 py-2 text-[11px] text-[color-mix(in_srgb,var(--vscode-descriptionForeground)_90%,transparent)]">
-					<div className="flex flex-wrap items-center justify-between gap-2">
-						<span>{holdHintCopy}</span>
-						<VSCodeButton appearance={isManualHoldActive ? "primary" : "secondary"} onClick={handleHoldToggle}>
-							{isManualHoldActive
-								? t("chatsHub.hold.resumeAll", { defaultValue: "Resume All" })
-								: t("chatsHub.hold.holdAll", { defaultValue: "Hold All" })}
-						</VSCodeButton>
-					</div>
-					{holdMode !== "idle" && holdBannerCopy && (
-						<div className="flex flex-col gap-2 rounded-md border border-[color-mix(in_srgb,var(--vscode-panel-border)_40%,transparent)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_94%,transparent)] px-3 py-2">
-							<span>{holdBannerCopy}</span>
-							{isManualHoldActive && (
-								<div className="flex flex-wrap items-center gap-2">
-									<VSCodeDropdown
-										value={resumeAgentId}
-										onChange={(event: any) => {
-											const nextValue = typeof event?.target?.value === "string" ? event.target.value : ""
-											setResumeAgentId(nextValue)
-										}}
-										className="min-w-[160px]">
-										<VSCodeOption value="">
-											{t("chatsHub.hold.resumeAllOption", { defaultValue: "All participants" })}
-										</VSCodeOption>
-										{conversationAgents.map((agent) => (
-											<VSCodeOption key={agent.id} value={agent.id}>
-												{agent.name}
-											</VSCodeOption>
-										))}
-									</VSCodeDropdown>
-									<VSCodeButton appearance="secondary" onClick={handleResumeWith}>
-										{resumeAgentId
-											? t("chatsHub.hold.resumeWith", { defaultValue: "Resume With" })
-											: t("chatsHub.hold.resume", { defaultValue: "Resume" })}
-									</VSCodeButton>
-								</div>
-							)}
-						</div>
-					)}
-				</div>
-				<ChatTextArea
-					ref={textAreaRef}
-					inputValue={inputValue}
-					setInputValue={setInputValue}
-					sendingDisabled={sendingDisabled || isProfileDisabled}
-					selectApiConfigDisabled={sendingDisabled && clineAsk !== "api_req_failed"}
-					placeholderText={placeholderText}
-					selectedImages={selectedImages}
-					setSelectedImages={setSelectedImages}
-					onSend={() => handleSendMessage(inputValue, selectedImages)}
-					onSelectImages={selectImages}
-					shouldDisableImages={shouldDisableImages}
-					onHeightChange={() => {
-						if (isAtBottom) {
-							scrollToBottomAuto()
-						}
-					}}
-					mode={mode}
-					setMode={setMode}
-					modeShortcutText={modeShortcutText}
-				/>
-				<BottomControls showApiConfig />
-			</footer>
+			{prechatComposer}
 
 			{/* kilocode_change: disable {isProfileDisabled && (
-				<div className="px-3">
-					<ProfileViolationWarning />
-				</div>
-			)} */}
+			<div className="px-3">
+				<ProfileViolationWarning />
+			</div>
+		)} */}
 
 			<div id="roo-portal" />
 		</div>

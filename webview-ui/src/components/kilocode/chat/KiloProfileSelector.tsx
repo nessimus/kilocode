@@ -19,6 +19,7 @@ interface KiloProfileSelectorProps {
 	togglePinnedApiConfig: (configId: string) => void
 	selectApiConfigDisabled?: boolean
 	initiallyOpen?: boolean
+	portalContainerId?: string
 }
 
 export const KiloProfileSelector = ({
@@ -30,6 +31,7 @@ export const KiloProfileSelector = ({
 	togglePinnedApiConfig,
 	selectApiConfigDisabled = false,
 	initiallyOpen = false,
+	portalContainerId,
 }: KiloProfileSelectorProps) => {
 	const { t } = useAppTranslation()
 
@@ -47,6 +49,7 @@ export const KiloProfileSelector = ({
 				disableSearch={false}
 				placeholder={displayName}
 				initiallyOpen={initiallyOpen}
+				portalContainerId={portalContainerId}
 				options={[
 					// Pinned items first.
 					...(listApiConfigMeta || [])

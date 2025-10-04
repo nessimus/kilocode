@@ -18,6 +18,11 @@ import {
 	OrchestratorAnalysis,
 	ConversationAgent,
 	OrchestratorTimelineEvent,
+	FileCabinetSnapshot,
+	FileCabinetCreateFolderRequest,
+	FileCabinetCreateFileRequest,
+	FileCabinetPreview,
+	FileCabinetWriteRequest,
 } from "@roo-code/types"
 
 import {
@@ -36,8 +41,17 @@ import { experimentDefault } from "@roo/experiments"
 import { RouterModels } from "@roo/api"
 import { McpMarketplaceCatalog } from "../../../src/shared/kilocode/mcp" // kilocode_change
 import { defaultOuterGateState, type OuterGateInsightUpdate } from "@roo/golden/outerGate"
+import type { HubSnapshot, HubAgentBlueprint, HubSettingsUpdate } from "@roo/hub"
 
 import { vscode } from "@src/utils/vscode"
+import { chatHubDebugLog } from "@/utils/chatHubLogging"
+
+const buildFilePreviewKey = (companyId?: string, path?: string) => {
+	if (!companyId || !path) {
+		return undefined
+	}
+	return `${companyId}::${path}`
+}
 import { convertTextMateToHljs } from "@src/utils/textMateToHljs"
 import { ClineRulesToggles } from "@roo/cline-rules" // kilocode_change
 import type {
@@ -81,6 +95,13 @@ export interface ExtensionStateContextType extends ExtensionState {
 	browserInteractionStrategy?: BrowserInteractionStrategy
 	setBrowserInteractionStrategy: (value: BrowserInteractionStrategy) => void
 	browserStreamFrames: Record<string, BrowserStreamFrame>
+	hubSnapshot?: HubSnapshot
+	createHubRoom: (title?: string, options?: { autonomous?: boolean; participants?: HubAgentBlueprint[] }) => void
+	setActiveHubRoom: (roomId: string) => void
+	sendHubMessage: (roomId: string, text: string) => void
+	addHubAgent: (roomId: string, agent: HubAgentBlueprint) => void
+	removeHubParticipant: (roomId: string, participantId: string) => void
+	updateHubSettings: (roomId: string, settings: HubSettingsUpdate) => void
 	endlessSurface?: EndlessSurfaceClientState
 	hoveringTaskTimeline?: boolean // kilocode_change
 	setHoveringTaskTimeline: (value: boolean) => void // kilocode_change
@@ -236,6 +257,20 @@ export interface ExtensionStateContextType extends ExtensionState {
 	includeTaskHistoryInEnhance?: boolean
 	setIncludeTaskHistoryInEnhance: (value: boolean) => void
 	workplaceState: WorkplaceState
+	fileCabinetSnapshot?: FileCabinetSnapshot
+	isFileCabinetLoading: boolean
+	fileCabinetError?: string
+	fileCabinetPreviews: Record<string, FileCabinetPreview | undefined>
+	fileCabinetPreviewLoading: Record<string, boolean>
+	fileCabinetPreviewErrors: Record<string, string | undefined>
+	requestFileCabinetSnapshot: (companyId?: string) => void
+	createFileCabinetFolder: (payload: FileCabinetCreateFolderRequest) => void
+	createFileCabinetFile: (payload: FileCabinetCreateFileRequest) => void
+	requestFileCabinetPreview: (companyId: string, path: string) => void
+	writeFileCabinetFile: (payload: FileCabinetWriteRequest) => void
+	openFileCabinetFolder: (companyId: string, path?: string) => void
+	lastCreatedFile?: { companyId: string; path: string; fileName?: string }
+	clearLastCreatedFile: () => void
 	createCompany: (payload: CreateCompanyPayload) => void
 	updateCompany: (payload: UpdateCompanyPayload) => void
 	setCompanyFavorite: (payload: SetCompanyFavoritePayload) => void
@@ -304,13 +339,21 @@ export interface ExtensionStateContextType extends ExtensionState {
 export const ExtensionStateContext = createContext<ExtensionStateContextType | undefined>(undefined)
 
 export const mergeExtensionState = (prevState: ExtensionState, newState: ExtensionState) => {
-	const { customModePrompts: prevCustomModePrompts, experiments: prevExperiments, ...prevRest } = prevState
+	const {
+		customModePrompts: prevCustomModePrompts,
+		experiments: prevExperiments,
+		conversationAgents: prevConversationAgents,
+		lastOrchestratorAnalysis: prevLastOrchestratorAnalysis,
+		...prevRest
+	} = prevState
 
 	const {
 		apiConfiguration,
 		customModePrompts: newCustomModePrompts,
 		customSupportPrompts,
 		experiments: newExperiments,
+		conversationAgents: incomingConversationAgents,
+		lastOrchestratorAnalysis: incomingLastOrchestratorAnalysis,
 		...newRest
 	} = newState
 
@@ -318,9 +361,35 @@ export const mergeExtensionState = (prevState: ExtensionState, newState: Extensi
 	const experiments = { ...prevExperiments, ...newExperiments }
 	const rest = { ...prevRest, ...newRest }
 
+	const shouldPreserveConversationAgents =
+		Array.isArray(incomingConversationAgents) &&
+		incomingConversationAgents.length === 0 &&
+		(prevConversationAgents?.length ?? 0) > 0
+
+	const conversationAgents = (() => {
+		if (incomingConversationAgents === undefined) {
+			return prevConversationAgents ?? []
+		}
+		if (shouldPreserveConversationAgents) {
+			return prevConversationAgents ?? []
+		}
+		return incomingConversationAgents
+	})()
+
+	const lastOrchestratorAnalysis =
+		incomingLastOrchestratorAnalysis === undefined ? prevLastOrchestratorAnalysis : incomingLastOrchestratorAnalysis
+
 	// Note that we completely replace the previous apiConfiguration and customSupportPrompts objects
 	// with new ones since the state that is broadcast is the entire objects so merging is not necessary.
-	return { ...rest, apiConfiguration, customModePrompts, customSupportPrompts, experiments }
+	return {
+		...rest,
+		apiConfiguration,
+		customModePrompts,
+		customSupportPrompts,
+		experiments,
+		conversationAgents,
+		lastOrchestratorAnalysis,
+	}
 }
 
 export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -424,8 +493,9 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		openRouterImageApiKey: "",
 		kiloCodeImageApiKey: "",
 		openRouterImageGenerationSelectedModel: "",
-			workplaceState: { companies: [], ownerProfileDefaults: undefined },
-			workplaceRootConfigured: false,
+		workplaceState: { companies: [], ownerProfileDefaults: undefined },
+		workplaceRootConfigured: false,
+		hubSnapshot: { rooms: [], activeRoomId: undefined },
 		outerGateState: defaultOuterGateState,
 	})
 
@@ -453,6 +523,15 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		global: {},
 	})
 	const [includeTaskHistoryInEnhance, setIncludeTaskHistoryInEnhance] = useState(true)
+	const [fileCabinetSnapshot, setFileCabinetSnapshot] = useState<FileCabinetSnapshot | undefined>(undefined)
+	const [isFileCabinetLoading, setIsFileCabinetLoading] = useState(false)
+	const [fileCabinetError, setFileCabinetError] = useState<string | undefined>(undefined)
+	const [fileCabinetPreviews, setFileCabinetPreviews] = useState<Record<string, FileCabinetPreview | undefined>>({})
+	const [fileCabinetPreviewLoading, setFileCabinetPreviewLoading] = useState<Record<string, boolean>>({})
+	const [fileCabinetPreviewErrors, setFileCabinetPreviewErrors] = useState<Record<string, string | undefined>>({})
+	const [lastCreatedFile, setLastCreatedFile] = useState<
+		{ companyId: string; path: string; fileName?: string } | undefined
+	>(undefined)
 
 	const setListApiConfigMeta = useCallback(
 		(value: ProviderSettingsEntry[]) => setState((prevState) => ({ ...prevState, listApiConfigMeta: value })),
@@ -468,6 +547,102 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 			},
 		}))
 	}, [])
+
+	const createHubRoom = useCallback(
+		(title?: string, options?: { autonomous?: boolean; participants?: HubAgentBlueprint[] }) => {
+			vscode.postMessage({
+				type: "hubCreateRoom",
+				text: title,
+				hubAutonomous: options?.autonomous,
+				hubParticipants: options?.participants,
+			})
+		},
+		[],
+	)
+
+	const setActiveHubRoom = useCallback((roomId: string) => {
+		vscode.postMessage({ type: "hubSetActiveRoom", hubRoomId: roomId })
+	}, [])
+
+	const sendHubMessage = useCallback((roomId: string, text: string) => {
+		vscode.postMessage({ type: "hubSendMessage", hubRoomId: roomId, text })
+	}, [])
+
+	const addHubAgent = useCallback((roomId: string, agent: HubAgentBlueprint) => {
+		vscode.postMessage({ type: "hubAddAgent", hubRoomId: roomId, hubAgent: agent })
+	}, [])
+
+	const removeHubParticipant = useCallback((roomId: string, participantId: string) => {
+		vscode.postMessage({ type: "hubRemoveParticipant", hubRoomId: roomId, participantId })
+	}, [])
+
+	const updateHubSettings = useCallback((roomId: string, settings: HubSettingsUpdate) => {
+		vscode.postMessage({ type: "hubUpdateSettings", hubRoomId: roomId, hubSettings: settings })
+	}, [])
+
+	const requestFileCabinetSnapshot = useCallback((companyId?: string) => {
+		setIsFileCabinetLoading(true)
+		setFileCabinetError(undefined)
+		vscode.postMessage({ type: "fileCabinetLoad", fileCabinetCompanyId: companyId })
+	}, [])
+
+	const requestFileCabinetPreview = useCallback((companyId: string, path: string) => {
+		const normalizedPath = path.startsWith("/") ? path : `/${path}`
+		const key = buildFilePreviewKey(companyId, normalizedPath)
+		if (!key) {
+			return
+		}
+		setFileCabinetPreviewLoading((prev) => ({ ...prev, [key]: true }))
+		setFileCabinetPreviewErrors((prev) => ({ ...prev, [key]: undefined }))
+		vscode.postMessage({
+			type: "fileCabinetPreview",
+			fileCabinetCompanyId: companyId,
+			fileCabinetPath: normalizedPath,
+		})
+	}, [])
+
+	const createFileCabinetFolder = useCallback((payload: FileCabinetCreateFolderRequest) => {
+		const normalizedPath = payload.path.trim()
+		if (!normalizedPath) {
+			setFileCabinetError("Folder name is required")
+			return
+		}
+		setIsFileCabinetLoading(true)
+		setFileCabinetError(undefined)
+		vscode.postMessage({
+			type: "fileCabinetCreateFolder",
+			fileCabinetCreateFolderPayload: { ...payload, path: normalizedPath },
+		})
+	}, [])
+
+	const createFileCabinetFile = useCallback((payload: FileCabinetCreateFileRequest) => {
+		setIsFileCabinetLoading(true)
+		setFileCabinetError(undefined)
+		setLastCreatedFile(undefined)
+		vscode.postMessage({
+			type: "fileCabinetCreateFile",
+			fileCabinetCreateFilePayload: payload,
+		})
+	}, [])
+
+	const writeFileCabinetFile = useCallback((payload: FileCabinetWriteRequest) => {
+		setIsFileCabinetLoading(true)
+		setFileCabinetError(undefined)
+		vscode.postMessage({
+			type: "fileCabinetWriteFile",
+			fileCabinetWritePayload: payload,
+		})
+	}, [])
+
+	const openFileCabinetFolder = useCallback((companyId: string, path?: string) => {
+		vscode.postMessage({
+			type: "fileCabinetOpenFolder",
+			fileCabinetCompanyId: companyId,
+			fileCabinetPath: path,
+		})
+	}, [])
+
+	const clearLastCreatedFile = useCallback(() => setLastCreatedFile(undefined), [])
 
 	const sendOuterGateMessage = useCallback((text: string) => {
 		const trimmed = text.trim()
@@ -595,21 +770,30 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		(event: MessageEvent) => {
 			const message: ExtensionMessage = event.data
 			switch (message.type) {
-			case "state": {
-				const newState = message.state!
-				setState((prevState) => mergeExtensionState(prevState, newState))
-				const ownerProfile = newState.workplaceState?.ownerProfileDefaults
-				const ownerFirstComplete = Boolean(ownerProfile?.firstName && ownerProfile.firstName.trim().length > 0)
-				const ownerLastComplete = Boolean(ownerProfile?.lastName && ownerProfile.lastName.trim().length > 0)
-				const ownerRoleComplete = Boolean(ownerProfile?.role && ownerProfile.role.trim().length > 0)
-				const ownerMbtiComplete = Boolean(ownerProfile?.mbtiType && ownerProfile.mbtiType.trim().length > 0)
-				setShowWelcome((prev) => {
-					if (!ownerFirstComplete || !ownerLastComplete || !ownerRoleComplete || !ownerMbtiComplete) {
-						return true
-					}
-					return prev
-				})
-				setDidHydrateState(true)
+				case "state": {
+					const newState = message.state!
+					chatHubDebugLog("extension state payload", {
+						isHydrated: didHydrateState,
+						companiesCount: newState.workplaceState?.companies?.length ?? 0,
+						activeCompanyId: newState.workplaceState?.activeCompanyId,
+						activeEmployeeId: newState.workplaceState?.activeEmployeeId,
+						conversationAgentsCount: newState.conversationAgents?.length ?? 0,
+					})
+					setState((prevState) => mergeExtensionState(prevState, newState))
+					const ownerProfile = newState.workplaceState?.ownerProfileDefaults
+					const ownerFirstComplete = Boolean(
+						ownerProfile?.firstName && ownerProfile.firstName.trim().length > 0,
+					)
+					const ownerLastComplete = Boolean(ownerProfile?.lastName && ownerProfile.lastName.trim().length > 0)
+					const ownerRoleComplete = Boolean(ownerProfile?.role && ownerProfile.role.trim().length > 0)
+					const ownerMbtiComplete = Boolean(ownerProfile?.mbtiType && ownerProfile.mbtiType.trim().length > 0)
+					setShowWelcome((prev) => {
+						if (!ownerFirstComplete || !ownerLastComplete || !ownerRoleComplete || !ownerMbtiComplete) {
+							return true
+						}
+						return prev
+					})
+					setDidHydrateState(true)
 					// Update alwaysAllowFollowupQuestions if present in state message
 					if ((newState as any).alwaysAllowFollowupQuestions !== undefined) {
 						setAlwaysAllowFollowupQuestions((newState as any).alwaysAllowFollowupQuestions)
@@ -626,62 +810,82 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 					if (newState.marketplaceItems !== undefined) {
 						setMarketplaceItems(newState.marketplaceItems)
 					}
-				if (newState.marketplaceInstalledMetadata !== undefined) {
-					setMarketplaceInstalledMetadata(newState.marketplaceInstalledMetadata)
-				}
-				break
-			}
-			case "conversationHoldState": {
-				const nextState =
-					(typeof message.payload === "object" && message.payload !== null && "state" in message.payload
-						? (message.payload as { state?: ConversationHoldState }).state
-						: undefined) ?? message.conversationHoldState ?? undefined
-				setState((prevState) => ({ ...prevState, conversationHoldState: nextState }))
-				break
-			}
-			case "orchestratorAnalysis": {
-				const payload =
-					(typeof message.payload === "object" && message.payload !== null
-						? (message.payload as {
-							analysis?: OrchestratorAnalysis
-							agents?: ConversationAgent[]
-							appendTimeline?: boolean
-						})
-						: {})
-				setState((prevState) => {
-					const nextTimeline = payload.appendTimeline && payload.analysis
-						? [
-							...(prevState.orchestratorTimeline ?? []),
-							{
-								id: `analysis-${Date.now()}`,
-								timestamp: Date.now(),
-								type: "analysis" as OrchestratorTimelineEvent["type"],
-								summary: payload.analysis.rationale ?? "Updated routing analysis",
-								relatedAgentIds: payload.analysis.primarySpeakers?.map((agent) => agent.id),
-								metadata: payload.analysis,
-							},
-						]
-						: prevState.orchestratorTimeline
-					return {
-						...prevState,
-						lastOrchestratorAnalysis: payload.analysis ?? prevState.lastOrchestratorAnalysis,
-						conversationAgents: payload.agents ?? prevState.conversationAgents ?? [],
-						orchestratorTimeline: nextTimeline,
+					if (newState.marketplaceInstalledMetadata !== undefined) {
+						setMarketplaceInstalledMetadata(newState.marketplaceInstalledMetadata)
 					}
-				})
-				break
-			}
+					break
+				}
+				case "conversationHoldState": {
+					const nextState =
+						(typeof message.payload === "object" && message.payload !== null && "state" in message.payload
+							? (message.payload as { state?: ConversationHoldState }).state
+							: undefined) ??
+						message.conversationHoldState ??
+						undefined
+					chatHubDebugLog("conversationHoldState message", {
+						state: nextState,
+						taskId:
+							typeof message.payload === "object" &&
+							message.payload !== null &&
+							"taskId" in (message.payload as any)
+								? (message.payload as { taskId?: string }).taskId
+								: undefined,
+					})
+					setState((prevState) => ({ ...prevState, conversationHoldState: nextState }))
+					break
+				}
+				case "orchestratorAnalysis": {
+					const payload =
+						typeof message.payload === "object" && message.payload !== null
+							? (message.payload as {
+									analysis?: OrchestratorAnalysis
+									agents?: ConversationAgent[]
+									appendTimeline?: boolean
+								})
+							: {}
+					chatHubDebugLog("orchestratorAnalysis message", {
+						analysis: payload.analysis,
+						agentCount: payload.agents?.length ?? 0,
+						appendTimeline: payload.appendTimeline,
+						clientTurnId: (payload as { clientTurnId?: string }).clientTurnId,
+					})
+					setState((prevState) => {
+						const nextTimeline =
+							payload.appendTimeline && payload.analysis
+								? [
+										...(prevState.orchestratorTimeline ?? []),
+										{
+											id: `analysis-${Date.now()}`,
+											timestamp: Date.now(),
+											type: "analysis" as OrchestratorTimelineEvent["type"],
+											summary: payload.analysis.rationale ?? "Updated routing analysis",
+											relatedAgentIds: payload.analysis.primarySpeakers?.map((agent) => agent.id),
+											metadata: payload.analysis,
+										},
+									]
+								: prevState.orchestratorTimeline
+						return {
+							...prevState,
+							lastOrchestratorAnalysis: payload.analysis ?? prevState.lastOrchestratorAnalysis,
+							conversationAgents: payload.agents ?? prevState.conversationAgents ?? [],
+							orchestratorTimeline: nextTimeline,
+						}
+					})
+					break
+				}
 				case "outerGateState": {
 					if ("outerGateState" in message && message.outerGateState) {
-						setState((prevState) =>
-							({
-								...prevState,
-								outerGateState: message.outerGateState ?? prevState.outerGateState ?? defaultOuterGateState,
-							} as ExtensionState),
+						setState(
+							(prevState) =>
+								({
+									...prevState,
+									outerGateState:
+										message.outerGateState ?? prevState.outerGateState ?? defaultOuterGateState,
+								}) as ExtensionState,
 						)
 					}
-				break
-			}
+					break
+				}
 				case "theme": {
 					if (message.text) {
 						setTheme(convertTextMateToHljs(JSON.parse(message.text)))
@@ -732,6 +936,14 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 				}
 				case "messageUpdated": {
 					const clineMessage = message.clineMessage!
+					chatHubDebugLog("webview.state.messageUpdated", {
+						ts: clineMessage.ts,
+						type: clineMessage.type,
+						ask: (clineMessage as any).ask,
+						say: (clineMessage as any).say,
+						partial: clineMessage.partial,
+						clientTurnId: (clineMessage as any).metadata?.orchestrator?.clientTurnId,
+					})
 					setState((prevState) => {
 						// worth noting it will never be possible for a more up-to-date message to be sent here or in normal messages post since the presentAssistantContent function uses lock
 						const lastIndex = findLastIndex(prevState.clineMessages, (msg) => msg.ts === clineMessage.ts)
@@ -781,6 +993,62 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 					}
 					if (message.marketplaceInstalledMetadata !== undefined) {
 						setMarketplaceInstalledMetadata(message.marketplaceInstalledMetadata)
+					}
+					break
+				}
+				case "fileCabinetSnapshot": {
+					setIsFileCabinetLoading(false)
+					setFileCabinetSnapshot(message.fileCabinetSnapshot)
+					if (!message.fileCabinetSnapshot && message.text) {
+						setFileCabinetError(message.text)
+					} else {
+						setFileCabinetError(undefined)
+					}
+					break
+				}
+				case "fileCabinetPreview": {
+					const preview = message.fileCabinetPreview
+					if (preview) {
+						const key = buildFilePreviewKey(preview.companyId, preview.path)
+						if (key) {
+							setFileCabinetPreviews((prev) => ({ ...prev, [key]: preview }))
+							setFileCabinetPreviewErrors((prev) => ({ ...prev, [key]: preview.error }))
+							setFileCabinetPreviewLoading((prev) => ({ ...prev, [key]: false }))
+						}
+					}
+					break
+				}
+				case "fileCabinetWriteResult": {
+					if (!message.fileCabinetWriteSuccess && message.text) {
+						setFileCabinetError(message.text)
+					}
+					setIsFileCabinetLoading(false)
+					break
+				}
+				case "fileCabinetFileResult": {
+					setIsFileCabinetLoading(false)
+					if (message.fileCabinetFileSuccess) {
+						setFileCabinetError(undefined)
+						if (message.fileCabinetCompanyId && message.fileCabinetFilePath) {
+							setLastCreatedFile({
+								companyId: message.fileCabinetCompanyId,
+								path: message.fileCabinetFilePath,
+								fileName: message.fileCabinetFileName,
+							})
+						}
+					} else if (message.text) {
+						setFileCabinetError(message.text)
+					}
+					break
+				}
+				case "fileCabinetFolderResult": {
+					if (message.fileCabinetFolderSuccess) {
+						setFileCabinetError(undefined)
+					} else if (message.text) {
+						setFileCabinetError(message.text)
+					}
+					if (!message.fileCabinetFolderSuccess) {
+						setIsFileCabinetLoading(false)
 					}
 					break
 				}
@@ -903,7 +1171,8 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 					const scheduleMap = new Map(
 						(company.workday.employeeSchedules ?? []).map((schedule) => [schedule.employeeId, schedule]),
 					)
-					const fallbackTimestamp = company.updatedAt ?? company.createdAt ?? company.workday.startedAt ?? new Date(0).toISOString()
+					const fallbackTimestamp =
+						company.updatedAt ?? company.createdAt ?? company.workday.startedAt ?? new Date(0).toISOString()
 					const employeeSchedules = activeEmployees.map((employee) => {
 						const existing = scheduleMap.get(employee.id)
 						return {
@@ -917,8 +1186,12 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 							lastUpdatedAt: existing?.lastUpdatedAt ?? fallbackTimestamp,
 						}
 					})
-					const activeIds = (company.workday.activeEmployeeIds ?? []).filter((id) => activeEmployeeIds.has(id))
-					const bypassedIds = (company.workday.bypassedEmployeeIds ?? []).filter((id) => activeEmployeeIds.has(id))
+					const activeIds = (company.workday.activeEmployeeIds ?? []).filter((id) =>
+						activeEmployeeIds.has(id),
+					)
+					const bypassedIds = (company.workday.bypassedEmployeeIds ?? []).filter((id) =>
+						activeEmployeeIds.has(id),
+					)
 					return {
 						...company.workday,
 						employeeSchedules,
@@ -972,6 +1245,13 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		marketplaceItems,
 		marketplaceInstalledMetadata,
 		profileThresholds: state.profileThresholds ?? {},
+		hubSnapshot: state.hubSnapshot,
+		createHubRoom,
+		setActiveHubRoom,
+		sendHubMessage,
+		addHubAgent,
+		removeHubParticipant,
+		updateHubSettings,
 		alwaysAllowFollowupQuestions,
 		followupAutoApproveTimeoutMs,
 		createSurface,
@@ -1116,12 +1396,25 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		includeTaskHistoryInEnhance,
 		setIncludeTaskHistoryInEnhance,
 		workplaceState,
+		fileCabinetSnapshot,
+		isFileCabinetLoading,
+		fileCabinetError,
+		fileCabinetPreviews,
+		fileCabinetPreviewLoading,
+		fileCabinetPreviewErrors,
+		requestFileCabinetSnapshot,
+		createFileCabinetFolder,
+		createFileCabinetFile,
+		requestFileCabinetPreview,
+		writeFileCabinetFile,
+		openFileCabinetFolder,
+		lastCreatedFile,
+		clearLastCreatedFile,
 		createCompany: (payload) => vscode.postMessage({ type: "createCompany", workplaceCompanyPayload: payload }),
 		updateCompany: (payload) => vscode.postMessage({ type: "updateCompany", workplaceCompanyUpdate: payload }),
 		setCompanyFavorite: (payload) =>
 			vscode.postMessage({ type: "setCompanyFavorite", workplaceCompanyFavorite: payload }),
-		deleteCompany: (payload) =>
-			vscode.postMessage({ type: "deleteCompany", workplaceCompanyDelete: payload }),
+		deleteCompany: (payload) => vscode.postMessage({ type: "deleteCompany", workplaceCompanyDelete: payload }),
 		createDepartment: (payload) =>
 			vscode.postMessage({ type: "createDepartment", workplaceDepartmentPayload: payload }),
 		updateDepartment: (payload) =>
@@ -1170,17 +1463,13 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		updateActionStatus: (payload) =>
 			vscode.postMessage({ type: "updateActionStatus", workplaceActionStatusUpdate: payload }),
 		startActionItems: (payload) => vscode.postMessage({ type: "startActionItems", workplaceActionStart: payload }),
-		startWorkday: (payload) =>
-			vscode.postMessage({ type: "startWorkday", workplaceWorkdayStart: payload }),
+		startWorkday: (payload) => vscode.postMessage({ type: "startWorkday", workplaceWorkdayStart: payload }),
 		haltWorkday: (payload) => vscode.postMessage({ type: "haltWorkday", workplaceWorkdayHalt: payload }),
 		updateEmployeeSchedule: (payload) =>
 			vscode.postMessage({ type: "updateEmployeeSchedule", workplaceEmployeeScheduleUpdate: payload }),
-		createShift: (payload) =>
-			vscode.postMessage({ type: "createShift", workplaceShiftCreate: payload }),
-		updateShift: (payload) =>
-			vscode.postMessage({ type: "updateShift", workplaceShiftUpdate: payload }),
-		deleteShift: (payload) =>
-			vscode.postMessage({ type: "deleteShift", workplaceShiftDelete: payload }),
+		createShift: (payload) => vscode.postMessage({ type: "createShift", workplaceShiftCreate: payload }),
+		updateShift: (payload) => vscode.postMessage({ type: "updateShift", workplaceShiftUpdate: payload }),
+		deleteShift: (payload) => vscode.postMessage({ type: "deleteShift", workplaceShiftDelete: payload }),
 		setOwnerProfileDefaults: (profile) =>
 			vscode.postMessage({ type: "setOwnerProfileDefaults", workplaceOwnerProfileDefaults: profile }),
 		configureWorkplaceRoot: (ownerName) =>
@@ -1195,8 +1484,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 				outerGateInsightId: id,
 				outerGateInsightUpdates: insightUpdates,
 			}),
-		deleteOuterGateInsight: (id) =>
-			vscode.postMessage({ type: "outerGateDeleteInsight", outerGateInsightId: id }),
+		deleteOuterGateInsight: (id) => vscode.postMessage({ type: "outerGateDeleteInsight", outerGateInsightId: id }),
 		outerGateConnectNotion,
 		outerGateSyncNotion,
 		outerGateConnectMiro,

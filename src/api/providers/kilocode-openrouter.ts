@@ -87,7 +87,7 @@ export class KilocodeOpenrouterHandler extends OpenRouterHandler {
 			throw new Error("KiloCode token + baseUrl is required to fetch models")
 		}
 
-		const [models, endpoints, defaultModel] = await Promise.all([
+		const [modelsResult, endpointsResult, defaultModelResult] = await Promise.allSettled([
 			getModels({
 				provider: "kilocode-openrouter",
 				kilocodeToken: this.options.kilocodeToken,
@@ -101,9 +101,61 @@ export class KilocodeOpenrouterHandler extends OpenRouterHandler {
 			getKilocodeDefaultModel(this.options.kilocodeToken, this.options.kilocodeOrganizationId),
 		])
 
-		this.models = models
-		this.endpoints = endpoints
-		this.defaultModel = defaultModel
+		if (modelsResult.status !== "fulfilled") {
+			console.error("[KilocodeOpenrouterHandler] failed to fetch models", modelsResult.reason)
+			throw modelsResult.reason ?? new Error("Unable to load KiloCode OpenRouter model catalog")
+		}
+		this.models = modelsResult.value
+
+		if (endpointsResult.status === "fulfilled") {
+			this.endpoints = endpointsResult.value
+		} else {
+			console.warn("[KilocodeOpenrouterHandler] continuing without specific endpoints", {
+				reason:
+					endpointsResult.reason instanceof Error ? endpointsResult.reason.message : endpointsResult.reason,
+				modelId: this.options.kilocodeModel,
+				provider: this.options.openRouterSpecificProvider,
+			})
+			this.endpoints = {}
+			this.options.openRouterSpecificProvider = undefined
+		}
+
+		if (defaultModelResult.status === "fulfilled") {
+			this.defaultModel = defaultModelResult.value
+		} else {
+			console.warn("[KilocodeOpenrouterHandler] falling back to catalog default model", {
+				reason:
+					defaultModelResult.reason instanceof Error
+						? defaultModelResult.reason.message
+						: defaultModelResult.reason,
+			})
+			const catalogDefault =
+				this.options.kilocodeModel && this.models[this.options.kilocodeModel]
+					? this.options.kilocodeModel
+					: Object.keys(this.models)[0]
+			this.defaultModel = catalogDefault ?? openRouterDefaultModelId
+		}
+
+		let requestedModel = this.options.kilocodeModel
+		if (requestedModel && !this.models[requestedModel]) {
+			console.warn("[KilocodeOpenrouterHandler] requested model unavailable, using default", {
+				requestedModel,
+				defaultModel: this.defaultModel,
+			})
+			requestedModel = undefined
+		}
+		if (!requestedModel && !this.models[this.defaultModel]) {
+			const firstAvailable = Object.keys(this.models)[0]
+			console.warn("[KilocodeOpenrouterHandler] default model missing from catalog; selecting first available", {
+				defaultModel: this.defaultModel,
+				firstAvailable,
+			})
+			this.defaultModel = firstAvailable ?? this.defaultModel
+		}
+
+		if (!requestedModel) {
+			this.options.kilocodeModel = this.defaultModel
+		}
 		return this.getModel()
 	}
 }

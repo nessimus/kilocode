@@ -10,6 +10,7 @@ import type {
 	SuggestionItem,
 	ToolResultMessagePayload,
 	OrchestratorMessageMetadata,
+	ConversationAgent,
 } from "@roo-code/types"
 
 import { ClineApiReqInfo, ClineAskUseMcpServer, ClineSayTool } from "@roo/ExtensionMessage"
@@ -83,12 +84,36 @@ interface ChatRowContentProps extends Omit<ChatRowProps, "onHeightChange"> {}
 const ChatRow = memo(
 	(props: ChatRowProps) => {
 		const { highlighted } = props // kilocode_change: Add highlighted prop
-		const { showTaskTimeline } = useExtensionState() // kilocode_change: Used by KiloChatRowGutterBar
+		const { showTaskTimeline, conversationAgents } = useExtensionState() // kilocode_change: Used by KiloChatRowGutterBar
 		const { isLast, onHeightChange, message } = props
 		const orchestratorMetadata =
 			(message.metadata?.orchestrator as OrchestratorMessageMetadata | undefined) ?? undefined
 		const isQueued = orchestratorMetadata?.queueState === "queued"
 		const respondedViaOrchestrator = Boolean(orchestratorMetadata?.respondedViaOrchestrator)
+		const primarySpeaker = orchestratorMetadata?.primarySpeakers?.[0]
+
+		const agentLookup = useMemo(() => {
+			const lookup = new Map<string, ConversationAgent>()
+			conversationAgents.forEach((agent) => lookup.set(agent.id, agent))
+			return lookup
+		}, [conversationAgents])
+
+		const activeAgent = useMemo(() => conversationAgents.find((agent) => agent.isActive), [conversationAgents])
+
+		const fallbackAgent = useMemo(() => {
+			if (primarySpeaker?.id) {
+				return agentLookup.get(primarySpeaker.id) ?? null
+			}
+			if (activeAgent) {
+				return activeAgent
+			}
+			return conversationAgents[0] ?? null
+		}, [primarySpeaker?.id, agentLookup, activeAgent, conversationAgents])
+
+		const speakerName = fallbackAgent?.name ?? primarySpeaker?.label ?? primarySpeaker?.id
+		const speakerRole = fallbackAgent?.role ?? primarySpeaker?.role ?? undefined
+		const speakerId = primarySpeaker?.id ?? fallbackAgent?.id
+		const showSpeakerHeader = message.type === "say" && Boolean(speakerName)
 		// Store the previous height to compare with the current height
 		// This allows us to detect changes without causing re-renders
 		const prevHeightRef = useRef(0)
@@ -99,13 +124,28 @@ const ChatRow = memo(
 				className={cn(
 					`golden-chat-row px-[15px] py-[10px] pr-[6px] relative ${highlighted ? "animate-message-highlight" : ""}`,
 					isQueued && "opacity-70",
-				)}>
-					{(respondedViaOrchestrator || isQueued) && (
-						<div className="flex items-center justify-between pb-1 text-[11px] uppercase tracking-wide text-[color-mix(in_srgb,var(--vscode-descriptionForeground)_90%,transparent)]">
-							{respondedViaOrchestrator && <span>Responded via Orchestrator</span>}
-							{isQueued && <span className="text-[color-mix(in_srgb,var(--vscode-descriptionForeground)_60%,transparent)]">Queued Reply</span>}
-						</div>
-					)}
+				)}
+				data-speaker-id={speakerId ?? undefined}>
+				{(respondedViaOrchestrator || isQueued) && (
+					<div className="flex items-center justify-between pb-1 text-[11px] uppercase tracking-wide text-[color-mix(in_srgb,var(--vscode-descriptionForeground)_90%,transparent)]">
+						{respondedViaOrchestrator && <span>Responded via Orchestrator</span>}
+						{isQueued && (
+							<span className="text-[color-mix(in_srgb,var(--vscode-descriptionForeground)_60%,transparent)]">
+								Queued Reply
+							</span>
+						)}
+					</div>
+				)}
+				{showSpeakerHeader && (
+					<div className="mb-[6px] flex flex-wrap items-center gap-2 text-[12px] font-semibold text-vscode-foreground">
+						<span>{speakerName}</span>
+						{speakerRole && (
+							<span className="text-[10px] font-medium uppercase tracking-wide text-[color-mix(in_srgb,var(--vscode-descriptionForeground)_80%,transparent)]">
+								{speakerRole}
+							</span>
+						)}
+					</div>
+				)}
 				{showTaskTimeline && <KiloChatRowGutterBar message={message} />}
 				<ChatRowContent {...props} />
 			</div>,

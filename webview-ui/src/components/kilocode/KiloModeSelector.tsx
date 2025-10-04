@@ -15,6 +15,7 @@ interface KiloModeSelectorProps {
 	title?: string
 	triggerClassName?: string
 	initiallyOpen?: boolean
+	portalContainerId?: string
 }
 
 export const KiloModeSelector = ({
@@ -26,6 +27,7 @@ export const KiloModeSelector = ({
 	title,
 	triggerClassName,
 	initiallyOpen,
+	portalContainerId,
 }: KiloModeSelectorProps) => {
 	const { t } = useAppTranslation()
 	const allModes = React.useMemo(() => getAllModes(customModes), [customModes])
@@ -71,6 +73,7 @@ export const KiloModeSelector = ({
 				},
 			]}
 			onChange={handleChange}
+			portalContainerId={portalContainerId}
 			shortcutText={modeShortcutText}
 			triggerClassName={cn(
 				"w-full bg-[var(--background)] border-[var(--vscode-input-border)] hover:bg-[var(--color-vscode-list-hoverBackground)]",

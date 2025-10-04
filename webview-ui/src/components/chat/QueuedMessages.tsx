@@ -19,7 +19,9 @@ export const QueuedMessages = ({ queue, onRemove, onUpdate }: QueuedMessagesProp
 	const { t } = useTranslation("chat")
 	const [editingStates, setEditingStates] = useState<Record<string, { isEditing: boolean; value: string }>>({})
 
-	if (queue.length === 0) {
+	const hasVisibleMessages = queue.some((message) => !message.silent)
+
+	if (!hasVisibleMessages) {
 		return null
 	}
 
@@ -44,6 +46,9 @@ export const QueuedMessages = ({ queue, onRemove, onUpdate }: QueuedMessagesProp
 			<div className="text-vscode-descriptionForeground text-md mb-2">{t("queuedMessages.title")}</div>
 			<div className="flex flex-col gap-2 max-h-[300px] overflow-y-auto pr-2">
 				{queue.map((message, index) => {
+					if (message.silent) {
+						return null
+					}
 					const editState = getEditState(message.id, message.text)
 
 					return (

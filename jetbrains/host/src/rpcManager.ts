@@ -42,6 +42,15 @@ const fsUnlink = promisify(fs.unlink)
 const fsLstat = promisify(fs.lstat)
 const fsMkdir = promisify(fs.mkdir)
 
+const shouldLogFileSystemDebug = process?.env?.FILE_SYSTEM_DEBUG === "true"
+
+const fileSystemDebugLog = (...args: unknown[]) => {
+	if (!shouldLogFileSystemDebug) {
+		return
+	}
+	console.log("[FileSystem]", ...args)
+}
+
 class RPCLogger implements IRPCProtocolLogger {
 	logIncoming(msgLength: number, req: number, initiator: RequestInitiator, msg: string, data?: any): void {
 		if (msg == "ack") {
@@ -428,16 +437,16 @@ export class RPCManager {
 				capabilities: any,
 				readonlyMessage?: any,
 			): Promise<void> {
-				console.log("Register file system provider:", { handle, scheme, capabilities, readonlyMessage })
+				fileSystemDebugLog("Register file system provider", { handle, scheme, capabilities, readonlyMessage })
 			},
 			$unregisterProvider(handle: number): void {
-				console.log("Unregister provider:", handle)
+				fileSystemDebugLog("Unregister provider", handle)
 			},
 			$onFileSystemChange(handle: number, resource: any[]): void {
-				console.log("File system change:", { handle, resource })
+				fileSystemDebugLog("File system change", { handle, resource })
 			},
 			async $stat(resource: UriComponents): Promise<any> {
-				console.log("Stat:", resource)
+				fileSystemDebugLog("Stat", resource)
 				try {
 					const filePath = this.uriToPath(resource)
 					const stats = await fsStat(filePath)
@@ -455,7 +464,7 @@ export class RPCManager {
 				}
 			},
 			async $readdir(resource: UriComponents): Promise<[string, FileType][]> {
-				console.log("Read directory:", resource)
+				fileSystemDebugLog("Read directory", resource)
 				try {
 					const filePath = this.uriToPath(resource)
 					const entries = await fsReadDir(filePath, { withFileTypes: true })
@@ -481,7 +490,7 @@ export class RPCManager {
 				}
 			},
 			async $readFile(resource: UriComponents): Promise<any> {
-				console.log("Read file:", resource)
+				fileSystemDebugLog("Read file", resource)
 				try {
 					const filePath = this.uriToPath(resource)
 					const buffer = await fsReadFile(filePath)
@@ -492,7 +501,7 @@ export class RPCManager {
 				}
 			},
 			async $writeFile(resource: UriComponents, content: any): Promise<void> {
-				console.log("Write file:", { resource, content })
+				fileSystemDebugLog("Write file", { resource, hasContent: Boolean(content) })
 				try {
 					const filePath = this.uriToPath(resource)
 					const buffer = content instanceof VSBuffer ? content.buffer : content
@@ -503,7 +512,7 @@ export class RPCManager {
 				}
 			},
 			async $rename(resource: UriComponents, target: UriComponents, opts: any): Promise<void> {
-				console.log("Rename:", { resource, target, opts })
+				fileSystemDebugLog("Rename", { resource, target, opts })
 				try {
 					const sourcePath = this.uriToPath(resource)
 					const targetPath = this.uriToPath(target)
@@ -524,7 +533,7 @@ export class RPCManager {
 				}
 			},
 			async $copy(resource: UriComponents, target: UriComponents, opts: any): Promise<void> {
-				console.log("Copy:", { resource, target, opts })
+				fileSystemDebugLog("Copy", { resource, target, opts })
 				try {
 					const sourcePath = this.uriToPath(resource)
 					const targetPath = this.uriToPath(target)
@@ -545,7 +554,7 @@ export class RPCManager {
 				}
 			},
 			async $mkdir(resource: UriComponents): Promise<void> {
-				console.log("Make directory:", resource)
+				fileSystemDebugLog("Make directory", resource)
 				try {
 					const dirPath = this.uriToPath(resource)
 					await fsMkdir(dirPath, { recursive: true })
@@ -555,7 +564,7 @@ export class RPCManager {
 				}
 			},
 			async $delete(resource: UriComponents, opts: any): Promise<void> {
-				console.log("Delete:", { resource, opts })
+				fileSystemDebugLog("Delete", { resource, opts })
 				try {
 					const filePath = this.uriToPath(resource)
 
@@ -574,12 +583,12 @@ export class RPCManager {
 				}
 			},
 			async $ensureActivation(scheme: string): Promise<void> {
-				console.log("Ensure activation:", scheme)
+				fileSystemDebugLog("Ensure activation", scheme)
 				// No-op implementation
 				return Promise.resolve()
 			},
 			dispose(): void {
-				console.log("Dispose MainThreadFileSystem")
+				fileSystemDebugLog("Dispose MainThreadFileSystem")
 			},
 
 			// Helper methods

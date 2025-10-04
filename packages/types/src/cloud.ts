@@ -423,114 +423,51 @@ export enum ExtensionBridgeEventName {
 	HeartbeatUpdated = "heartbeat_updated",
 }
 
-export const extensionBridgeEventSchema = z.discriminatedUnion("type", [
-	z.object({
-		type: z.literal(ExtensionBridgeEventName.TaskCreated),
-		instance: extensionInstanceSchema,
-		timestamp: z.number(),
-	}),
-	z.object({
-		type: z.literal(ExtensionBridgeEventName.TaskStarted),
-		instance: extensionInstanceSchema,
-		timestamp: z.number(),
-	}),
-	z.object({
-		type: z.literal(ExtensionBridgeEventName.TaskCompleted),
-		instance: extensionInstanceSchema,
-		timestamp: z.number(),
-	}),
-	z.object({
-		type: z.literal(ExtensionBridgeEventName.TaskAborted),
-		instance: extensionInstanceSchema,
-		timestamp: z.number(),
-	}),
-	z.object({
-		type: z.literal(ExtensionBridgeEventName.TaskFocused),
-		instance: extensionInstanceSchema,
-		timestamp: z.number(),
-	}),
-	z.object({
-		type: z.literal(ExtensionBridgeEventName.TaskUnfocused),
-		instance: extensionInstanceSchema,
-		timestamp: z.number(),
-	}),
-	z.object({
-		type: z.literal(ExtensionBridgeEventName.TaskActive),
-		instance: extensionInstanceSchema,
-		timestamp: z.number(),
-	}),
-	z.object({
-		type: z.literal(ExtensionBridgeEventName.TaskInteractive),
-		instance: extensionInstanceSchema,
-		timestamp: z.number(),
-	}),
-	z.object({
-		type: z.literal(ExtensionBridgeEventName.TaskResumable),
-		instance: extensionInstanceSchema,
-		timestamp: z.number(),
-	}),
-	z.object({
-		type: z.literal(ExtensionBridgeEventName.TaskIdle),
-		instance: extensionInstanceSchema,
-		timestamp: z.number(),
-	}),
+const baseExtensionBridgeEventTypes = [
+	ExtensionBridgeEventName.TaskCreated,
+	ExtensionBridgeEventName.TaskStarted,
+	ExtensionBridgeEventName.TaskCompleted,
+	ExtensionBridgeEventName.TaskAborted,
+	ExtensionBridgeEventName.TaskFocused,
+	ExtensionBridgeEventName.TaskUnfocused,
+	ExtensionBridgeEventName.TaskActive,
+	ExtensionBridgeEventName.TaskInteractive,
+	ExtensionBridgeEventName.TaskResumable,
+	ExtensionBridgeEventName.TaskIdle,
+	ExtensionBridgeEventName.TaskPaused,
+	ExtensionBridgeEventName.TaskUnpaused,
+	ExtensionBridgeEventName.TaskSpawned,
+	ExtensionBridgeEventName.TaskUserMessage,
+	ExtensionBridgeEventName.TaskTokenUsageUpdated,
+	ExtensionBridgeEventName.InstanceRegistered,
+	ExtensionBridgeEventName.InstanceUnregistered,
+	ExtensionBridgeEventName.HeartbeatUpdated,
+] as const satisfies readonly [ExtensionBridgeEventName, ...ExtensionBridgeEventName[]]
 
-	z.object({
-		type: z.literal(ExtensionBridgeEventName.TaskPaused),
-		instance: extensionInstanceSchema,
-		timestamp: z.number(),
-	}),
-	z.object({
-		type: z.literal(ExtensionBridgeEventName.TaskUnpaused),
-		instance: extensionInstanceSchema,
-		timestamp: z.number(),
-	}),
-	z.object({
-		type: z.literal(ExtensionBridgeEventName.TaskSpawned),
-		instance: extensionInstanceSchema,
-		timestamp: z.number(),
-	}),
+const baseExtensionBridgeEventSchema = z.object({
+	type: z.enum(baseExtensionBridgeEventTypes),
+	instance: extensionInstanceSchema,
+	timestamp: z.number(),
+})
 
-	z.object({
-		type: z.literal(ExtensionBridgeEventName.TaskUserMessage),
-		instance: extensionInstanceSchema,
-		timestamp: z.number(),
-	}),
+const modeChangedExtensionBridgeEventSchema = z.object({
+	type: z.literal(ExtensionBridgeEventName.ModeChanged),
+	instance: extensionInstanceSchema,
+	mode: z.string(),
+	timestamp: z.number(),
+})
 
-	z.object({
-		type: z.literal(ExtensionBridgeEventName.TaskTokenUsageUpdated),
-		instance: extensionInstanceSchema,
-		timestamp: z.number(),
-	}),
+const providerProfileChangedExtensionBridgeEventSchema = z.object({
+	type: z.literal(ExtensionBridgeEventName.ProviderProfileChanged),
+	instance: extensionInstanceSchema,
+	providerProfile: z.object({ name: z.string(), provider: z.string().optional() }),
+	timestamp: z.number(),
+})
 
-	z.object({
-		type: z.literal(ExtensionBridgeEventName.ModeChanged),
-		instance: extensionInstanceSchema,
-		mode: z.string(),
-		timestamp: z.number(),
-	}),
-	z.object({
-		type: z.literal(ExtensionBridgeEventName.ProviderProfileChanged),
-		instance: extensionInstanceSchema,
-		providerProfile: z.object({ name: z.string(), provider: z.string().optional() }),
-		timestamp: z.number(),
-	}),
-
-	z.object({
-		type: z.literal(ExtensionBridgeEventName.InstanceRegistered),
-		instance: extensionInstanceSchema,
-		timestamp: z.number(),
-	}),
-	z.object({
-		type: z.literal(ExtensionBridgeEventName.InstanceUnregistered),
-		instance: extensionInstanceSchema,
-		timestamp: z.number(),
-	}),
-	z.object({
-		type: z.literal(ExtensionBridgeEventName.HeartbeatUpdated),
-		instance: extensionInstanceSchema,
-		timestamp: z.number(),
-	}),
+export const extensionBridgeEventSchema = z.union([
+	baseExtensionBridgeEventSchema,
+	modeChangedExtensionBridgeEventSchema,
+	providerProfileChangedExtensionBridgeEventSchema,
 ])
 
 export type ExtensionBridgeEvent = z.infer<typeof extensionBridgeEventSchema>

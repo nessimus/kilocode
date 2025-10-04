@@ -19,7 +19,13 @@ import {
 } from "@roo-code/types"
 
 import { Mode } from "./modes"
-import type { FileCabinetWriteRequest } from "./fileCabinet"
+import type {
+	FileCabinetCreateFileRequest,
+	FileCabinetCreateFileResult,
+	FileCabinetCreateFolderRequest,
+	FileCabinetWriteRequest,
+} from "./fileCabinet"
+import type { HubAgentBlueprint, HubSettingsUpdate } from "./hub"
 import type { OuterGateInsightUpdate } from "./golden/outerGate"
 import type {
 	ArchiveDepartmentPayload,
@@ -375,6 +381,9 @@ export interface WebviewMessage {
 		| "fileCabinetLoad"
 		| "fileCabinetPreview"
 		| "fileCabinetWriteFile"
+		| "fileCabinetCreateFolder"
+		| "fileCabinetCreateFile"
+		| "fileCabinetOpenFolder"
 		| "endlessSurfaceCreate"
 		| "endlessSurfaceDelete"
 		| "endlessSurfaceUpdateMeta"
@@ -387,8 +396,17 @@ export interface WebviewMessage {
 		| "endlessSurfaceUpdateEdge"
 		| "endlessSurfaceDeleteEdge"
 		| "endlessSurfaceRequestSnapshot"
+		| "hubCreateRoom"
+		| "hubAddAgent"
+		| "hubSendMessage"
+		| "hubSetActiveRoom"
+		| "hubRemoveParticipant"
+		| "hubUpdateSettings"
+		| "hubStop"
+		| "hubTriggerAgent"
 	text?: string
 	clientMessageId?: string
+	clientTurnId?: string
 	cloverSessionId?: string
 	cloverSessionCompanyId?: string
 	cloverSessionCompanyName?: string
@@ -404,6 +422,7 @@ export interface WebviewMessage {
 		| "modes"
 		| "lobby"
 		| "chatsHub"
+		| "chatsHubTwo"
 		| "marketplace"
 		| "cloud"
 		| "profile"
@@ -412,6 +431,7 @@ export interface WebviewMessage {
 		| "workforce"
 		| "brainstorm"
 		| "outerGate"
+		| "hub"
 		| "fileCabinet"
 		| "workforceHub"
 	disabled?: boolean
@@ -420,6 +440,7 @@ export interface WebviewMessage {
 	askResponse?: ClineAskResponse
 	apiConfiguration?: ProviderSettings
 	images?: string[]
+	silent?: boolean
 	bool?: boolean
 	value?: number
 	notionToken?: string
@@ -471,6 +492,7 @@ export interface WebviewMessage {
 		| "settingsButtonClicked"
 		| "historyButtonClicked"
 		| "promptsButtonClicked"
+		| "hubButtonClicked"
 		| "profileButtonClicked"
 		| "marketplaceButtonClicked"
 		| "cloudButtonClicked"
@@ -491,6 +513,11 @@ export interface WebviewMessage {
 	url?: string // For openExternal
 	mpItem?: MarketplaceItem
 	mpInstallOptions?: InstallMarketplaceItemOptions
+	hubRoomId?: string
+	hubAgent?: HubAgentBlueprint
+	hubParticipants?: HubAgentBlueprint[]
+	hubSettings?: HubSettingsUpdate
+	hubAutonomous?: boolean
 	participantId?: string
 	agentId?: string
 	conversationHoldState?: ConversationHoldState
@@ -518,6 +545,8 @@ export interface WebviewMessage {
 	fileCabinetPath?: string
 	fileCabinetRequestId?: string
 	fileCabinetWritePayload?: FileCabinetWriteRequest
+	fileCabinetCreateFolderPayload?: FileCabinetCreateFolderRequest
+	fileCabinetCreateFilePayload?: FileCabinetCreateFileRequest
 	workplaceOwnerProfileDefaults?: WorkplaceOwnerProfile
 	workplaceRootOwnerName?: string
 	workplaceActionItemPayload?: CreateActionItemPayload
@@ -608,10 +637,11 @@ export interface BalanceDataResponsePayload {
 	error?: string
 }
 
-export type ConversationParticipantControlAction = "toggleMute" | "togglePriority"
+export type ConversationParticipantControlAction = "toggleMute" | "togglePriority" | "setParticipants"
 
 export interface ConversationParticipantControlPayload {
-	participantId: string
+	participantId?: string
+	participantIds?: string[]
 	action: ConversationParticipantControlAction
 }
 

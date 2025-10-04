@@ -33,6 +33,8 @@ import {
 	type CloudUserInfo,
 	type CreateTaskOptions,
 	type TokenUsage,
+	type ConversationAgent,
+	type OrchestratorAnalysis,
 	RooCodeEventName,
 	requestyDefaultModelId,
 	openRouterDefaultModelId,
@@ -53,14 +55,20 @@ import { Package } from "../../shared/package"
 import { findLast } from "../../shared/array"
 import { supportPrompt } from "../../shared/support-prompt"
 import { GlobalFileNames } from "../../shared/globalFileNames"
-import type { ExtensionMessage, ExtensionState, MarketplaceInstalledMetadata } from "../../shared/ExtensionMessage"
+import type {
+	ExtensionMessage,
+	ExtensionState,
+	MarketplaceInstalledMetadata,
+	WorkplaceSpendEntry,
+} from "../../shared/ExtensionMessage"
 import type { BrowserInteractionStrategy } from "../../shared/browser"
 import { Mode, defaultModeSlug, getModeBySlug } from "../../shared/modes"
 import { experimentDefault } from "../../shared/experiments"
 import { formatLanguage } from "../../shared/language"
-import { WebviewMessage } from "../../shared/WebviewMessage"
+import { WebviewMessage, ConversationParticipantControlPayload } from "../../shared/WebviewMessage"
 import { EMBEDDING_MODEL_PROFILES } from "../../shared/embeddingModels"
 import { ProfileValidator } from "../../shared/ProfileValidator"
+import { ConversationHubService } from "../hub/ConversationHubService"
 
 import { Terminal } from "../../integrations/terminal/Terminal"
 import { downloadTask } from "../../integrations/misc/export-markdown"
@@ -113,6 +121,34 @@ import { getKilocodeDefaultModel } from "../../api/providers/kilocode/getKilocod
 import { getKiloCodeWrapperProperties } from "../../core/kilocode/wrapper"
 import type { WorkplaceService } from "../../services/workplace/WorkplaceService"
 import type { WorkplaceFilesystemManager } from "../../services/workplace/WorkplaceFilesystemManager"
+
+const CHAT_HUB_LOG_PREFIX = "[ChatHubInvestigate]"
+const isChatHubDebugEnabled = process.env.CHAT_HUB_DEBUG === "true"
+const chatHubDebugLog = (...args: unknown[]) => {
+	if (!isChatHubDebugEnabled) {
+		return
+	}
+	if (args.length === 0) {
+		console.log(CHAT_HUB_LOG_PREFIX)
+		return
+	}
+	if (typeof args[0] === "string" && args[0].startsWith(CHAT_HUB_LOG_PREFIX)) {
+		console.log(...args)
+		return
+	}
+	console.log(CHAT_HUB_LOG_PREFIX, ...args)
+}
+
+const summarizeParticipantSnapshot = (snapshot: { group: string[]; muted: string[]; priority: string[] }) => {
+	const hashSource = [snapshot.group.join("|"), snapshot.muted.join("|"), snapshot.priority.join("|")]
+	return {
+		groupCount: snapshot.group.length,
+		groupSample: snapshot.group.slice(0, 3),
+		mutedCount: snapshot.muted.length,
+		priorityCount: snapshot.priority.length,
+		checksum: hashSource.join("#"),
+	}
+}
 import type {
 	WorkplaceCompany,
 	WorkplaceEmployee,
@@ -161,16 +197,7 @@ const CLOVER_SYSTEM_PROMPT = `You are Clover AI, the concierge for Golden Workpl
 const CLOVER_WELCOME_TEXT =
 	"Welcome back to the Outer Gates! Tell me what spark you want to explore and I’ll line it up with the right workspace."
 
-const PASSION_COLOR_PALETTE = [
-	"#F97316",
-	"#6366F1",
-	"#10B981",
-	"#EC4899",
-	"#14B8A6",
-	"#F59E0B",
-	"#8B5CF6",
-	"#0EA5E9",
-]
+const PASSION_COLOR_PALETTE = ["#F97316", "#6366F1", "#10B981", "#EC4899", "#14B8A6", "#F59E0B", "#8B5CF6", "#0EA5E9"]
 
 /**
  * https://github.com/microsoft/vscode-webview-ui-toolkit-samples/blob/main/default/weather-webview/src/providers/WeatherViewProvider.ts
@@ -228,10 +255,18 @@ export class ClineProvider
 	private outerGateState: OuterGateState
 	private outerGateManager?: OuterGateIntegrationManager
 	private outerGateManagerPromise?: Promise<OuterGateIntegrationManager>
+	private readonly conversationHub: ConversationHubService
 
 	private recentTasksCache?: string[]
 	private pendingOperations: Map<string, PendingEditOperation> = new Map()
 	private static readonly PENDING_OPERATION_TIMEOUT_MS = 30000 // 30 seconds
+	private readonly conversationParticipantCache = {
+		group: [] as string[],
+		muted: new Set<string>(),
+		priority: new Set<string>(),
+	}
+	private lastPostedConversationAgents?: { taskId: string; agents: ConversationAgent[] }
+	private lastPostedOrchestratorAnalysis?: { taskId: string; analysis?: OrchestratorAnalysis }
 
 	public isViewLaunched = false
 	public settingsImportedAt?: number
@@ -289,6 +324,11 @@ export class ClineProvider
 			})
 
 		this.marketplaceManager = new MarketplaceManager(this.context, this.customModesManager)
+
+		this.conversationHub = new ConversationHubService(this)
+		this.conversationHub.on("stateChanged", () => {
+			void this.postStateToWebview()
+		})
 
 		// Forward <most> task events to the provider.
 		// We do something fairly similar for the IPC-based API.
@@ -453,6 +493,10 @@ export class ClineProvider
 
 	private handleEndlessSurfaceStateChange = () => {
 		void this.postStateToWebview()
+	}
+
+	public getConversationHub(): ConversationHubService {
+		return this.conversationHub
 	}
 
 	/**
@@ -620,20 +664,19 @@ export class ClineProvider
 		}
 
 		const nowIso = new Date().toISOString()
-		const trimmedTitle =
-			updates.title !== undefined ? updates.title.trim() : undefined
+		const trimmedTitle = updates.title !== undefined ? updates.title.trim() : undefined
 		const trimmedSummary =
 			updates.summary !== undefined && updates.summary !== null
 				? updates.summary.trim()
-				: updates.summary ?? undefined
+				: (updates.summary ?? undefined)
 		const trimmedWorkspace =
 			updates.recommendedWorkspace !== undefined && updates.recommendedWorkspace !== null
 				? updates.recommendedWorkspace.trim()
-				: updates.recommendedWorkspace ?? undefined
+				: (updates.recommendedWorkspace ?? undefined)
 		const trimmedCompanyId =
 			updates.assignedCompanyId !== undefined && updates.assignedCompanyId !== null
 				? updates.assignedCompanyId.trim()
-				: updates.assignedCompanyId ?? undefined
+				: (updates.assignedCompanyId ?? undefined)
 
 		const nextStage = updates.stage ?? existing.stage
 		if (!["captured", "processing", "ready", "assigned"].includes(nextStage)) {
@@ -677,9 +720,7 @@ export class ClineProvider
 			nextAnalysisPool = this.applyStageTransition(nextAnalysisPool, existing.stage, nextStage, nowIso)
 		}
 
-		const nextInsights = baseState.recentInsights.map((insight) =>
-			insight.id === id ? updatedInsight : insight,
-		)
+		const nextInsights = baseState.recentInsights.map((insight) => (insight.id === id ? updatedInsight : insight))
 
 		this.updateOuterGateState({
 			...baseState,
@@ -767,6 +808,8 @@ export class ClineProvider
 		// Add this cline instance into the stack that represents the order of
 		// all the called tasks.
 		this.clineStack.push(task)
+		this.lastPostedConversationAgents = undefined
+		this.lastPostedOrchestratorAnalysis = undefined
 		task.emit(RooCodeEventName.TaskFocused)
 
 		// Perform special setup provider specific tasks.
@@ -841,6 +884,123 @@ export class ClineProvider
 
 	public getCurrentTaskStack(): string[] {
 		return this.clineStack.map((cline) => cline.taskId)
+	}
+
+	public getConversationParticipantSnapshot(): {
+		group: string[]
+		muted: string[]
+		priority: string[]
+	} {
+		return {
+			group: [...this.conversationParticipantCache.group],
+			muted: Array.from(this.conversationParticipantCache.muted),
+			priority: Array.from(this.conversationParticipantCache.priority),
+		}
+	}
+
+	private cacheConversationAgentsSnapshot(taskId: string, agents: ConversationAgent[]) {
+		// Store a shallow copy so later mutations don't bleed across tasks.
+		this.lastPostedConversationAgents = { taskId, agents: agents.map((agent) => ({ ...agent })) }
+	}
+
+	private readCachedConversationAgents(taskId: string): ConversationAgent[] | undefined {
+		if (this.lastPostedConversationAgents?.taskId !== taskId) {
+			return undefined
+		}
+		return this.lastPostedConversationAgents?.agents.map((agent) => ({ ...agent }))
+	}
+
+	private buildConversationStateSnapshot(currentTask?: Task): {
+		agents: ConversationAgent[] | undefined
+		analysis: OrchestratorAnalysis | undefined
+	} {
+		if (!currentTask) {
+			this.lastPostedConversationAgents = undefined
+			this.lastPostedOrchestratorAnalysis = undefined
+			return { agents: [], analysis: undefined }
+		}
+
+		const taskId = currentTask.taskId
+		const currentAgents = currentTask.currentConversationAgents ?? []
+		const cachedAgents = this.readCachedConversationAgents(taskId)
+		let agentsToSend: ConversationAgent[] | undefined
+
+		if (currentAgents.length > 0) {
+			agentsToSend = currentAgents
+			this.cacheConversationAgentsSnapshot(taskId, currentAgents)
+		} else if (cachedAgents && cachedAgents.length > 0 && this.conversationParticipantCache.group.length > 0) {
+			agentsToSend = cachedAgents
+		} else {
+			agentsToSend = currentAgents
+			this.cacheConversationAgentsSnapshot(taskId, currentAgents)
+		}
+
+		const currentAnalysis = currentTask.currentOrchestratorAnalysis
+		const cachedAnalysis =
+			this.lastPostedOrchestratorAnalysis?.taskId === taskId
+				? this.lastPostedOrchestratorAnalysis.analysis
+				: undefined
+		let analysisToSend: OrchestratorAnalysis | undefined
+
+		if (currentAnalysis) {
+			analysisToSend = currentAnalysis
+			this.lastPostedOrchestratorAnalysis = { taskId, analysis: currentAnalysis }
+		} else if (cachedAnalysis) {
+			analysisToSend = cachedAnalysis
+		} else {
+			analysisToSend = undefined
+			this.lastPostedOrchestratorAnalysis = { taskId, analysis: undefined }
+		}
+
+		return { agents: agentsToSend, analysis: analysisToSend }
+	}
+
+	public updateConversationParticipantCache(
+		payload?: ConversationParticipantControlPayload,
+		logContext: string = "webview",
+	): void {
+		if (!payload) {
+			return
+		}
+		const { action } = payload
+		const cache = this.conversationParticipantCache
+		switch (action) {
+			case "setParticipants": {
+				if (!Array.isArray(payload.participantIds)) {
+					break
+				}
+				const deduped = payload.participantIds.filter((id, index, arr) => id && arr.indexOf(id) === index)
+				cache.group = deduped
+				break
+			}
+			case "toggleMute": {
+				if (!payload.participantId) {
+					break
+				}
+				if (cache.muted.has(payload.participantId)) {
+					cache.muted.delete(payload.participantId)
+				} else {
+					cache.muted.add(payload.participantId)
+				}
+				break
+			}
+			case "togglePriority": {
+				if (!payload.participantId) {
+					break
+				}
+				if (cache.priority.has(payload.participantId)) {
+					cache.priority.delete(payload.participantId)
+				} else {
+					cache.priority.add(payload.participantId)
+				}
+				break
+			}
+		}
+		chatHubDebugLog("updateConversationParticipantCache", {
+			action,
+			logContext,
+			snapshot: summarizeParticipantSnapshot(this.getConversationParticipantSnapshot()),
+		})
 	}
 
 	// Remove the current task/cline instance (at the top of the stack), so this
@@ -976,6 +1136,7 @@ export class ClineProvider
 		this.mcpHub = undefined
 		this.marketplaceManager?.cleanup()
 		this.customModesManager?.dispose()
+		this.conversationHub.dispose()
 		this.cleanupEndlessSurfaceListeners()
 		this.endlessSurfaceService = undefined
 		this.log("Disposed all disposables")
@@ -1346,6 +1507,83 @@ export class ClineProvider
 	}
 
 	public async postMessageToWebview(message: ExtensionMessage) {
+		if (message.type === "orchestratorAnalysis") {
+			const payload = (message.payload ?? {}) as {
+				taskId?: string
+				agents?: ConversationAgent[]
+				analysis?: OrchestratorAnalysis
+			}
+			const taskId = payload.taskId ?? this.getCurrentTask()?.taskId
+			if (taskId) {
+				const agents = message.conversationAgents ?? payload.agents
+				if (Array.isArray(agents)) {
+					this.cacheConversationAgentsSnapshot(taskId, agents)
+				}
+				const analysis = message.lastOrchestratorAnalysis ?? payload.analysis
+				if (analysis !== undefined) {
+					this.lastPostedOrchestratorAnalysis = { taskId, analysis }
+				}
+			}
+		} else if (message.type === "state" && !this.getCurrentTask()) {
+			this.lastPostedConversationAgents = undefined
+			this.lastPostedOrchestratorAnalysis = undefined
+		}
+		if (isChatHubDebugEnabled) {
+			const payload = (message as { payload?: unknown }).payload
+			switch (message.type) {
+				case "invoke": {
+					if (message.invoke === "sendMessage" || message.invoke === "newChat") {
+						const summary: Record<string, unknown> = {
+							type: message.type,
+							invoke: message.invoke,
+							taskId: this.getCurrentTask()?.taskId,
+						}
+						if (typeof message.text === "string") {
+							summary.textPreview = message.text.slice(0, 80)
+						}
+						chatHubDebugLog("postMessageToWebview", summary)
+					}
+					break
+				}
+				case "conversationHoldState": {
+					chatHubDebugLog("postMessageToWebview", {
+						type: message.type,
+						holdMode: message.conversationHoldState?.mode,
+						initiatedBy: message.conversationHoldState?.initiatedBy,
+						taskId: this.getCurrentTask()?.taskId,
+					})
+					break
+				}
+				case "orchestratorAnalysis": {
+					const payloadAnalysis =
+						payload && typeof payload === "object"
+							? (payload as { analysis?: OrchestratorAnalysis }).analysis
+							: undefined
+					const payloadAgents =
+						payload && typeof payload === "object"
+							? (payload as { agents?: ConversationAgent[] }).agents
+							: undefined
+					const appendTimeline =
+						payload && typeof payload === "object"
+							? (payload as { appendTimeline?: boolean }).appendTimeline
+							: undefined
+					const taskId =
+						payload && typeof payload === "object"
+							? (payload as { taskId?: string }).taskId
+							: this.getCurrentTask()?.taskId
+					const analysis = message.lastOrchestratorAnalysis ?? payloadAnalysis
+					const agents = message.conversationAgents ?? payloadAgents
+					chatHubDebugLog("postMessageToWebview", {
+						type: message.type,
+						primarySpeakerCount: analysis?.primarySpeakers?.length ?? 0,
+						agentCount: agents?.length ?? 0,
+						appendTimeline,
+						taskId,
+					})
+					break
+				}
+			}
+		}
 		await this.view?.webview.postMessage(message)
 	}
 
@@ -3132,6 +3370,9 @@ Clover:`
 
 		const workplaceService = this.getWorkplaceService()
 		const workplaceStateSnapshot = workplaceService?.getState()
+		const currentTask = this.getCurrentTask()
+		const { agents: conversationAgentsForState, analysis: orchestratorAnalysisForState } =
+			this.buildConversationStateSnapshot(currentTask)
 		const companyNames = workplaceStateSnapshot?.companies?.map((company) => company.name) ?? []
 		verboseProviderLog("getState", {
 			renderContext: this.renderContext,
@@ -3139,6 +3380,10 @@ Clover:`
 			companyCount: workplaceStateSnapshot?.companies?.length ?? 0,
 			companyNames,
 		})
+
+		const companyWorkspacePaths = this.workplaceFilesystemManager?.getCompanyWorkspacePaths()
+		const companyFolderNames = this.workplaceFilesystemManager?.getCompanyFolderNames()
+		const workplaceSpend = this.buildWorkplaceSpend(companyWorkspacePaths, companyFolderNames, taskHistory)
 		return {
 			version: this.context.extension?.packageJSON?.version ?? "",
 			apiConfiguration,
@@ -3165,15 +3410,15 @@ Clover:`
 				apiConfiguration.kilocodeToken,
 				apiConfiguration.kilocodeOrganizationId,
 			),
-			currentTaskItem: this.getCurrentTask()?.taskId
-				? (taskHistory || []).find((item: HistoryItem) => item.id === this.getCurrentTask()?.taskId)
+			currentTaskItem: currentTask?.taskId
+				? (taskHistory || []).find((item: HistoryItem) => item.id === currentTask?.taskId)
 				: undefined,
-			clineMessages: this.getCurrentTask()?.clineMessages || [],
-			currentTaskTodos: this.getCurrentTask()?.todoList || [],
-			messageQueue: this.getCurrentTask()?.messageQueueService?.messages,
-			conversationHoldState: this.getCurrentTask()?.currentConversationHoldState,
-			conversationAgents: this.getCurrentTask()?.currentConversationAgents ?? [],
-			lastOrchestratorAnalysis: this.getCurrentTask()?.currentOrchestratorAnalysis,
+			clineMessages: currentTask?.clineMessages || [],
+			currentTaskTodos: currentTask?.todoList || [],
+			messageQueue: currentTask?.messageQueueService?.messages,
+			conversationHoldState: currentTask?.currentConversationHoldState,
+			conversationAgents: conversationAgentsForState,
+			lastOrchestratorAnalysis: orchestratorAnalysisForState,
 			taskHistory: (taskHistory || [])
 				.filter((item: HistoryItem) => item.ts && item.task)
 				.sort((a: HistoryItem, b: HistoryItem) => b.ts - a.ts),
@@ -3294,6 +3539,8 @@ Clover:`
 			workplaceState: workplaceStateSnapshot ?? { companies: [] },
 			workplaceRootConfigured: this.workplaceFilesystemManager?.isConfigured() ?? false,
 			workplaceRootUri: this.workplaceFilesystemManager?.getRootUri()?.fsPath,
+			workplaceSpend,
+			hubSnapshot: this.conversationHub.getSnapshot(),
 			outerGateState: this.getOuterGateStateSnapshot(),
 		}
 	}
@@ -3877,6 +4124,13 @@ Clover:`
 			throw new OrganizationAllowListViolationError(t("common:errors.violated_organization_allowlist"))
 		}
 
+		const participantSnapshot = this.getConversationParticipantSnapshot()
+		chatHubDebugLog("createTask.participantSnapshot", {
+			stackSize: this.clineStack.length,
+			participantSnapshot,
+			clientTurnId: options.clientTurnId,
+		})
+
 		const task = new Task({
 			provider: this,
 			context: this.context, // kilocode_change
@@ -3894,6 +4148,7 @@ Clover:`
 			onCreated: this.taskCreationCallback,
 			enableBridge: BridgeOrchestrator.isEnabled(cloudUserInfo, remoteControlEnabled),
 			initialTodos: options.initialTodos,
+			initialConversationParticipants: participantSnapshot,
 			...options,
 		})
 
@@ -4413,6 +4668,60 @@ Here is the project's README to help you get started:\n\n${mcpDetails.readmeCont
 
 	// kilocode_change end
 
+	private buildWorkplaceSpend(
+		workspacePaths: Record<string, string> | undefined,
+		folderNames: Record<string, string> | undefined,
+		taskHistory: HistoryItem[] | undefined,
+	): Record<string, WorkplaceSpendEntry> | undefined {
+		if (!workspacePaths || Object.keys(workspacePaths).length === 0 || !taskHistory) {
+			return undefined
+		}
+
+		const normalizeWorkspacePath = (value: string) => {
+			const resolved = path.resolve(value)
+			return process.platform === "win32" ? resolved.toLowerCase() : resolved
+		}
+
+		const totalByWorkspace = new Map<string, number>()
+		const monthToDateByWorkspace = new Map<string, number>()
+		const firstOfMonth = new Date()
+		firstOfMonth.setDate(1)
+		firstOfMonth.setHours(0, 0, 0, 0)
+		const monthCutoff = firstOfMonth.getTime()
+
+		for (const item of taskHistory) {
+			if (!item) {
+				continue
+			}
+			const workspace = item.workspace
+			if (!workspace) {
+				continue
+			}
+			const totalCost = typeof item.totalCost === "number" ? item.totalCost : 0
+			if (!Number.isFinite(totalCost)) {
+				continue
+			}
+			const normalized = normalizeWorkspacePath(workspace)
+			totalByWorkspace.set(normalized, (totalByWorkspace.get(normalized) ?? 0) + totalCost)
+			if (typeof item.ts === "number" && item.ts >= monthCutoff) {
+				monthToDateByWorkspace.set(normalized, (monthToDateByWorkspace.get(normalized) ?? 0) + totalCost)
+			}
+		}
+
+		const spendEntries: Record<string, WorkplaceSpendEntry> = {}
+		for (const [companyId, workspacePath] of Object.entries(workspacePaths)) {
+			const normalized = normalizeWorkspacePath(workspacePath)
+			spendEntries[companyId] = {
+				workspacePath,
+				folderName: folderNames?.[companyId],
+				totalCost: totalByWorkspace.get(normalized) ?? 0,
+				monthToDateCost: monthToDateByWorkspace.get(normalized) ?? 0,
+			}
+		}
+
+		return spendEntries
+	}
+
 	public get cwd() {
 		return this.currentWorkspacePath || getWorkspacePath()
 	}
@@ -4487,10 +4796,10 @@ function cloneOuterGateState(state: OuterGateState): OuterGateState {
 				coordinates: { ...point.coordinates },
 				metadata: point.metadata
 					? {
-						...point.metadata,
-						references: point.metadata.references ? [...point.metadata.references] : undefined,
-					}
-				: undefined,
+							...point.metadata,
+							references: point.metadata.references ? [...point.metadata.references] : undefined,
+						}
+					: undefined,
 			})),
 			clusters: state.passionMap.clusters.map((cluster) => ({
 				...cluster,
@@ -4665,7 +4974,7 @@ function deriveNormalizedCoordinates(items: CloverAnalysisItems): Array<{ x: num
 }
 
 function normalizeToRange(value: number, min: number, range: number): number {
-	return (value - min) / range * 2 - 1
+	return ((value - min) / range) * 2 - 1
 }
 
 function averageCoordinates(points: OuterGatePassionPoint[]): { x: number; y: number } {

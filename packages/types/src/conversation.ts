@@ -1,11 +1,6 @@
 import { z } from "zod"
 
-export const orchestratorRoutingTierSchema = z.enum([
-	"directed",
-	"topic",
-	"monitor",
-	"rotation",
-])
+export const orchestratorRoutingTierSchema = z.enum(["directed", "topic", "monitor", "rotation"])
 
 export type OrchestratorRoutingTier = z.infer<typeof orchestratorRoutingTierSchema>
 
@@ -13,11 +8,7 @@ export const orchestratorAgentSchema = z.object({
 	id: z.string(),
 	label: z.string().optional(),
 	role: z.string().optional(),
-	confidence: z
-		.number()
-		.min(0)
-		.max(1)
-		.optional(),
+	confidence: z.number().min(0).max(1).optional(),
 	tier: orchestratorRoutingTierSchema.optional(),
 	reason: z.string().optional(),
 })
@@ -48,6 +39,12 @@ export const orchestratorIntentSchema = z.object({
 	urgency: z.enum(["low", "normal", "high"]).optional(),
 	stopKeywords: z.array(z.string()).optional(),
 	topics: z.array(z.string()).optional(),
+	exclusiveAgentIds: z.array(z.string()).optional(),
+	excludedAgentIds: z.array(z.string()).optional(),
+	multiSpeaker: z.boolean().optional(),
+	directedAgentIds: z.array(z.string()).optional(),
+	respondDirectly: z.boolean().optional(),
+	documentCreationBanned: z.boolean().optional(),
 })
 
 export type OrchestratorIntent = z.infer<typeof orchestratorIntentSchema>

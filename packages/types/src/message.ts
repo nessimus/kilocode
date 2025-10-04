@@ -215,6 +215,7 @@ const orchestratorMessageMetadataSchema = z.object({
 	secondarySpeakers: z.array(orchestratorAgentSchema).optional(),
 	suppressedAgents: z.array(orchestratorSuppressedAgentSchema).optional(),
 	auditEventId: z.string().optional(),
+	clientTurnId: z.string().optional(),
 })
 
 export type OrchestratorMessageMetadata = z.infer<typeof orchestratorMessageMetadataSchema>
@@ -305,6 +306,8 @@ export const queuedMessageSchema = z.object({
 	id: z.string(),
 	text: z.string(),
 	images: z.array(z.string()).optional(),
+	silent: z.boolean().optional(),
+	clientTurnId: z.string().optional(),
 })
 
 export type QueuedMessage = z.infer<typeof queuedMessageSchema>

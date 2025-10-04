@@ -1,4 +1,5 @@
 import * as path from "node:path"
+import * as os from "node:os"
 
 import * as vscode from "vscode"
 
@@ -11,6 +12,8 @@ import {
 	FileCabinetSnapshot,
 	FileCabinetFolderSummary,
 	FileCabinetWriteRequest,
+	FileCabinetCreateFolderRequest,
+	FileCabinetCreateFileRequest,
 } from "../../shared/fileCabinet"
 import type { WorkplaceStateObserver } from "./WorkplaceService"
 
@@ -76,6 +79,23 @@ const TEXT_EXTENSIONS = new Set([
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"]) as Set<string>
 const VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".mkv", ".avi"]) as Set<string>
 const AUDIO_EXTENSIONS = new Set([".mp3", ".wav", ".m4a", ".flac"]) as Set<string>
+
+const shouldLogWorkplaceFilesystemDebug =
+	process?.env?.WORKPLACE_FILESYSTEM_DEBUG === "true" || process?.env?.WORKPLACE_FILESYSTEM_DEBUG === "1"
+
+const workplaceFsInfo = (...args: unknown[]) => {
+	if (!shouldLogWorkplaceFilesystemDebug) {
+		return
+	}
+	console.info(...args)
+}
+
+const workplaceFsWarn = (...args: unknown[]) => {
+	if (!shouldLogWorkplaceFilesystemDebug) {
+		return
+	}
+	console.warn(...args)
+}
 const SPREADSHEET_EXTENSIONS = new Set([".xls", ".xlsx", ".csv"]) as Set<string>
 const PRESENTATION_EXTENSIONS = new Set([".ppt", ".pptx", ".key"]) as Set<string>
 const DOC_EXTENSIONS = new Set([".doc", ".docx", ".pdf"])
@@ -83,11 +103,7 @@ const ARCHIVE_EXTENSIONS = new Set([".zip", ".tar", ".gz", ".tgz", ".rar"])
 
 const IGNORED_DIRECTORY_NAMES = new Set([".git", "node_modules", ".DS_Store", "__pycache__"])
 
-const posixJoin = (...segments: string[]): string =>
-	segments
-		.filter(Boolean)
-		.join("/")
-		.replace(/\\/g, "/")
+const posixJoin = (...segments: string[]): string => segments.filter(Boolean).join("/").replace(/\\/g, "/")
 
 export class WorkplaceFilesystemManager implements WorkplaceStateObserver {
 	private rootUri: vscode.Uri | undefined
@@ -252,6 +268,21 @@ export class WorkplaceFilesystemManager implements WorkplaceStateObserver {
 		await Promise.allSettled(calls)
 	}
 
+	public getCompanyFolderNames(): Record<string, string> {
+		return { ...this.folderMap }
+	}
+
+	public getCompanyWorkspacePaths(): Record<string, string> {
+		const result: Record<string, string> = {}
+		for (const companyId of Object.keys(this.folderMap)) {
+			const uri = this.getCompanyFolderUri(companyId)
+			if (uri) {
+				result[companyId] = uri.fsPath
+			}
+		}
+		return result
+	}
+
 	public async getFileCabinetSnapshot(companyId: string): Promise<FileCabinetSnapshot | undefined> {
 		const companyUri = this.getCompanyFolderUri(companyId)
 		if (!companyUri) {
@@ -338,10 +369,7 @@ export class WorkplaceFilesystemManager implements WorkplaceStateObserver {
 				preview.markdown = decoder.decode(data.slice(0, MAX_PREVIEW_BYTES))
 				return preview
 			}
-			const isPlainText =
-				kind === "text" ||
-				kind === "code" ||
-				(lowercaseExt === ".csv")
+			const isPlainText = kind === "text" || kind === "code" || lowercaseExt === ".csv"
 
 			if (isPlainText) {
 				preview.text = decoder.decode(data.slice(0, MAX_PREVIEW_BYTES))
@@ -367,6 +395,77 @@ export class WorkplaceFilesystemManager implements WorkplaceStateObserver {
 		return preview
 	}
 
+	public async createCompanyFolder(request: FileCabinetCreateFolderRequest): Promise<void> {
+		const companyUri = this.getCompanyFolderUri(request.companyId)
+		if (!companyUri) {
+			throw new Error("Workplace root is not configured")
+		}
+		const relative = this.sanitizeRelativePath(request.path)
+		if (!relative) {
+			throw new Error("Invalid path")
+		}
+		await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(companyUri, relative))
+	}
+
+	public async createCompanyFile(request: FileCabinetCreateFileRequest): Promise<{ path: string; fileName: string }> {
+		const companyUri = this.getCompanyFolderUri(request.companyId)
+		if (!companyUri) {
+			throw new Error("Workplace root is not configured")
+		}
+		const directoryRelative =
+			request.directory && request.directory.trim().length > 0 ? this.sanitizeRelativePath(request.directory) : ""
+		if (directoryRelative === undefined) {
+			throw new Error("Invalid directory")
+		}
+		const targetDirectory = directoryRelative ? vscode.Uri.joinPath(companyUri, directoryRelative) : companyUri
+		await vscode.workspace.fs.createDirectory(targetDirectory)
+
+		const preferredBase = (request.preferredBaseName ?? "Untitled").trim() || "Untitled"
+		const sanitizedBase = preferredBase.replace(/[\\/:]/g, "-").trim() || "Untitled"
+		const extensionInput = request.extension?.trim()
+		const extension = extensionInput
+			? extensionInput.startsWith(".")
+				? extensionInput
+				: `.${extensionInput}`
+			: ".md"
+
+		const encoding = request.encoding ?? "utf8"
+		const contents = request.initialContents ?? ""
+		const data = encoding === "base64" ? Buffer.from(contents, "base64") : Buffer.from(contents, "utf8")
+
+		let attempt = 0
+		let fileName = ""
+		let candidateUri: vscode.Uri | undefined
+		while (attempt < 200) {
+			const suffix = attempt === 0 ? "" : ` ${attempt + 1}`
+			fileName = `${sanitizedBase}${suffix}${extension}`
+			candidateUri = vscode.Uri.joinPath(targetDirectory, fileName)
+			try {
+				await vscode.workspace.fs.stat(candidateUri)
+				attempt += 1
+				continue
+			} catch (error) {
+				if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") {
+					break
+				}
+				throw error
+			}
+		}
+
+		if (!candidateUri) {
+			throw new Error("Unable to resolve target file")
+		}
+
+		if (attempt >= 200) {
+			throw new Error("Too many untitled files exist in this folder")
+		}
+
+		await vscode.workspace.fs.writeFile(candidateUri, data)
+
+		const relativePath = directoryRelative ? `${directoryRelative}/${fileName}` : fileName
+		return { path: relativePath, fileName }
+	}
+
 	public async writeCompanyFile(request: FileCabinetWriteRequest): Promise<void> {
 		const companyUri = this.getCompanyFolderUri(request.companyId)
 		if (!companyUri) {
@@ -388,6 +487,19 @@ export class WorkplaceFilesystemManager implements WorkplaceStateObserver {
 			await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(companyUri, directoryRelative))
 		}
 		await vscode.workspace.fs.writeFile(targetUri, data)
+	}
+
+	public async openCompanyFolder(request: { companyId: string; path?: string }): Promise<void> {
+		const companyUri = this.getCompanyFolderUri(request.companyId)
+		if (!companyUri) {
+			throw new Error("Workplace root is not configured")
+		}
+		const relative = request.path ? this.sanitizeRelativePath(request.path) : ""
+		if (relative === undefined) {
+			throw new Error("Invalid path")
+		}
+		const targetUri = relative ? vscode.Uri.joinPath(companyUri, relative) : companyUri
+		await vscode.commands.executeCommand("revealFileInOS", targetUri)
 	}
 
 	private async promptForRootFolder(options?: { title?: string; message?: string }): Promise<vscode.Uri | undefined> {
@@ -447,26 +559,295 @@ export class WorkplaceFilesystemManager implements WorkplaceStateObserver {
 		}
 	}
 
+	private async directoryExists(uri: vscode.Uri): Promise<boolean> {
+		try {
+			const stat = await vscode.workspace.fs.stat(uri)
+			return (stat.type & vscode.FileType.Directory) !== 0
+		} catch (error) {
+			return false
+		}
+	}
+
+	private async locateRelocatedRoot(missingUri: vscode.Uri, state: WorkplaceState): Promise<vscode.Uri | undefined> {
+		const targetName = path.basename(missingUri.fsPath)
+		const searchBases = new Set<string>()
+		const missingParent = path.dirname(missingUri.fsPath)
+		if (missingParent) {
+			searchBases.add(missingParent)
+		}
+		const workspaceFolders = vscode.workspace.workspaceFolders ?? []
+		for (const folder of workspaceFolders) {
+			searchBases.add(folder.uri.fsPath)
+			searchBases.add(path.dirname(folder.uri.fsPath))
+		}
+		const home = os.homedir()
+		if (home) {
+			searchBases.add(home)
+			searchBases.add(path.join(home, "Desktop"))
+			searchBases.add(path.join(home, "Documents"))
+		}
+
+		const expectedChildren = new Set<string>()
+		for (const folderName of Object.values(this.folderMap)) {
+			if (folderName) {
+				expectedChildren.add(folderName.toLowerCase())
+			}
+		}
+		for (const company of state.companies) {
+			if (company.name) {
+				expectedChildren.add(company.name.toLowerCase())
+				const slug = this.slugify(company.name)
+				if (slug) {
+					expectedChildren.add(slug.toLowerCase())
+				}
+			}
+		}
+
+		for (const basePath of searchBases) {
+			if (!basePath) {
+				continue
+			}
+			let entries: [string, vscode.FileType][]
+			try {
+				entries = await vscode.workspace.fs.readDirectory(vscode.Uri.file(basePath))
+			} catch (_error) {
+				continue
+			}
+			for (const [entryName, entryType] of entries) {
+				if ((entryType & vscode.FileType.Directory) === 0) {
+					continue
+				}
+				if (entryName.toLowerCase() !== targetName.toLowerCase()) {
+					continue
+				}
+				const candidate = vscode.Uri.file(path.join(basePath, entryName))
+				try {
+					const childEntries = await vscode.workspace.fs.readDirectory(candidate)
+					const childNames = childEntries
+						.filter(([, childType]) => (childType & vscode.FileType.Directory) !== 0)
+						.map(([childName]) => childName.toLowerCase())
+					const matches = childNames.filter((name) => expectedChildren.has(name))
+					if (matches.length > 0) {
+						workplaceFsInfo(
+							`[WorkplaceFilesystem] Located relocated root at ${candidate.fsPath}; matched subfolders: ${matches.join(", ")}`,
+						)
+						return candidate
+					}
+				} catch (error) {
+					workplaceFsWarn(
+						`[WorkplaceFilesystem] Unable to inspect candidate root ${candidate.fsPath}: ${error instanceof Error ? error.message : String(error)}`,
+					)
+				}
+			}
+		}
+
+		return undefined
+	}
+
+	private async hasVisibleDirectoryEntries(folderUri: vscode.Uri): Promise<boolean> {
+		try {
+			const entries = await vscode.workspace.fs.readDirectory(folderUri)
+			return entries.some(
+				([entryName]) =>
+					!IGNORED_DIRECTORY_NAMES.has(entryName) && !entryName.startsWith(".") && entryName.length > 0,
+			)
+		} catch (error) {
+			workplaceFsWarn(
+				`[WorkplaceFilesystem] Failed to inspect directory ${folderUri.toString()}: ${error instanceof Error ? error.message : String(error)}`,
+			)
+			return false
+		}
+	}
+
 	private async syncCompanyFolders(state: WorkplaceState): Promise<void> {
 		if (!this.rootUri) {
 			return
 		}
 
+		const rootExists = await this.directoryExists(this.rootUri)
+		if (!rootExists) {
+			workplaceFsWarn(
+				`[WorkplaceFilesystem] Root folder missing at ${this.rootUri.fsPath}; attempting to locate relocation`,
+			)
+			const relocated = await this.locateRelocatedRoot(this.rootUri, state)
+			if (relocated) {
+				this.rootUri = relocated
+				await this.saveRootUri(relocated)
+			} else {
+				console.error(
+					`[WorkplaceFilesystem] Unable to locate relocated root for ${this.rootUri.fsPath}. Please choose the correct folder again.`,
+				)
+				void vscode.window.showWarningMessage(
+					"Golden Workplace folders appear to have moved. Please run 'Golden Workplace: Choose Workplace Folder' to reconnect the workspace.",
+				)
+				return
+			}
+		}
+
 		let mapChanged = false
+		workplaceFsInfo(
+			`[WorkplaceFilesystem] Syncing company folders at root ${this.rootUri.fsPath} for ${state.companies.length} companies`,
+		)
 		const currentCompanyIds = new Set(state.companies.map((company) => company.id))
 
 		for (const existingId of Object.keys(this.folderMap)) {
-			if (!currentCompanyIds.has(existingId)) {
+			const mappedName = this.folderMap[existingId]
+			let mappedExists = true
+			if (mappedName) {
+				try {
+					const folderUri = vscode.Uri.joinPath(this.rootUri, mappedName)
+					await vscode.workspace.fs.stat(folderUri)
+					const hasContent = await this.hasVisibleDirectoryEntries(folderUri)
+					if (!hasContent) {
+						mappedExists = false
+						workplaceFsInfo(
+							`[WorkplaceFilesystem] Mapping ${existingId} → ${mappedName} is empty; will attempt to adopt an existing directory`,
+						)
+					}
+				} catch (error) {
+					mappedExists = false
+					workplaceFsWarn(
+						`[WorkplaceFilesystem] Removing stale mapping for ${existingId} → ${mappedName}: ${error instanceof Error ? error.message : String(error)}`,
+					)
+				}
+			}
+
+			if (!currentCompanyIds.has(existingId) || !mappedExists) {
 				delete this.folderMap[existingId]
 				mapChanged = true
 			}
 		}
+		workplaceFsInfo(
+			`[WorkplaceFilesystem] Remaining mappings after cleanup: ${
+				Object.entries(this.folderMap)
+					.map(([companyId, folder]) => `${companyId}→${folder}`)
+					.join(", ") || "[none]"
+			}`,
+		)
+
+		let existingEntries: [string, vscode.FileType][] = []
+		try {
+			existingEntries = await vscode.workspace.fs.readDirectory(this.rootUri)
+			workplaceFsInfo(
+				`[WorkplaceFilesystem] Root contains ${existingEntries.length} entries: ${existingEntries
+					.map(([name]) => name)
+					.join(", ")}`,
+			)
+		} catch (error) {
+			console.error("[WorkplaceFilesystem] Failed to enumerate root directory", error)
+		}
+
+		const assignedFolderNames = new Set(Object.values(this.folderMap))
+		const availableByLowerName = new Map<string, string>()
+		const availableBySlug = new Map<string, string>()
+
+		for (const [entryName, entryType] of existingEntries) {
+			if (
+				entryType !== vscode.FileType.Directory &&
+				entryType !== (vscode.FileType.Directory | vscode.FileType.SymbolicLink)
+			) {
+				continue
+			}
+			if (assignedFolderNames.has(entryName)) {
+				workplaceFsInfo(
+					`[WorkplaceFilesystem] Entry ${entryName} already assigned to a company, skipping as candidate`,
+				)
+				continue
+			}
+			availableByLowerName.set(entryName.toLowerCase(), entryName)
+			const entrySlug = this.slugify(entryName)
+			if (entrySlug) {
+				availableBySlug.set(entrySlug, entryName)
+			}
+		}
+		if (availableByLowerName.size > 0) {
+			workplaceFsInfo(
+				`[WorkplaceFilesystem] Candidate folders available for adoption: ${Array.from(availableByLowerName.values()).join(", ")}`,
+			)
+		}
 
 		for (const company of state.companies) {
+			workplaceFsInfo(`[WorkplaceFilesystem] Resolving folder for company ${company.id} (${company.name})`)
+			if (!this.folderMap[company.id]) {
+				const exactName = company.name?.toLowerCase().trim()
+				if (exactName) {
+					const existing = availableByLowerName.get(exactName)
+					if (existing) {
+						workplaceFsInfo(
+							`[WorkplaceFilesystem] Adopted exact-name match ${existing} for company ${company.id}`,
+						)
+						this.folderMap[company.id] = existing
+						assignedFolderNames.add(existing)
+						availableByLowerName.delete(exactName)
+						const assignedSlug = this.slugify(existing)
+						if (assignedSlug) {
+							availableBySlug.delete(assignedSlug)
+						}
+						mapChanged = true
+						continue
+					}
+				}
+
+				const nameSlug = this.slugify(company.name)
+				const idSlug = this.slugify(company.id)
+				const candidateSlugs = [nameSlug, idSlug].filter((value): value is string => Boolean(value))
+				let adopted = false
+				for (const slug of candidateSlugs) {
+					const existing = availableBySlug.get(slug)
+					if (existing) {
+						workplaceFsInfo(
+							`[WorkplaceFilesystem] Adopted slug match ${existing} for company ${company.id}`,
+						)
+						this.folderMap[company.id] = existing
+						assignedFolderNames.add(existing)
+						availableByLowerName.delete(existing.toLowerCase())
+						availableBySlug.delete(slug)
+						mapChanged = true
+						adopted = true
+						break
+					}
+				}
+
+				if (adopted) {
+					continue
+				}
+			}
+
+			if (!this.folderMap[company.id] && availableByLowerName.size > 0) {
+				for (const [lowerName, entryName] of availableByLowerName.entries()) {
+					const folderUri = vscode.Uri.joinPath(this.rootUri, entryName)
+					// Only adopt directories that already contain user content.
+					const hasContent = await this.hasVisibleDirectoryEntries(folderUri)
+					if (!hasContent) {
+						workplaceFsInfo(
+							`[WorkplaceFilesystem] Skipping folder ${entryName} for company ${company.id}: no visible content`,
+						)
+						continue
+					}
+					this.folderMap[company.id] = entryName
+					assignedFolderNames.add(entryName)
+					availableByLowerName.delete(lowerName)
+					const entrySlug = this.slugify(entryName)
+					if (entrySlug) {
+						availableBySlug.delete(entrySlug)
+					}
+					mapChanged = true
+					workplaceFsInfo(
+						`[WorkplaceFilesystem] Adopted existing folder ${entryName} for company ${company.id} (${company.name})`,
+					)
+					break
+				}
+			}
+
 			if (this.ensureFolderMapping(company)) {
 				mapChanged = true
 			}
 		}
+		workplaceFsInfo(
+			`[WorkplaceFilesystem] Final folder mappings: ${Object.entries(this.folderMap)
+				.map(([companyId, folder]) => `${companyId}→${folder}`)
+				.join(", ")}`,
+		)
 
 		if (mapChanged) {
 			await this.context.globalState.update(COMPANY_FOLDER_STATE_KEY, { ...this.folderMap })
@@ -567,7 +948,12 @@ export class WorkplaceFilesystemManager implements WorkplaceStateObserver {
 		if (ARCHIVE_EXTENSIONS.has(normalized)) {
 			return "archive"
 		}
-		if (normalized.endsWith("ts") || normalized.endsWith("js") || normalized.endsWith("py") || normalized.endsWith("go")) {
+		if (
+			normalized.endsWith("ts") ||
+			normalized.endsWith("js") ||
+			normalized.endsWith("py") ||
+			normalized.endsWith("go")
+		) {
 			return "code"
 		}
 		return "other"
@@ -600,7 +986,7 @@ export class WorkplaceFilesystemManager implements WorkplaceStateObserver {
 			entries = await vscode.workspace.fs.readDirectory(folderUri)
 		} catch (error) {
 			console.error(
-				`[WorkplaceFilesystem] Failed to read directory ${(folderUri?.toString() ?? "")} for company ${companyId}`,
+				`[WorkplaceFilesystem] Failed to read directory ${folderUri?.toString() ?? ""} for company ${companyId}`,
 				error,
 			)
 			return
@@ -629,7 +1015,7 @@ export class WorkplaceFilesystemManager implements WorkplaceStateObserver {
 					stat = await vscode.workspace.fs.stat(childUri)
 				} catch (error) {
 					console.error(
-						`[WorkplaceFilesystem] Failed to stat file ${(childUri?.toString() ?? "")} for company ${companyId}`,
+						`[WorkplaceFilesystem] Failed to stat file ${childUri?.toString() ?? ""} for company ${companyId}`,
 						error,
 					)
 					continue
@@ -829,7 +1215,7 @@ export class WorkplaceFilesystemManager implements WorkplaceStateObserver {
 
 		const targetUri = currentCompanyId ? this.getCompanyFolderUri(currentCompanyId) : this.rootUri
 		if (!targetUri) {
-			console.warn(
+			workplaceFsWarn(
 				`[WorkplaceFilesystem] Missing folder mapping for company ${currentCompanyId ?? "<root>"}, cannot open workspace.`,
 			)
 			return

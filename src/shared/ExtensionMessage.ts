@@ -34,10 +34,12 @@ import type { FileCabinetPreview, FileCabinetSnapshot } from "./fileCabinet"
 import { BrowserInteractionStrategy, BrowserStreamFrame } from "./browser"
 import { ClineRulesToggles } from "./cline-rules" // kilocode_change
 import { KiloCodeWrapperProperties } from "./kilocode/wrapper" // kilocode_change
+import type { HubSnapshot } from "./hub"
 
 interface ConversationHoldPayload {
 	taskId?: string
 	state?: ConversationHoldState
+	clientTurnId?: string
 }
 
 interface OrchestratorAnalysisPayload {
@@ -45,6 +47,7 @@ interface OrchestratorAnalysisPayload {
 	analysis?: OrchestratorAnalysis
 	agents?: ConversationAgent[]
 	appendTimeline?: boolean
+	clientTurnId?: string
 }
 
 // Command interface for frontend/backend communication
@@ -67,6 +70,13 @@ export interface MarketplaceInstalledMetadata {
 
 export interface EndlessSurfaceClientState extends EndlessSurfaceState {
 	activeSurface?: EndlessSurfaceRecord
+}
+
+export interface WorkplaceSpendEntry {
+	workspacePath: string
+	folderName?: string
+	totalCost: number
+	monthToDateCost: number
 }
 
 // Indexing status types
@@ -183,7 +193,10 @@ export interface ExtensionMessage {
 		| "fileCabinetSnapshot"
 		| "fileCabinetPreview"
 		| "fileCabinetWriteResult"
+		| "fileCabinetFolderResult"
+		| "fileCabinetFileResult"
 	text?: string
+	clientTurnId?: string
 	payload?:
 		| ProfileDataResponsePayload
 		| BalanceDataResponsePayload
@@ -192,6 +205,12 @@ export interface ExtensionMessage {
 	fileCabinetSnapshot?: FileCabinetSnapshot
 	fileCabinetPreview?: FileCabinetPreview
 	fileCabinetWriteSuccess?: boolean
+	fileCabinetFolderSuccess?: boolean
+	fileCabinetFolderPath?: string
+	fileCabinetFileSuccess?: boolean
+	fileCabinetFilePath?: string
+	fileCabinetFileName?: string
+	fileCabinetCompanyId?: string
 	conversationHoldState?: ConversationHoldState
 	conversationAgents?: ConversationAgent[]
 	lastOrchestratorAnalysis?: OrchestratorAnalysis
@@ -201,6 +220,7 @@ export interface ExtensionMessage {
 		| "settingsButtonClicked"
 		| "historyButtonClicked"
 		| "promptsButtonClicked"
+		| "hubButtonClicked"
 		| "profileButtonClicked" // kilocode_change
 		| "marketplaceButtonClicked"
 		| "cloudButtonClicked"
@@ -211,6 +231,7 @@ export interface ExtensionMessage {
 	invoke?: "newChat" | "sendMessage" | "primaryButtonClick" | "secondaryButtonClick" | "setChatBoxMessage"
 	state?: ExtensionState
 	images?: string[]
+	silent?: boolean
 	filePaths?: string[]
 	openedTabs?: Array<{
 		label: string
@@ -465,6 +486,7 @@ export type ExtensionState = Pick<
 	workplaceState?: WorkplaceState
 	workplaceRootConfigured: boolean
 	workplaceRootUri?: string
+	workplaceSpend?: Record<string, WorkplaceSpendEntry>
 	endlessSurface?: EndlessSurfaceClientState
 	outerGateState?: OuterGateState
 	hasOpenedModeSelector: boolean
@@ -481,6 +503,7 @@ export type ExtensionState = Pick<
 	mcpServers?: McpServer[]
 	hasSystemPromptOverride?: boolean
 	mdmCompliant?: boolean
+	hubSnapshot?: HubSnapshot
 }
 
 export interface ClineSayTool {
